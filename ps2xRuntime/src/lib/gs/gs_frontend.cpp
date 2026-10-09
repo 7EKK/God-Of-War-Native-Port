@@ -14,11 +14,169 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <map>
 #include <sstream>
+#include <string>
+#include <vector>
 
 namespace
 {
     static constexpr uint32_t kHostFrameWidth = 640u;
+
+    // GOW-Port: fog/haze colour diagnostics (Desert of Lost Souls purple haze).
+    //   PS2X_GS_FOG_DIAG=<s>      FOGCOL writes ([gs:fogcol]) and, from <s> seconds after the first draw, six
+    //                             250 ms windows (every 10 s) of draws grouped by GS state, largest area first
+    //                             ([gs:fogdiag]).
+    //   PS2X_GS_FOG_FORCE=RRGGBB  replace every FOGCOL write with this colour (hex, R first).
+    //   PS2X_GS_FOG_OFF=1         draw everything with PRIM.FGE cleared.
+    long gowFogDiagStart()
+    {
+        static const long start = []
+        {
+            const char *v = std::getenv("PS2X_GS_FOG_DIAG");
+            return (v && *v) ? std::strtol(v, nullptr, 10) : -1L;
+        }();
+        return start;
+    }
+
+    uint64_t gowFogcolOverride(uint64_t value)
+    {
+        static const long forced = []
+        {
+            const char *v = std::getenv("PS2X_GS_FOG_FORCE");
+            if (!v || !*v)
+                return -1L;
+            const unsigned long rrggbb = std::strtoul(v, nullptr, 16) & 0xFFFFFFul;
+            // FOGCOL layout: FCR bits 0-7, FCG 8-15, FCB 16-23.
+            return static_cast<long>(((rrggbb >> 16) & 0xFFul) | (rrggbb & 0xFF00ul) | ((rrggbb & 0xFFul) << 16));
+        }();
+        if (gowFogDiagStart() >= 0)
+        {
+            static uint32_t last = 0xFFFFFFFFu;
+            static int logged = 0;
+            const uint32_t rgb = static_cast<uint32_t>(value & 0xFFFFFFu);
+            if (rgb != last && logged < 200)
+            {
+                ++logged;
+                last = rgb;
+                std::fprintf(stderr, "[gs:fogcol] value=0x%016llX R=%u G=%u B=%u%s\n",
+                             static_cast<unsigned long long>(value), rgb & 0xFFu, (rgb >> 8) & 0xFFu, (rgb >> 16) & 0xFFu,
+                             forced >= 0 ? " (overridden by PS2X_GS_FOG_FORCE)" : "");
+            }
+        }
+        return forced >= 0 ? static_cast<uint64_t>(forced) : value;
+    }
+
+    bool gowFogOff()
+    {
+        static const bool off = []
+        {
+            const char *v = std::getenv("PS2X_GS_FOG_OFF");
+            return v && *v && *v != '0';
+        }();
+        return off;
+    }
+
+    struct GowFogDiagAgg
+    {
+        uint64_t count = 0;
+        double area = 0.0;
+        uint64_t rgba[4] = {};
+        uint32_t fogMin = 255u;
+        uint32_t fogMax = 0u;
+        double zMin = 1e300;
+        double zMax = -1e300;
+    };
+
+    void gowFogDiagDraw(const GSPrimitiveBatch &batch)
+    {
+        const long startSeconds = gowFogDiagStart();
+        if (startSeconds < 0)
+            return;
+        using Clock = std::chrono::steady_clock;
+        static const Clock::time_point first = Clock::now();
+        static std::map<std::string, GowFogDiagAgg> aggs;
+        static int window = 0;
+        static bool collecting = false;
+        static Clock::time_point windowEnd;
+        static uint64_t draws = 0u, fogDraws = 0u;
+        if (window >= 6)
+            return;
+        const Clock::time_point now = Clock::now();
+        if (!collecting)
+        {
+            if (now < first + std::chrono::seconds(startSeconds + 10L * window))
+                return;
+            collecting = true;
+            windowEnd = now + std::chrono::milliseconds(250);
+            aggs.clear();
+            draws = fogDraws = 0u;
+        }
+        if (now >= windowEnd)
+        {
+            std::vector<std::pair<std::string, GowFogDiagAgg>> sorted(aggs.begin(), aggs.end());
+            std::sort(sorted.begin(), sorted.end(),
+                      [](const auto &l, const auto &r) { return l.second.area > r.second.area; });
+            std::fprintf(stderr, "[gs:fogdiag] window %d: %llu draws, %llu with FGE, %zu states\n", window,
+                         static_cast<unsigned long long>(draws), static_cast<unsigned long long>(fogDraws), sorted.size());
+            for (size_t i = 0; i < sorted.size() && i < 48u; ++i)
+            {
+                const GowFogDiagAgg &a = sorted[i].second;
+                const double n = static_cast<double>(a.count);
+                std::fprintf(stderr,
+                             "[gs:fogdiag] w%d area=%.0f n=%llu rgba=(%.0f,%.0f,%.0f,%.0f) fog=[%u..%u] z=[%.0f..%.0f] %s\n",
+                             window, a.area, static_cast<unsigned long long>(a.count), a.rgba[0] / n, a.rgba[1] / n,
+                             a.rgba[2] / n, a.rgba[3] / n, a.fogMin, a.fogMax, a.zMin, a.zMax, sorted[i].first.c_str());
+            }
+            collecting = false;
+            ++window;
+            return;
+        }
+
+        const GSDrawState &s = batch.state;
+        const GSContext &c = s.context;
+        char key[512];
+        int len = std::snprintf(key, sizeof(key),
+                                "prim=%u iip=%u tme=%u fge=%u abe=%u fst=%u ctx=%u | fb=0x%X/%u psm=0x%X msk=0x%08X | "
+                                "z=0x%X psm=0x%X zmsk=%u | test=0x%llX alpha=0x%llX fba=%u pabe=%u | fogcol=%02X,%02X,%02X "
+                                "colclamp=%u dthe=%u",
+                                static_cast<unsigned>(s.prim.type), s.prim.iip, s.prim.tme, s.prim.fge, s.prim.abe, s.prim.fst,
+                                s.prim.ctxt, c.frame.fbp, c.frame.fbw, c.frame.psm, c.frame.fbmsk, c.zbuf.zbp, c.zbuf.psm,
+                                c.zbuf.zmask, static_cast<unsigned long long>(c.test), static_cast<unsigned long long>(c.alpha),
+                                static_cast<unsigned>(c.fba & 1u), s.pabe, s.fogR, s.fogG, s.fogB,
+                                static_cast<unsigned>(s.colclamp & 1u), static_cast<unsigned>(s.dthe & 1u));
+        if (s.prim.tme && len > 0 && len < static_cast<int>(sizeof(key)))
+            std::snprintf(key + len, sizeof(key) - static_cast<size_t>(len),
+                          " | tex=0x%X/%u psm=0x%X %ux%u tcc=%u tfx=%u cbp=0x%X cpsm=0x%X csm=%u csa=%u tex1=0x%llX "
+                          "clamp=0x%llX texa=%02X/%u/%02X",
+                          c.tex0.tbp0, c.tex0.tbw, c.tex0.psm, 1u << c.tex0.tw, 1u << c.tex0.th, c.tex0.tcc, c.tex0.tfx,
+                          c.tex0.cbp, c.tex0.cpsm, c.tex0.csm, c.tex0.csa, static_cast<unsigned long long>(c.tex1),
+                          static_cast<unsigned long long>(c.clamp), s.texa.ta0, s.texa.aem, s.texa.ta1);
+        GowFogDiagAgg &a = aggs[key];
+        const auto &v = batch.vertices;
+        double area = 1.0;
+        if (s.prim.type == GS_PRIM_SPRITE && batch.vertexCount >= 2u)
+            area = std::fabs((v[1].x - v[0].x) * (v[1].y - v[0].y));
+        else if (batch.vertexCount >= 3u)
+            area = 0.5 * std::fabs((v[1].x - v[0].x) * (v[2].y - v[0].y) - (v[2].x - v[0].x) * (v[1].y - v[0].y));
+        ++draws;
+        if (s.prim.fge)
+            ++fogDraws;
+        ++a.count;
+        a.area += area;
+        const GSVertex &last = v[batch.vertexCount ? batch.vertexCount - 1u : 0u];
+        a.rgba[0] += last.r;
+        a.rgba[1] += last.g;
+        a.rgba[2] += last.b;
+        a.rgba[3] += last.a;
+        for (uint8_t i = 0; i < batch.vertexCount; ++i)
+        {
+            a.fogMin = std::min<uint32_t>(a.fogMin, v[i].fog);
+            a.fogMax = std::max<uint32_t>(a.fogMax, v[i].fog);
+            a.zMin = std::min(a.zMin, v[i].z);
+            a.zMax = std::max(a.zMax, v[i].z);
+        }
+    }
 
     // GOW-Port: ambas rutas CPU/GPU devuelven filas de 640; las capturas son compactas.
     bool copyPresentationPixels(const std::vector<uint8_t> &pixels,
@@ -1534,6 +1692,7 @@ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
         m_pabe = (value & 1u) != 0u;
         break;
     case GS_REG_FOGCOL:
+        value = gowFogcolOverride(value); // GOW-Port: PS2X_GS_FOG_DIAG / PS2X_GS_FOG_FORCE.
         m_fogR = static_cast<uint8_t>(value & 0xFFu);
         m_fogG = static_cast<uint8_t>((value >> 8) & 0xFFu);
         m_fogB = static_cast<uint8_t>((value >> 16) & 0xFFu);
@@ -1731,6 +1890,7 @@ void GS::vertexKick(bool drawing)
     {
         GSPrimitiveBatch batch = buildDrawBatch(needed);
         updatePreferredDisplaySourceForDraw(batch);
+        gowFogDiagDraw(batch); // GOW-Port: PS2X_GS_FOG_DIAG.
         m_backend->Submit(batch);
         recordDrawDebugEventUnlocked(needed);
     }
@@ -1852,6 +2012,8 @@ GSPrimitiveBatch GS::buildDrawBatch(int vertexCount) const
         batch.vertices[static_cast<size_t>(i)] = m_vtxQueue[i];
     batch.state.context = m_ctx[m_prim.ctxt ? 1 : 0];
     batch.state.prim = m_prim;
+    if (gowFogOff())
+        batch.state.prim.fge = false; // GOW-Port: PS2X_GS_FOG_OFF.
     batch.state.texa = m_texa;
     batch.state.texclut = m_texclut;
     batch.state.pabe = m_pabe;
