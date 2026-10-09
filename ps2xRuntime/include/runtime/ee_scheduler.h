@@ -383,6 +383,8 @@ private:
     void requestPreemptionIfHigher(const GuestThread &readyThread, bool interruptSafe);
     void applyPendingPreemption();
     void processPendingEvents();
+    // GOW-Port: interrupcion INTC 0 (GS) en el flanco de subida de CSR.SIGNAL/FINISH no enmascarados en IMR.
+    void pollGsInterrupt();
     void processDueDeadlines();
     void processEvent(const EeEvent &event);
     void finishEventWaiters(EeEventFlag &flag, bool interruptSafe);
@@ -397,6 +399,8 @@ private:
     void copyMainContextToRuntime();
     void publishDebugContext(const R5900Context &context);
     void publishIdleDebugContext();
+    void loadSharedVu0Random(R5900Context &context);
+    void saveSharedVu0Random(const R5900Context &context);
 
     PS2Runtime &m_runtime;
     uint8_t *m_rdram = nullptr;
@@ -422,6 +426,8 @@ private:
     uint32_t m_enabledDmacMask = 0xFFFFFFFFu;
     int m_currentThreadId = 0;
     bool m_rescheduleRequested = false;
+    bool m_sharedVu0RandomValid = false;
+    __m128 m_sharedVu0Random{};
     bool m_timeSliceExpired = false;
     bool m_insideInterrupt = false;
     uint32_t m_pendingEeTimerInterrupts = 0;
