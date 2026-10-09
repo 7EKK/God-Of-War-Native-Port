@@ -739,11 +739,32 @@ bool PS2Runtime::initialize(const char *title)
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
 #else
         SetConfigFlags(FLAG_WINDOW_RESIZABLE);
-        // GOW-Port: GOW_WIDESCREEN=1 opens a 16:9 window (the image is fitted to 16:9 in gs_host_present.cpp).
-        if (const char *widescreen = std::getenv("GOW_WIDESCREEN"); widescreen && widescreen[0] == '1')
-            InitWindow(1280, 720, title);
-        else
-            InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
+        // GOW-Port: window size. GOW_WINDOW=<w>x<h> (e.g. 1920x1080); default 1920x1080 with GOW_WIDESCREEN=1.
+        // The image is always fitted at 4:3 or 16:9 (gs_host_present.cpp); the window stays resizable and is
+        // shrunk to the monitor when it does not fit.
+        {
+            int width = HOST_WINDOW_WIDTH, height = HOST_WINDOW_HEIGHT;
+            if (const char *widescreen = std::getenv("GOW_WIDESCREEN"); widescreen && widescreen[0] == '1')
+                width = 1920, height = 1080;
+            if (const char *size = std::getenv("GOW_WINDOW"))
+            {
+                int w = 0, h = 0;
+                if (std::sscanf(size, "%dx%d", &w, &h) == 2 && w >= 320 && h >= 240)
+                    width = w, height = h;
+            }
+            InitWindow(width, height, title);
+            if (IsWindowReady())
+            {
+                const int monitor = GetCurrentMonitor();
+                const int maxWidth = GetMonitorWidth(monitor), maxHeight = GetMonitorHeight(monitor);
+                if (maxWidth > 0 && maxHeight > 0 && (width > maxWidth || height > maxHeight))
+                {
+                    const float scale = std::min(static_cast<float>(maxWidth) / width, static_cast<float>(maxHeight) / height);
+                    SetWindowSize(static_cast<int>(width * scale), static_cast<int>(height * scale));
+                    SetWindowPosition(0, 0);
+                }
+            }
+        }
 #endif
         m_hostWindowOwned = IsWindowReady();
         if (!m_hostWindowOwned)
