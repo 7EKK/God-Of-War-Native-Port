@@ -31,3 +31,22 @@ Do NOT use it for: editing runtime/recompiler code, builds, running the game, an
 - Gemini CLI (`gemini`) is dead for personal accounts since 2026-06-18; only `agy` works.
 - Quota on the Pro plan is unmeasured: prefer a few big, well-scoped tasks over many tiny ones.
 - Models: `agy models`. Default is fine; `--model gemini-3.1-pro-high` for harder analysis (**unverified** cost/quota).
+
+## Verified 2026-10-09
+- Smoke test ok: `agy` read `docs/status.md` and answered. A prompt that lets it reach for a shell command fails headless
+  with "tool required the command permission ... auto-denied": tell it explicitly "use read_file only (no shell commands)".
+- Launcher setup: desktop `Avvia Claude.exe` runs `claude` in PowerShell; `$PROFILE` defines `claude` = `caveman wrap claude`.
+  rtk hook is global in `~/.claude/settings.json`. `caveman mcp/hooks install gemini` targets the dead Gemini CLI (harmless, unused);
+  the real helper here is `agy`.
+
+## Launcher / proxy chain (2026-10-09, evening)
+- Gemini CLI (`@google/gemini-cli`) uninstalled, with its caveman hook/MCP. Only `agy` is used.
+- Chain: Claude -> headroom proxy :8788 -> caveman proxy :8787/w/claude -> Anthropic. `~/.claude/settings.json` env
+  `ANTHROPIC_BASE_URL` = `http://127.0.0.1:8788` (backup `settings.json.bak-headroom`). rtk is a Bash PreToolUse hook.
+- `$PROFILE` function `claude` starts headroom (hidden) if :8788 is down, then `caveman wrap claude`.
+- headroom: `pip install --user "headroom-ai[proxy,code]"` (0.40.0), exe in `%APPDATA%\Python\Python311\Scripts` (added to user PATH).
+- Desktop `Avvia Claude.exe` rebuilt from `C:\Users\lovas\Claude\launcher\AvviaClaude.cs` (csc, .NET Framework 4); original kept as
+  `AvviaClaude.original.exe`. Bottom bar = start folder with "Cambia..." (saved in `%APPDATA%\AvviaClaude\folder.txt`).
+- 2026-10-09 late: three code-review tasks (fog-packed-regs, widescreen-ecode-review, gs-shuffle-review) returned
+  **empty** output: "print timeout after 10m0s with turn in progress; returning partial output". Multi-file
+  cross-repo code comparisons are too big for one headless turn: give one file + one function per task.

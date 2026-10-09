@@ -235,3 +235,48 @@ Measurements must run with no compiler or other game instance active.
   script, compare PS2X_GS_GPU=0 vs 1; (2) Kratos intermittent breakage while walking: dense captures; (3) enhanced
   widescreen (pnach code rewrite + recompile); (4) performance (VU1 block compiler, split GS frontend thread).
 - Agents: max 1 in parallel, always with Gemini support (user, 2026-10-09).
+
+## Session 2026-10-09 (late) — purple fog, continued
+- The "desert1" script (`60:derecha`) actually loads save slot 3 **THE CLIFFS OF MADNESS**; its lavender/purple
+  haze is in the canyon background there (port/desert1 captures). fog1/abA reached the desert (sandy haze, OK).
+- Bug found (PCSX2 GSRendererSW.cpp:1476-1480): for 16-bit frame PSMs the 32-bit FBMSK must be compressed to 5551
+  (0x00003FFF → 0x00FF, 0xFFFF00FF → 0xFC1F). Our general draw path is equivalent (masks in 8888 before packing),
+  but both fast-clear paths (gs_cpu_backend.cpp clear sprite, gs_gpu_backend.cpp clear dispatch) used the raw low
+  16 bits. Fixed with `GSInternal::frameMask16` (ps2_gs_common.h); not yet rebuilt/verified.
+- Save list: cursor starts on slot 1 (Olympus); one `derecha` = slot 2 Desert, two = slot 3 Cliffs (port/cpu2).
+  port/cpu1, cpu2 (CPU GS) landed in the desert interior (no purple there). Running port/cpu3: Cliffs with CPU GS.
+- **Kratos breakage (user screenshots 2026-10-09 21:32, desert interior, slot 2)**: upper back/head missing while
+  walking. Repro: save slot 2 (`85:derecha*0.3`), walk `g8:lup*4`, capture g9 (port/kr*; compare crops with
+  tools/crop.py). Results: compiled VU1 broken (kr1 20.7 fps, kr4); VU1 interpreter OK (kr2, 8.6 fps);
+  compiled pairs without blocks `GOW_VU1C_SIN_BLOQUES=1` OK (kr3, 14 fps); blocks with dead-flag elimination
+  disabled (new diag `GOW_VU1C_FLAGS_VIVOS=1`) still broken (kr4); blocks + GS worker off still broken in some
+  frames (kr5, 14 fps) → not a GS-worker race, the bug is in compiled VU1 **blocks**. RANGO bisect visual
+  results were ambiguous. New diag `GOW_VU1C_VERIFICAR=1`: each compiled block (without XGKICK) is also run on
+  the interpreter from the same state; mismatches print `[vu1c-verify] block <pc> ... <first difference>`.
+- KIexster update (19acde6, 2026-10-09 evening): applied patches/ps2recomp-gs-discard-uncovered.patch (GPU HW
+  raster discards fragments outside the triangle; PS2X_GS_HW_DISCARD_UNCOVERED=0 = old). Rest of the update is
+  his tests/tools/docs (camera probe, GS replay/feedback tooling) — not taken.
+- FPS: kr1 (play config + 1 capture/s) 20.7 game fps in the desert; kr4 37 fps at the run's end. User order:
+  ≥ 25 fps after every fix.
+- Verifier notes: copying the whole VU1Interpreter per block made the game crawl (0.4 fps, never left the title:
+  port/ver1-3); now `GOW_VU1C_VERIFICAR=<N>` checks one block in N. MAC/status are not compared (lazy flag
+  commit makes m_state.mac differ at block end without any reader — title blocks 0x2840/0x2898/0x2B90 had only
+  MAC "differences" and contain no FMAND/FMEQ/FMOR). Blocks containing XGKICK are not verified.
+- KIexster ESTADO.md (via Gemini, checked): his VU1 fixes sticky-preserve and FTZ underflow (247a9b3) are already
+  in our tree; he reports 7-11 fps, so nothing to take for performance; intro camera torso/head misframing is
+  an open bug on his side too (GOW_CAMERA_DIAG).
+- **Kratos: narrowed to compiled VU1 blocks that contain XGKICK.** Sampled verifier (`GOW_VU1C_VERIFICAR=500`,
+  port/ver4, ~230 s of gameplay, 28 fps): zero register/VU-memory/cycle differences in blocks without XGKICK.
+  New diag `GOW_VU1C_EXCLUIR=xgkick` (blocks containing XGKICK run as single compiled pairs; `=flags` does the
+  same for MAC/status readers): port/ex1 Kratos intact at g9-g11 (every other compiled run broke there) and
+  **29.5 fps**. Next: verifier extended to XGKICK blocks (GIF submit silenced in the shadow run, in-flight XGKICK
+  packet bytes compared) to find the exact difference.
+- **Correction (2026-10-10)**: verifier with counters (port/ver6): >125 000 gameplay blocks checked (~75 000 with an
+  XGKICK packet in flight), **0 differences** in registers, VU memory, cycles and XGKICK packet bytes → compiled
+  VU1 blocks behave like the interpreter. Repeat of the exclusion run (port/ex2, 25-31 fps) still had one broken
+  frame (g10): `GOW_VU1C_EXCLUIR=xgkick` only made it rarer; earlier "fixed" runs (kr2, kr3, ex1) were likely luck
+  of an intermittent bug. In the broken frame a whole torso batch is missing (we see the inside of the model).
+  Next: GS capture of a broken frame (PS2X_GS_RECORD) replayed in PCSX2 — tells whether the GIF stream lacks the
+  torso (EE/VIF/VU side) or our GS drops it.
+- FPS with the current build (play config, desert room, captures on): 28-31 game fps (port/ver4, ex1, ex2) ≥ 25.
+- tools/crop.py: side-by-side 2x crops of the same region across captures.
