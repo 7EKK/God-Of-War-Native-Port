@@ -116,6 +116,25 @@ namespace
         if (smokeTest)
         {
             const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - testStart).count();
+            // GOW-Port: times written "g<s>" in GOW_PAD_GUION / GOW_PAD_CAPTURAS count from the start of gameplay
+            // (first state 11 with nothing pending), so runs at different speeds act at the same point in the game.
+            // They are stored as kGameplayTime + s.
+            constexpr double kGameplayTime = 1.0e6;
+            static double gameplayStart = -1.0;
+            if (gameplayStart < 0.0 && readGuest32(rdram, 0x29E560u) == 11u && readGuest32(rdram, 0x29E574u) == 0u)
+            {
+                gameplayStart = seconds;
+                std::fprintf(stderr, "[gow-pad2:test] gameplay start at %.2f s\n", seconds);
+            }
+            auto parseTime = [](const std::string &text) {
+                return !text.empty() && text[0] == 'g' ? kGameplayTime + std::strtod(text.c_str() + 1, nullptr)
+                                                       : std::strtod(text.c_str(), nullptr);
+            };
+            auto reached = [&](double when) {
+                if (when < kGameplayTime)
+                    return seconds >= when;
+                return gameplayStart >= 0.0 && seconds - gameplayStart >= when - kGameplayTime;
+            };
             // GOW-Port: comprobar el estado durante el perfil sin escribir capturas ni volcados.
             static const bool noCapture = [] {
                 const char *value = std::getenv("GOW_PAD_TEST_NO_CAPTURE");
@@ -136,8 +155,11 @@ namespace
             // GOW_PAD_GUION="5:start,12:abajo,16:x": pulsaciones de 0,7 s en esos segundos (en lugar de la
             // secuencia fija). Botones: start, select, arriba, abajo, izquierda, derecha, x, circulo, cuadrado,
             // triangulo, l1, r1, l2, r2.
-            struct ScriptedPress { double seconds; uint8_t byte; uint8_t mask; };
-            static const std::vector<ScriptedPress> script = [] {
+            // GOW-Port: also left/right stick directions (lup, ldown, lleft, lright, rup, rdown, rleft, rright),
+            // and "*<s>" sets how long it is held (default 0.7 s), e.g. "140:lup*6".
+            // For a stick, byte = state index of the axis and mask = the axis value to hold.
+            struct ScriptedPress { double seconds; uint8_t byte; uint8_t mask; double hold = 0.7; bool axis = false; };
+            static const std::vector<ScriptedPress> script = [&] {
                 std::vector<ScriptedPress> presses;
                 const char *text = std::getenv("GOW_PAD_GUION");
                 if (!text)
@@ -154,18 +176,42 @@ namespace
                     const size_t colon = item.find(':');
                     if (colon == std::string::npos)
                         continue;
-                    const std::string name = item.substr(colon + 1);
+                    std::string name = item.substr(colon + 1);
+                    double hold = 0.7;
+                    if (const size_t star = name.find('*'); star != std::string::npos)
+                    {
+                        hold = std::strtod(name.c_str() + star + 1, nullptr);
+                        name.resize(star);
+                    }
+                    const double at = parseTime(item.substr(0, colon));
                     for (const auto &[button, bit] : buttons)
                         if (name == button)
-                            presses.push_back({std::strtod(item.c_str(), nullptr), bit.first, bit.second});
+                            presses.push_back({at, bit.first, bit.second, hold, false});
+                    // state[4..7] = RX, RY, LX, LY (0 = left/up, 255 = right/down)
+                    static const std::pair<const char *, std::pair<uint8_t, uint8_t>> sticks[] = {
+                        {"lleft", {6, 0}}, {"lright", {6, 255}}, {"lup", {7, 0}}, {"ldown", {7, 255}},
+                        {"rleft", {4, 0}}, {"rright", {4, 255}}, {"rup", {5, 0}}, {"rdown", {5, 255}}};
+                    for (const auto &[stick, axis] : sticks)
+                        if (name == stick)
+                            presses.push_back({at, axis.first, axis.second, hold, true});
                 }
                 return presses;
             }();
+            static const bool scriptUsesGameplayTime =
+                std::any_of(script.begin(), script.end(), [&](const ScriptedPress &p) { return p.seconds >= kGameplayTime; });
             if (!script.empty())
             {
                 for (const ScriptedPress &press : script)
-                    if (seconds >= press.seconds && seconds < press.seconds + 0.7)
-                        state[press.byte] &= static_cast<uint8_t>(~press.mask);
+                    // With gameplay-relative entries, absolute ones only drive the menus (spare confirm
+                    // presses would otherwise act in gameplay at a different point on faster runs).
+                    if (reached(press.seconds) && !reached(press.seconds + press.hold) &&
+                        !(scriptUsesGameplayTime && press.seconds < kGameplayTime && gameplayStart >= 0.0))
+                    {
+                        if (press.axis)
+                            state[press.byte] = press.mask;
+                        else
+                            state[press.byte] &= static_cast<uint8_t>(~press.mask);
+                    }
             }
             else
             {
@@ -178,8 +224,21 @@ namespace
                     }
             }
             static size_t capture = 0;
-            constexpr double captures[] = {4, 10, 18, 26, 34, 44, 56, 70, 90, 110, 130, 160, 190, 240, 360, 480, 580};
-            if (!noCapture && capture < std::size(captures) && seconds >= captures[capture])
+            // GOW-Port: GOW_PAD_CAPTURAS="t1,t2,..." (seconds, ascending) replaces the default capture times.
+            static const std::vector<double> captures = [&] {
+                std::vector<double> times;
+                if (const char *text = std::getenv("GOW_PAD_CAPTURAS"))
+                {
+                    std::string item;
+                    std::istringstream stream(text);
+                    while (std::getline(stream, item, ','))
+                        times.push_back(parseTime(item));
+                }
+                if (times.empty())
+                    times = {4, 10, 18, 26, 34, 44, 56, 70, 90, 110, 130, 160, 190, 240, 360, 480, 580};
+                return times;
+            }();
+            if (!noCapture && capture < captures.size() && reached(captures[capture]))
             {
                 std::vector<uint8_t> pixels;
                 uint32_t width = 0, height = 0, display = 0, source = 0;

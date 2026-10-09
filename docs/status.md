@@ -182,3 +182,20 @@ Measurements must run with no compiler or other game instance active.
   "[pad] gamepad slot N: <name>". gow_overrides.cpp keyboard-stick fallback now only when no slot has a gamepad.
   Verified: "[pad] gamepad slot 0: Wireless Controller" (port/play3.log).
   Play config: PS2X_GS_GPU=1 PS2X_GS_WORKER=1 GOW_GS_FINISH_ASINCRONO=1 GOW_SKIP_FMV=1; title menu 30 fps.
+
+## Bug hunt (2026-10-09 evening; user: pause optimization, fix purple fog, Kratos breaking when walking,
+## music restarting; add 16:9)
+- Save slots on the user's card: 1 OLYMPUS 10:11:50, **2 DESERT OF LOST SOULS 4:24:25 (purple fog visible)**,
+  3 THE CLIFFS OF MADNESS 8:15:53, 4 FINAL BATTLE 10:02:09.
+- New test tooling (runner gow_overrides.cpp, copy in port/overrides-usa/): GOW_PAD_GUION accepts stick moves
+  (lup/ldown/lleft/lright, rup/...) with hold time "*<s>" (e.g. "170:lup*4"); GOW_PAD_CAPTURAS="t1,t2,..."
+  sets capture times. IOP: GOW_SPU2_DIAG=1 (spu2.cpp) prints IRQ/IRQA, sound-RAM writes per 64 KB block and
+  active voices every 2 s of SPU2 time.
+- Reproduced (port/desert1, worker on): purple/blue-violet haze; Kratos' body mostly missing while walking
+  (gow_pad_test_6/7), fine standing (_10).
+- Music: gameplay audio repeats every ~6.08 s (port/audio1.pcm autocorrelation). SPU2 IRQ never enabled
+  (ATTR bit6=0): the driver streams by polling; music voices v1.00/v1.01 (ssa 0x2820/0x3020) loop while sound
+  RAM in that area is rewritten.
+- 16:9: PCSX2 patches.zip has SCUS-97399_D6385328.pnach (enhanced widescreen code patch 0x169250-0x16944C +
+  native widescreen flag 0x29CC90 and aspect floats).
+- Parallel agents (user request) analysing music / fog / Kratos / widescreen; outputs in port/agents/<topic>/.
