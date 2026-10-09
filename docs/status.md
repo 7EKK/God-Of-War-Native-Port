@@ -1,5 +1,24 @@
 # Status (updated 2026-10-09, evening)
 
+## How to resume (saved 2026-10-09 ~13:30)
+Everything is committed **locally** (nothing pushed anywhere):
+- Project folder `God Of War/` is a git repo: docs, tools, configs, overrides (commit 598a416+). Game data,
+  ISOs, archives, ext/, ref/, generated code, logs and dumps are git-ignored on purpose.
+- `ext/PS2Recomp` branch **gow-pal-port**, commit f18bbb3: all our runtime/IOP/recompiler work (PAL stack).
+  The generated runner file register_functions.cpp is left uncommitted on purpose.
+- `ext/PS2Recomp-kl` (worktree) branch **gow-usa-kl**, commit ce69fd7: c5a9d02 + KIexster's 68 patches.
+Rebuild the USA build from scratch:
+1. `ext/PS2Recomp-kl/out/build-kl/ps2xRecomp/Release/ps2_recomp.exe port/usa/recomp.toml` → port/output-usa
+   (port/usa/ = their config/funcmap.csv + recomp.template.toml with @ELF@/@MAP@/@OUT@ filled; recreate from
+   ref/other-recomp if missing).
+2. Copy port/output-usa/* + ref/other-recomp/.../src/gow_overrides.cpp + src/*.h into
+   ext/PS2Recomp-kl/ps2xRuntime/src/runner/ (delete old files there first).
+3. `cmake --build out/build-kl --config Release --target ps2EntryRunner` in ext/PS2Recomp-kl (~30-40 min full).
+4. Run (cwd = exe dir) as in the "First USA run" line below; captures gow_pad_test_N.ppm → tools/ppm2png.py.
+Next steps, in order: (a) review/finish loading the user's save (port/usa3 run was interrupted);
+(b) performance plan (section at the end); (c) port DiscSource (read extracted disc-usa/ instead of the ISO);
+(d) audio (SPU2 output patches exist in their stack); (e) Switch build.
+
 ## Direction change (2026-10-09, afternoon)
 The user supplied (1) KIexster's god-of-war-recomp project (ref/other-recomp): 68 PS2Recomp patches + config +
 overrides that reach USA gameplay (Kratos, HUD, "Docks of Athens", memory card load/save, FMV, ~2 fps);
