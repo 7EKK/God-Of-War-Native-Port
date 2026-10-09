@@ -102,3 +102,6 @@ Gains per lever above are estimates from the Gemini review (gemini-work/results/
   Next options: split GS frontend onto its own thread (pipeline VU1 → GS, ~11 ms), faster VU1 (microVU-style
   block compiler; VU1 ≈ 34 ms/frame).
 - Stopped here by the user (2026-10-09). All runtime changes uncommitted in ext/PS2Recomp-kl.
+- 2026-10-09 first real play session by the user (PS4 controller, port/play3.log, ~5 min): no errors or crashes.
+  After the first 2 min (menus/loading): avg 24.5 game fps, min 15.6, max 52.1 per 5 s window. Title menu 30.
+  The controller disconnected once near the end (Bluetooth); input fell back to keyboard as designed.

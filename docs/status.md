@@ -176,3 +176,9 @@ Measurements must run with no compiler or other game instance active.
   (still /O2) so their sampling profiler (tools/perfil/muestrear.cpp) can name hot functions. Log port/kl_build_vu1.log.
 - agy note: first headless run produced no output — it tried a shell command (denied by settings). Prompt must say
   "Do NOT run shell commands; only read files and search the web".
+- 2026-10-09 live play with the user's PS4 controller: it did not work — GLFW lists the user's sim-racing gear
+  ("HBP Handbrake", HID 346E:001E/001F) as gamepads and ps2_pad.cpp read only slot 0. Fix (ps2_pad.cpp):
+  the gamepad whose button was pressed last becomes active (press edges), else first available slot; logs
+  "[pad] gamepad slot N: <name>". gow_overrides.cpp keyboard-stick fallback now only when no slot has a gamepad.
+  Verified: "[pad] gamepad slot 0: Wireless Controller" (port/play3.log).
+  Play config: PS2X_GS_GPU=1 PS2X_GS_WORKER=1 GOW_GS_FINISH_ASINCRONO=1 GOW_SKIP_FMV=1; title menu 30 fps.
