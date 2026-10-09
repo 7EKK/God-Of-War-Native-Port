@@ -280,3 +280,37 @@ Measurements must run with no compiler or other game instance active.
   torso (EE/VIF/VU side) or our GS drops it.
 - FPS with the current build (play config, desert room, captures on): 28-31 game fps (port/ver4, ex1, ex2) ≥ 25.
 - tools/crop.py: side-by-side 2x crops of the same region across captures.
+
+## Priority (user, 2026-10-10)
+Kratos bug, user's description: while walking his torso twists to the right progressively until it loops all
+the way around and clips into the legs; arms end behind the back; idle sway, attacks, other animations are fine.
+→ an EE-side skeletal/animation math bug (bone rotation accumulates/wraps), not missing geometry (consistent with
+the VU1 verifier finding no difference). Only after this is fixed and no other apparent bugs remain: aim for
+16:9 at 60 fps.
+
+## Session 2026-10-10 — Kratos walk twist: EE differential testing
+- **EE differential tester ported to the USA build** (ext/PS2Recomp-kl: src/lib/ee_ref/ee_diff.cpp + ee_ref/ +
+  vu_pcsx2/ from the PAL stack, CMakeLists, main.cpp calls ps2InstallEeDiff after loadELF). Env:
+  `PS2X_EE_DIFF=all|<hex,...>`, `PS2X_EE_DIFF_MAX=<n>` (calls per function), `PS2X_EE_DIFF_START=<s>` (only calls
+  after s seconds, e.g. during a scripted walk), `PS2X_EE_DIFF_STEPS`.
+- tools/eediff_filter.py (drops upper-64-bit-only GPR diffs, sorts by steps), tools/callgraph.py (jal call graph
+  from the runner sources: does function X reach Y).
+- **rand fix (gowRand in gow_overrides.cpp)**: rand@0x28C0C8 is stubbed in recomp.toml and the generic stub returned
+  the host's 15-bit rand(). Game's newlib rand (ELF 0x28C0C8 + PCSX2 reference): seed at *(0x2A4294)+0x58,
+  seed = seed*0x41C64E6D+0x3039, returns seed & 0x7FFFFFFF. Callers scaling by 2^31 got ~0 (0x23F350: 2.245 vs
+  4.5e-05). Now exact.
+- ed1 (all functions, first call after 118 s, before the fix): 279/2400 differing; real ones = rand callers
+  (0x21B330 reaches rand via 0x184398→0x184348) + 1-3 ULP float noise from div.s/sqrt.s (PCSX2's interpreter
+  computes via double; PCSX2 itself is not bit-exact to the PS2 and runs GoW fine → not the cause).
+- ed2 (all, 3 calls each, after the rand fix): 5743 identical, 673 differing, none with a significant (>0.1 %)
+  non-stack memory difference.
+- ed3 (skeleton: CalcWorldMatrix 0x1303D0 + callees 136870,136990,138108,13DC78,13E090,13E158,13E180,185270 and
+  CalcSkinHierarchy 0x137558, 300 calls each during the walk): 800 identical, 0 differing (0x137558 not called).
+  Names/offsets from KIexster's gow_model_probe.h (skeleton +0x8C = 64-byte joint matrices, +0x86 root id).
+- KIexster update c5c4ad9: perf patches dma-iop-timers-cache / vif1-ee-timers-fast do not apply on our tree
+  (ps2_memory.cpp, ps2_vif1_interpreter.cpp context) — deferred.
+- **Next step**: the twist is not in CalcWorldMatrix/its callees nor in first-call EE code. (1) Verify visually
+  whether the rand fix changed the walk (play: walk ~30 s in open space, front camera). (2) Find the animation
+  sampler: run `PS2X_EE_DIFF=all PS2X_EE_DIFF_MAX=50 PS2X_EE_DIFF_START=<walk start>` on a short run and look for
+  non-ULP differences; also log Kratos' joint matrices (skeleton+0x8C) per frame while walking to see which joint
+  rotates progressively, then find its writer with PS2X_EE_WATCH (not yet ported to the USA build).

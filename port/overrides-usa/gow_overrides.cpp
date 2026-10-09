@@ -404,6 +404,20 @@ namespace
     // SCUS-97399 sceIpuInit uses SetD4_CHCR at 0x279588 and tables at
     // 0x2a1610/0x2a1660. The generic stub's hard-coded 0x126428 is a
     // FilteredCopyTile continuation in this ELF, so initialize MMIO directly.
+    // GOW-Port: rand@0x28C0C8 is stubbed in the recompiler config, and the generic stub returned the host's
+    // 15-bit rand(). The game's newlib rand (checked against the ELF code and PCSX2's interpreter with
+    // PS2X_EE_DIFF) keeps its seed at _impure_ptr(0x2A4294)+0x58 and returns 31 bits:
+    // seed = seed * 0x41C64E6D + 0x3039; return seed & 0x7FFFFFFF.
+    void gowRand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        (void)runtime;
+        const uint32_t reent = readGuest32(rdram, 0x002A4294u);
+        const uint32_t seed = readGuest32(rdram, reent + 0x58u) * 0x41C64E6Du + 0x3039u;
+        std::memcpy(rdram + ((reent + 0x58u) & 0x01FFFFFFu), &seed, sizeof(seed));
+        setReturnU32(ctx, seed & 0x7FFFFFFFu);
+        ctx->pc = GPR_U32(ctx, 31);
+    }
+
     void gowIpuInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         auto &memory = runtime->memory();
@@ -996,6 +1010,7 @@ namespace
         // que este crea con SetupHeap al final del .bss (patches/ps2recomp-heap.patch).
         runtime.setPrivateGuestHeap(0x000A0000u, 0x000FF000u);
         runtime.replaceFunction(0x00279600u, gowIpuInit);
+        runtime.replaceFunction(0x0028C0C8u, gowRand);
         if (std::getenv("GOW_PATH_DIAG") || std::getenv("GOW_ANM_DIAG") || std::getenv("GOW_FAST_BOOT"))
         {
             runtime.replaceFunction(0x001B2390u, gowDiagFlashReady);
