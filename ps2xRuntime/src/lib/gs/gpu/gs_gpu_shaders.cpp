@@ -1286,6 +1286,11 @@ void main()
     uvec4 c;
     uint fog;
     bool shaded = coversPixel(vPrim, x, y) && shadePrim(vPrim, x, y, s, z, c, fog);
+    // GOW-Port: ARB permite discard antes del interlock; conservar begin/end fuera de ramas.
+#ifndef GOW_HW_KEEP_UNCOVERED
+    if (!shaded)
+        discard;
+#endif
     beginInvocationInterlockARB();
     if (shaded)
         writePixel(s, x, y, z, c, fog);

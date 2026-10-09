@@ -27,6 +27,58 @@
 
 namespace
 {
+// GOW-Port: preservar los píxeles ajenos al rectángulo conservador de triángulos finos.
+void uncoveredTriangles(TestCase &t)
+{
+    std::vector<uint8_t> seed(GSSwizzle::kMemorySize, 0x35u), expected;
+    std::vector<GSPrimitiveBatch> draws;
+    for (unsigned i = 0; i < 8u; ++i) {
+        GSPrimitiveBatch b{}; b.vertexCount = 3; b.state.prim.type = GS_PRIM_TRIANGLE;
+        b.state.prim.iip = true; b.state.prim.abe = true; b.state.colclamp = 1;
+        auto &c = b.state.context;
+        c.frame = {2, 1, GS_PSM_CT32, 0}; c.scissor = {2, 61, 2, 61};
+        c.zbuf = {104, GS_PSM_Z32, true}; c.test = 0x30000; c.alpha = 0x44;
+        const float offset = float(i) * 0.125f;
+        b.vertices[0].x = 1.125f + offset; b.vertices[0].y = 1.375f;
+        b.vertices[1].x = 59.375f; b.vertices[1].y = 55.875f + offset;
+        b.vertices[2].x = i == 7u ? b.vertices[1].x : 60.125f;
+        b.vertices[2].y = i == 7u ? b.vertices[1].y : 57.375f + offset;
+        for (unsigned v = 0; v < 3u; ++v) {
+            b.vertices[v].r = uint8_t(32u + i * 13u + v * 3u);
+            b.vertices[v].g = 64u; b.vertices[v].b = 96u; b.vertices[v].a = 64u;
+        }
+        if (i & 1u) std::swap(b.vertices[1], b.vertices[2]);
+        draws.push_back(b);
+    }
+    auto cpuVram = seed; GSCpuBackend cpu;
+    cpu.Initialize(cpuVram.data(), uint32_t(cpuVram.size()));
+    for (const auto &b : draws) cpu.Submit(b);
+    cpu.SnapshotVram(expected);
+    t.IsTrue(expected != seed, "Los triangulos finos escriben frente al fondo inicial");
+    auto gpuVram = seed; auto gpu = std::make_unique<GSGpuBackend>(); auto *raw = gpu.get();
+    raw->SetHardwareRasterAllowed(true); GSThreadedBackend backend(std::move(gpu));
+    backend.Initialize(gpuVram.data(), uint32_t(gpuVram.size()));
+    if (dynamic_cast<GSGpuBackend *>(&backend.Inner()) != raw || !raw->IsReady()) {
+        t.Fail("OpenGL requerido"); return;
+    }
+    // GOW-Port: una variante fría empieza en compute mientras compila en otro hilo.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    bool observedHardware = false;
+    do {
+        backend.Sync(GSSyncReason::Finish);
+        std::copy(seed.begin(), seed.end(), gpuVram.begin());
+        backend.Initialize(gpuVram.data(), uint32_t(gpuVram.size()));
+        const auto before = raw->GetStats();
+        for (const auto &b : draws) backend.Submit(b);
+        std::vector<uint8_t> actual; backend.SnapshotVram(actual);
+        t.IsTrue(actual == expected, "Cobertura, mezcla y los 4 MiB coinciden con CPU");
+        const auto after = raw->GetStats();
+        observedHardware = after.tiles == before.tiles && after.prims > before.prims;
+        if (!observedHardware) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    } while (!observedHardware && std::chrono::steady_clock::now() < deadline);
+    t.IsTrue(observedHardware, "El control realmente ejecuta el shader hardware");
+}
+
 class GpuProfileCapture
 {
     FILE *file = nullptr;
@@ -1868,6 +1920,7 @@ void register_ps2_gs_backend_tests()
         const char *gpu=std::getenv("GOW_GS_GPU_TEST");
         if(gpu && *gpu && *gpu!='0')
         {
+            t.Run("OpenGL hardware preserves thin subpixel triangle coverage and blending",uncoveredTriangles);
             t.Run("OpenGL hardware profiler attributes each variant",[](TestCase &t){gpuProfileAttribution(t,true);});
             t.Run("OpenGL compute profiler retains the pending-query boundary",[](TestCase &t){gpuProfileAttribution(t,false);});
             t.Run("OpenGL compute orders coordinate aliases from stride and VRAM wrap",[](TestCase &t){gpuCoordinateAliasing(t,false);});
