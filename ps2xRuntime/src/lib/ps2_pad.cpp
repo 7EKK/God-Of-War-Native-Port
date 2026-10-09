@@ -1,5 +1,6 @@
 #include "runtime/ps2_pad.h"
 #include "ps2_host_backend.h"
+#include <cstdio>
 #include <cstring>
 
 namespace
@@ -38,8 +39,34 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     data[4] = data[5] = data[6] = data[7] = kPadStickCenter;
 
     uint16_t btns = 0xFFFFu;
-    constexpr int kGamepad = 0;
-    const bool useGamepad = IsGamepadAvailable(kGamepad);
+    // GOW-Port: GLFW can list racing gear (handbrake, pedals) as gamepads before the real pad. The pad whose
+    // button was pressed last becomes the active one (press edges, so idle devices never take over);
+    // until then, the first available slot.
+    static int s_activeGamepad = -1;
+    for (int i = 0; i < 4; ++i)
+    {
+        if (i == s_activeGamepad || !IsGamepadAvailable(i))
+            continue;
+        for (int button = GAMEPAD_BUTTON_LEFT_FACE_UP; button <= GAMEPAD_BUTTON_RIGHT_THUMB; ++button)
+            if (IsGamepadButtonPressed(i, button))
+            {
+                s_activeGamepad = i;
+                break;
+            }
+    }
+    if (s_activeGamepad >= 0 && !IsGamepadAvailable(s_activeGamepad))
+        s_activeGamepad = -1;
+    int kGamepad = s_activeGamepad;
+    for (int i = 0; i < 4 && kGamepad < 0; ++i)
+        if (IsGamepadAvailable(i))
+            kGamepad = i;
+    const bool useGamepad = kGamepad >= 0;
+    static int s_loggedGamepad = -2;
+    if (kGamepad != s_loggedGamepad)
+    {
+        s_loggedGamepad = kGamepad;
+        std::fprintf(stderr, "[pad] gamepad slot %d: %s\n", kGamepad, useGamepad ? GetGamepadName(kGamepad) : "none (keyboard)");
+    }
     auto clearBit = [&btns](uint16_t mask)
     { btns &= ~mask; };
 
