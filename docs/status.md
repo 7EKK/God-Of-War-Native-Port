@@ -220,3 +220,18 @@ Measurements must run with no compiler or other game instance active.
   shuffle / depth-fog effects (PCSX2 HW special-cases these). Prime suspect: our CT16 reinterpretation/masking
   of the 32-bit target (GPU shaders vs CPU backend). Next: reach the purple canyon (desert1 recipe, absolute
   script) and compare PS2X_GS_GPU=0 (CPU) vs GPU; fogdiag lines identify the shuffle draws.
+
+## How to resume (saved 2026-10-09 ~21:00)
+- Build: ext/PS2Recomp-kl branch gow-usa-kl (all committed, author Waffle565; register_functions.cpp generated,
+  never committed). Runner's gow_overrides.cpp is git-ignored: tracked copy port/overrides-usa/gow_overrides.cpp
+  (copy it back before building if the runner file was replaced). out/build-kl: Release, /Zi, traces OFF,
+  compiled VU1 from port/vu1_micro (841 images).
+- Play: PS2X_GS_GPU=1 PS2X_GS_WORKER=1 GOW_GS_FINISH_ASINCRONO=1 GOW_SKIP_FMV=1 [GOW_WIDESCREEN=1]
+  GOW_ISO=<usa iso> GOW_MC0=<copy of ref/saves/Mcd002.ps2>, cwd = exe dir. Test runs: tools/perf_run.sh
+  (GOW_PAD_GUION with g-relative times and sticks, GOW_PAD_CAPTURAS), tools/sheet.py, tools/gsw_trace.py.
+- Done this session: save loads; 4 → ~20-25 fps (traces off, compiled VU1, GS worker); PS4 pad selection;
+  music restart fixed; 16:9 + 4:3 presentation.
+- Open, in order: (1) purple fog = channel-shuffle passes (see above): reach the canyon with the desert1 absolute
+  script, compare PS2X_GS_GPU=0 vs 1; (2) Kratos intermittent breakage while walking: dense captures; (3) enhanced
+  widescreen (pnach code rewrite + recompile); (4) performance (VU1 block compiler, split GS frontend thread).
+- Agents: max 1 in parallel, always with Gemini support (user, 2026-10-09).
