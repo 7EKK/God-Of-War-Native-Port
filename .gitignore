@@ -1,0 +1,25 @@
+# Game data, archives and third-party material (never versioned)
+*.zip
+*.7z
+*.iso
+iso/
+iso-usa/
+disc/
+disc-usa/
+ref/
+ext/
+# Generated code, logs, dumps, screenshots
+port/output/
+port/output-kl/
+port/output-usa/
+port/pcsx2state*/
+port/usa*/
+port/*.log
+port/*.png
+port/*.ppm
+port/*.bin
+port/*.gs
+gen.err
+__pycache__/
+port/*.irx
+port/*.dis

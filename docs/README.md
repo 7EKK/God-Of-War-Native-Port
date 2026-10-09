@@ -1,0 +1,48 @@
+# God of War (PS2) → native port (PC, then Nintendo Switch)
+
+These documents are the **single source of truth** for this project. Every session starts by reading them and
+ends by updating them. Do not rely on chat history: if something was discovered, it belongs in one of these files.
+
+Goal: static recompilation of God of War (PS2, PAL, SCES-53133) with PS2Recomp into a native executable, made playable
+on PC first (debuggable), then built for Nintendo Switch homebrew (the user's Switch runs Atmosphère).
+The user wants the game **totally playable**; work continues until then. Game data is read from **extracted files**
+(`disc/`), never from the ISO.
+
+## Documents
+
+| File | Contents |
+|---|---|
+| [status.md](status.md) | Where the port stands right now, the active task, the ordered next steps. **Read first.** |
+| [build-and-run.md](build-and-run.md) | Toolchain, recompile pipeline, build configurations and their cost, how to run, tools. |
+| [diagnostics.md](diagnostics.md) | Debug env vars, trace tools and the debugging methods that worked. |
+| [disc.md](disc.md) | Disc layout, extraction, `.disc_layout`/`.disc_meta`, `DiscSource`. |
+| [elf-and-recompilation.md](elf-and-recompilation.md) | ELF facts, function discovery, analyzer pitfalls (the removed NOP patches). |
+| [game-internals.md](game-internals.md) | God of War code knowledge: boot flow, addresses, heap, loaders, 989snd/SMPD protocol, waits. |
+| [runtime-changes.md](runtime-changes.md) | Every change made to the EE runtime (ps2xRuntime) and recompiler, and why. |
+| [iop-changes.md](iop-changes.md) | Every change made to the IOP emulator (ps2xIOP), and why. |
+| [switch.md](switch.md) | Switch toolchain (WSL + devkitPro), Switch build changes, open Switch issues. |
+
+## Project layout
+
+    God Of War/
+      docs/                this documentation
+      iso/                 the user's redump ISO (kept, not used at runtime)
+      disc/                all 16 disc files extracted + .disc_layout/.disc_meta + imgui.ini (runtime cwd)
+      port/gow.toml        recompiler config        port/functions.csv  function map (tools/find_functions.py)
+      port/output/         generated C++ (regenerated, never edited)
+      port/overrides/      game-specific runtime code (god_of_war_overrides.cpp)
+      port/*.log, *.png    run logs / screenshots (scratch)
+      disc-usa/            USA disc extracted + IOP_MOD/ + Mcd001.ps2 (copy of the user's card)
+      ext/PS2Recomp-kl/    PS2Recomp worktree with KIexster's 68 patches (USA primary target)
+      ref/                 reference material: proto/ (Hydra Battle demo prototype), pcsx2/ (PCSX2 2.8.2)
+      tools/               project scripts (see build-and-run.md)
+      ext/PS2Recomp/       PS2Recomp clone with our (uncommitted) changes
+      LOG.md               pointer to these docs
+
+## Rules for working on this project
+
+- Update the relevant doc in the same step as a discovery or code change (fact, address, reason, how verified).
+- Mark anything unverified as **unverified**. Remove or correct facts that turn out wrong.
+- Prefer generic fixes in PS2Recomp (runtime/IOP/recompiler) over game hacks; game-specific code goes only in
+  `port/overrides/god_of_war_overrides.cpp` and is documented in game-internals.md.
+- Never run two builds of `out/build` at the same time (they corrupt each other; see build-and-run.md).
