@@ -10,6 +10,9 @@
 #include <atomic>
 #include <iostream>
 #include <mutex>
+#include <condition_variable>
+#include <deque>
+#include <thread>
 
 #include "gs/ps2_gif_arbiter.h"
 #if defined(_MSC_VER)
@@ -346,6 +349,20 @@ public:
     void processPendingTransfers();
     std::vector<uint32_t> consumeCompletedDmacCauses();
 
+    // GOW-Port: PS2X_GS_WORKER=1 runs VIF1/GIF DMA processing (VIF1 -> VU1 -> PATH1/2/3 -> GS) on a worker
+    // thread, like PCSX2's MTVU. DMA completion is still signalled at the kick, as without the worker.
+    // Invariant: VIF1/VU1/GIF/GS-frontend state is touched by the worker while it has jobs, and by any other
+    // thread only after syncGsWorker(); every such entry point below calls it.
+    void syncGsWorker(const char *site = "stub");
+    void stopGsWorker();
+    bool onGsWorkerThread() const { return m_gsWorkerEnabled && std::this_thread::get_id() == m_gsWorkerId; }
+    // VU0 FBRST as the EE had it when the running worker job was queued (MSCAL D/T-bit enables).
+    uint32_t gsWorkerJobFbrst() const { return m_gsWorkerJobFbrst; }
+    void setFbrstProvider(std::function<uint32_t()> provider) { m_fbrstProvider = std::move(provider); }
+    // Called on the worker after a job that left GS CSR SIGNAL/FINISH set, so an idle EE scheduler wakes
+    // up and delivers the GS interrupt now instead of at its next timer/VBlank deadline.
+    void setGsWorkerWake(std::function<void()> wake) { m_gsWorkerWake = std::move(wake); }
+
     int pollDmaRegisters();
 
     // Track code modifications for self-modifying code
@@ -424,6 +441,37 @@ public:
     std::vector<PendingTransfer> m_pendingGifTransfers;
     std::vector<PendingTransfer> m_pendingVif0Transfers;
     std::vector<PendingTransfer> m_pendingVif1Transfers;
+
+    struct GsWorkerItem
+    {
+        bool vif1 = false; // false: GIF PATH3
+        std::vector<uint8_t> data;
+    };
+    struct GsWorkerJob
+    {
+        std::vector<GsWorkerItem> items;
+        uint32_t fbrst = 0;
+    };
+    bool needsGsWorkerSync(uint32_t address) const;
+    void syncGsWorkerFor(uint32_t address);
+    void syncGsWorkerIfOtherThread(const char *site);
+    void waitGsWorkerIdle(const char *site, uint32_t address);
+    void appendTransferBytes(const PendingTransfer &transfer, bool zeroTailAllowed, std::vector<uint8_t> &out) const;
+    void runGsWorkerJob(GsWorkerJob &job);
+    void gsWorkerLoop();
+    bool m_gsWorkerEnabled = false;
+    std::thread m_gsWorker;
+    std::thread::id m_gsWorkerId;
+    std::mutex m_gsWorkerMutex;
+    std::condition_variable m_gsWorkerCv;
+    std::condition_variable m_gsWorkerIdleCv;
+    std::deque<GsWorkerJob> m_gsWorkerJobs;
+    bool m_gsWorkerBusy = false;
+    bool m_gsWorkerStop = false;
+    uint32_t m_gsWorkerJobFbrst = 0;
+    std::function<uint32_t()> m_fbrstProvider;
+    std::function<void()> m_gsWorkerWake;
+
     std::mutex m_completedDmacMutex;
     std::vector<uint32_t> m_completedDmacCauses;
 

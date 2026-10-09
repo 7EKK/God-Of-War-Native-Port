@@ -113,6 +113,7 @@ namespace ps2_stubs
             {
                 return;
             }
+            runtime->memory().syncGsWorker(); // GOW-Port: GS writes from the EE go after queued GS work
 
             runtime->gs().writeRegister(static_cast<uint8_t>(clear.testa.reg & 0xFFu), clear.testa.value);
             runtime->gs().writeRegister(static_cast<uint8_t>(clear.prim.reg & 0xFFu), clear.prim.value);
@@ -743,6 +744,7 @@ namespace ps2_stubs
         mem.writeIORegister(GIF_CHANNEL + 0x20u, 5u);
         mem.writeIORegister(GIF_CHANNEL + 0x00u, CHCR_STR_MODE0);
         mem.processPendingTransfers();
+        mem.syncGsWorker(); // GOW-Port: the readback needs the queued transfer done
 
         ps2TraceGuestRangeWrite(rdram, dstAddr, totalImageBytes, "sceGsExecStoreImage", ctx);
         runtime->gs().consumeLocalToHostBytes(dst, totalImageBytes);
@@ -1167,6 +1169,7 @@ namespace ps2_stubs
             if (hasSeededGsClearPacket(db.clear0))
             {
                 const uint32_t clearContext = static_cast<uint32_t>((db.clear0.prim.value >> 9) & 0x1u);
+                runtime->memory().syncGsWorker(); // GOW-Port
                 runtime->gs().clearFramebufferContext(clearContext, static_cast<uint32_t>(db.clear0.rgbaq.value));
             }
             applyGsClearPacket(runtime, db.clear0);
@@ -1178,6 +1181,7 @@ namespace ps2_stubs
             if (hasSeededGsClearPacket(db.clear1))
             {
                 const uint32_t clearContext = static_cast<uint32_t>((db.clear1.prim.value >> 9) & 0x1u);
+                runtime->memory().syncGsWorker(); // GOW-Port
                 runtime->gs().clearFramebufferContext(clearContext, static_cast<uint32_t>(db.clear1.rgbaq.value));
             }
             applyGsClearPacket(runtime, db.clear1);

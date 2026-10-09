@@ -1,4 +1,7 @@
 #include "runtime/ps2_memory.h"
+#include <chrono>
+#include <map>
+#include <string>
 #include "runtime/ps2_address.h"
 #include "runtime/gs/gs_frontend.h"
 #include "ps2_log.h"
@@ -243,10 +246,19 @@ PS2Memory::PS2Memory()
     : m_rdram(nullptr), m_scratchpad(nullptr), iop_ram(nullptr), m_seenGifCopy(false), m_gsVRAM(nullptr)
 {
     ps2SetScratchpadHostPtr(nullptr);
+    const char *worker = std::getenv("PS2X_GS_WORKER");
+    m_gsWorkerEnabled = worker != nullptr && worker[0] == '1';
+    if (m_gsWorkerEnabled)
+    {
+        m_gsWorker = std::thread([this] { gsWorkerLoop(); });
+        m_gsWorkerId = m_gsWorker.get_id();
+        std::fprintf(stderr, "[gs-worker] VIF1/GIF processing on a worker thread (PS2X_GS_WORKER=1)\n");
+    }
 }
 
 PS2Memory::~PS2Memory()
 {
+    stopGsWorker();
     if (m_rdram)
     {
         delete[] m_rdram;
@@ -680,6 +692,7 @@ int32_t PS2Memory::tlbProbe(uint32_t vpn) const
 
 uint8_t PS2Memory::read8(uint32_t address)
 {
+    syncGsWorkerFor(address);
     const bool scratch = isScratchpad(address);
     uint32_t physAddr = translateAddress(address);
 
@@ -711,6 +724,7 @@ uint8_t PS2Memory::read8(uint32_t address)
 
 uint16_t PS2Memory::read16(uint32_t address)
 {
+    syncGsWorkerFor(address);
     if (address & 1)
     {
         throw std::runtime_error("Unaligned 16-bit read at address: 0x" + std::to_string(address));
@@ -746,6 +760,7 @@ uint16_t PS2Memory::read16(uint32_t address)
 
 uint32_t PS2Memory::read32(uint32_t address)
 {
+    syncGsWorkerFor(address);
     if (address & 3)
     {
         throw std::runtime_error("Unaligned 32-bit read at address: 0x" + std::to_string(address));
@@ -794,6 +809,7 @@ uint32_t PS2Memory::read32(uint32_t address)
 
 uint64_t PS2Memory::read64(uint32_t address)
 {
+    syncGsWorkerFor(address);
     if (address & 7)
     {
         throw std::runtime_error("Unaligned 64-bit read at address: 0x" + std::to_string(address));
@@ -841,6 +857,7 @@ uint64_t PS2Memory::read64(uint32_t address)
 
 __m128i PS2Memory::read128(uint32_t address)
 {
+    syncGsWorkerFor(address);
     if (address & 15)
     {
         throw std::runtime_error("Unaligned 128-bit read at address: 0x" + std::to_string(address));
@@ -874,6 +891,7 @@ __m128i PS2Memory::read128(uint32_t address)
 
 void PS2Memory::write8(uint32_t address, uint8_t value)
 {
+    syncGsWorkerFor(address);
     const bool scratch = isScratchpad(address);
     uint32_t physAddr = translateAddress(address);
 
@@ -913,6 +931,7 @@ void PS2Memory::write8(uint32_t address, uint8_t value)
 
 void PS2Memory::write16(uint32_t address, uint16_t value)
 {
+    syncGsWorkerFor(address);
     if (address & 1)
     {
         throw std::runtime_error("Unaligned 16-bit write at address: 0x" + std::to_string(address));
@@ -955,6 +974,7 @@ void PS2Memory::write16(uint32_t address, uint16_t value)
 
 void PS2Memory::write32(uint32_t address, uint32_t value)
 {
+    syncGsWorkerFor(address);
     if (address & 3)
     {
         throw std::runtime_error("Unaligned 32-bit write at address: 0x" + std::to_string(address));
@@ -1015,6 +1035,7 @@ void PS2Memory::write32(uint32_t address, uint32_t value)
 
 void PS2Memory::write64(uint32_t address, uint64_t value)
 {
+    syncGsWorkerFor(address);
     if (address & 7)
     {
         throw std::runtime_error("Unaligned 64-bit write at address: 0x" + std::to_string(address));
@@ -1071,6 +1092,7 @@ void PS2Memory::write64(uint32_t address, uint64_t value)
 
 void PS2Memory::write128(uint32_t address, __m128i value)
 {
+    syncGsWorkerFor(address);
     if (address & 15)
     {
         throw std::runtime_error("Unaligned 128-bit write at address: 0x" + std::to_string(address));
@@ -1133,6 +1155,7 @@ void PS2Memory::write128(uint32_t address, __m128i value)
 
 bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 {
+    syncGsWorkerFor(address);
     size_t timerIndex = 0u;
     uint32_t timerOffset = 0u;
     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
@@ -1818,6 +1841,8 @@ void PS2Memory::completeDmacChannel(uint32_t channelBase, uint32_t cause)
     queueCompletedDmacCause(cause);
 }
 
+static void gsWorkerTrace(const char *what, size_t bytes);
+
 void PS2Memory::processPendingTransfers()
 {
     const bool hadGif = !m_pendingGifTransfers.empty();
@@ -1836,6 +1861,27 @@ void PS2Memory::processPendingTransfers()
         uint32_t &gifStat = m_ioRegisters[kGifStat];
         gifStat = (gifStat & ~kGifFqcMask) | (observedGifQwc << 24u);
     }
+
+    // GOW-Port: with the worker the GIF/VIF1 bytes are copied now (chains already are) and processed in
+    // order on the worker; the loops below then see empty queues.
+    GsWorkerJob workerJob;
+    auto collectForWorker = [&](std::vector<PendingTransfer> &transfers, bool vif1)
+    {
+        for (auto &p : transfers)
+        {
+            GsWorkerItem item;
+            item.vif1 = vif1;
+            if (!p.chainData.empty())
+                item.data = std::move(p.chainData);
+            else
+                appendTransferBytes(p, vif1, item.data);
+            if (!item.data.empty())
+                workerJob.items.push_back(std::move(item));
+        }
+        transfers.clear();
+    };
+    if (m_gsWorkerEnabled)
+        collectForWorker(m_pendingGifTransfers, false);
 
     for (size_t idx = 0; idx < m_pendingGifTransfers.size(); ++idx)
     {
@@ -1960,6 +2006,8 @@ void PS2Memory::processPendingTransfers()
     m_pendingVif0Transfers.clear();
 
     const bool hadVif1 = !m_pendingVif1Transfers.empty();
+    if (m_gsWorkerEnabled)
+        collectForWorker(m_pendingVif1Transfers, true);
     for (auto &p : m_pendingVif1Transfers)
     {
         if (!p.chainData.empty())
@@ -2017,7 +2065,23 @@ void PS2Memory::processPendingTransfers()
     }
     m_pendingVif1Transfers.clear();
 
-    if (m_gifArbiter)
+    if (m_gsWorkerEnabled)
+    {
+        if (!workerJob.items.empty())
+        {
+            workerJob.fbrst = m_fbrstProvider ? m_fbrstProvider() : 0u;
+            size_t traceBytes = 0;
+            for (const GsWorkerItem &item : workerJob.items)
+                traceBytes += item.data.size();
+            gsWorkerTrace("kick", traceBytes);
+            {
+                std::lock_guard<std::mutex> lock(m_gsWorkerMutex);
+                m_gsWorkerJobs.push_back(std::move(workerJob));
+            }
+            m_gsWorkerCv.notify_one();
+        }
+    }
+    else if (m_gifArbiter)
         m_gifArbiter->drain();
 
     static constexpr uint32_t GIF_CHANNEL = 0x1000A000;
@@ -2063,6 +2127,207 @@ void PS2Memory::processPendingTransfers()
     }
 }
 
+// GOW-Port: copy a normal-mode transfer's bytes at kick time (same wrap rules as the inline loops; GIF
+// drops a trailing partial quadword, VIF1 keeps it).
+void PS2Memory::appendTransferBytes(const PendingTransfer &transfer, bool vif1, std::vector<uint8_t> &out) const
+{
+    if (transfer.qwc == 0u)
+        return;
+    const uint64_t bytes64 = static_cast<uint64_t>(transfer.qwc) * 16ull;
+    uint32_t bytesLeft = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
+    uint32_t srcPhys = 0;
+    try
+    {
+        srcPhys = const_cast<PS2Memory *>(this)->translateAddress(transfer.srcAddr);
+    }
+    catch (const std::exception &)
+    {
+        return;
+    }
+    const uint8_t *base = transfer.fromScratchpad ? m_scratchpad : m_rdram;
+    const uint32_t size = transfer.fromScratchpad ? PS2_SCRATCHPAD_SIZE : PS2_RAM_SIZE;
+    out.reserve(bytesLeft);
+    while (vif1 ? bytesLeft > 0u : bytesLeft >= 16u)
+    {
+        if (srcPhys >= size)
+            srcPhys = 0;
+        uint32_t chunk = std::min(bytesLeft, size - srcPhys);
+        if (chunk == 0)
+            break;
+        out.insert(out.end(), base + srcPhys, base + srcPhys + chunk);
+        bytesLeft -= chunk;
+        srcPhys += chunk;
+    }
+}
+
+// GOW-Port: PS2X_GS_WORKER_TRACE (see PS2Runtime::dispatchGuestBranch): worker kick/start/done times.
+static void gsWorkerTrace(const char *what, size_t bytes)
+{
+    static const double traceFrom = [] { const char *v = std::getenv("PS2X_GS_WORKER_TRACE"); return v ? std::atof(v) : -1.0; }();
+    if (traceFrom < 0.0)
+        return;
+    static const auto traceStart = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    const double s = std::chrono::duration<double>(now - traceStart).count();
+    if (s >= traceFrom && s < traceFrom + 2.0)
+        std::fprintf(stderr, "[gsw-trace] %.0f %s %zu\n",
+                     std::chrono::duration<double, std::micro>(now.time_since_epoch()).count(), what, bytes);
+}
+
+void PS2Memory::runGsWorkerJob(GsWorkerJob &job)
+{
+    size_t traceBytes = 0;
+    for (const GsWorkerItem &item : job.items)
+        traceBytes += item.data.size();
+    gsWorkerTrace("job-start", traceBytes);
+    struct TraceDone { size_t bytes; ~TraceDone() { gsWorkerTrace("job-done", bytes); } } traceDone{traceBytes};
+    m_gsWorkerJobFbrst = job.fbrst;
+    for (GsWorkerItem &item : job.items)
+    {
+        const uint32_t size = static_cast<uint32_t>(item.data.size());
+        if (item.vif1)
+        {
+            processVIF1Data(item.data.data(), size);
+        }
+        else
+        {
+            m_seenGifCopy = true;
+            m_gifCopyCount.fetch_add(1, std::memory_order_relaxed);
+            submitGifPacket(GifPathId::Path3, item.data.data(), size, false);
+        }
+    }
+    if (m_gifArbiter)
+        m_gifArbiter->drain();
+}
+
+void PS2Memory::gsWorkerLoop()
+{
+    for (;;)
+    {
+        GsWorkerJob job;
+        {
+            std::unique_lock<std::mutex> lock(m_gsWorkerMutex);
+            m_gsWorkerBusy = false;
+            if (m_gsWorkerJobs.empty())
+                m_gsWorkerIdleCv.notify_all();
+            m_gsWorkerCv.wait(lock, [this] { return m_gsWorkerStop || !m_gsWorkerJobs.empty(); });
+            if (m_gsWorkerJobs.empty())
+                return; // stop requested and nothing left
+            job = std::move(m_gsWorkerJobs.front());
+            m_gsWorkerJobs.pop_front();
+            m_gsWorkerBusy = true;
+        }
+        try
+        {
+            runGsWorkerJob(job);
+        }
+        catch (const std::exception &e)
+        {
+            std::fprintf(stderr, "[gs-worker] job failed: %s\n", e.what());
+        }
+        if (m_gsWorkerWake && (gs_regs.csr.load(std::memory_order_acquire) & 0x3u) != 0u)
+            m_gsWorkerWake();
+    }
+}
+
+void PS2Memory::syncGsWorker(const char *site)
+{
+    if (m_gsWorkerEnabled && !onGsWorkerThread())
+        waitGsWorkerIdle(site, 0u);
+}
+
+void PS2Memory::syncGsWorkerFor(uint32_t address)
+{
+    if (m_gsWorkerEnabled && needsGsWorkerSync(address) && !onGsWorkerThread())
+        waitGsWorkerIdle(nullptr, address);
+}
+
+void PS2Memory::syncGsWorkerIfOtherThread(const char *site)
+{
+    if (m_gsWorkerEnabled && !onGsWorkerThread())
+        waitGsWorkerIdle(site, 0u);
+}
+
+namespace
+{
+    // PS2X_GS_WORKER_DIAG=1: every 5 s, the sync sites that made the EE wait for the worker.
+    struct GsWorkerSyncDiag
+    {
+        struct Entry { uint64_t syncs = 0, waits = 0, waitUs = 0; };
+        std::mutex mutex;
+        std::map<std::string, Entry> sites;
+        std::chrono::steady_clock::time_point next = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    };
+    bool gsWorkerSyncDiagEnabled()
+    {
+        static const bool on = [] { const char *v = std::getenv("PS2X_GS_WORKER_DIAG"); return v && v[0] == '1'; }();
+        return on;
+    }
+}
+
+void PS2Memory::waitGsWorkerIdle(const char *site, uint32_t address)
+{
+    std::unique_lock<std::mutex> lock(m_gsWorkerMutex);
+    const bool busy = !m_gsWorkerJobs.empty() || m_gsWorkerBusy;
+    const auto start = std::chrono::steady_clock::now();
+    if (busy)
+        m_gsWorkerIdleCv.wait(lock, [this] { return m_gsWorkerJobs.empty() && !m_gsWorkerBusy; });
+    lock.unlock();
+    if (!gsWorkerSyncDiagEnabled())
+        return;
+    static GsWorkerSyncDiag diag;
+    const auto now = std::chrono::steady_clock::now();
+    char key[48];
+    if (site)
+        std::snprintf(key, sizeof(key), "%s", site);
+    else
+        std::snprintf(key, sizeof(key), "mmio 0x%08X", address & ~0xFu);
+    std::lock_guard<std::mutex> diagLock(diag.mutex);
+    auto &entry = diag.sites[key];
+    ++entry.syncs;
+    if (busy)
+    {
+        ++entry.waits;
+        entry.waitUs += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now - start).count());
+    }
+    if (now >= diag.next)
+    {
+        diag.next = now + std::chrono::seconds(5);
+        for (const auto &[name, e] : diag.sites)
+            if (e.waits)
+                std::fprintf(stderr, "[gs-worker:sync] %s syncs=%llu waits=%llu wait_ms=%.1f\n", name.c_str(),
+                             static_cast<unsigned long long>(e.syncs), static_cast<unsigned long long>(e.waits),
+                             e.waitUs / 1000.0);
+        diag.sites.clear();
+    }
+}
+
+void PS2Memory::stopGsWorker()
+{
+    if (!m_gsWorker.joinable())
+        return;
+    {
+        std::lock_guard<std::mutex> lock(m_gsWorkerMutex);
+        m_gsWorkerStop = true;
+    }
+    m_gsWorkerCv.notify_all();
+    m_gsWorker.join();
+    m_gsWorkerEnabled = false;
+}
+
+// EE accesses that observe or change state owned by the worker while it runs.
+bool PS2Memory::needsGsWorkerSync(uint32_t address) const
+{
+    // 0x70000000 (scratchpad) would alias 0x10003xxx once masked.
+    if (isScratchpad(address))
+        return false;
+    const uint32_t phys = address & 0x1FFFFFFFu;
+    return isGsPrivReg(address) || isGsPrivReg(phys) ||
+           (phys >= 0x10003000u && phys < 0x10004000u) || // GIF and VIF0/VIF1 registers
+           (phys >= 0x10005000u && phys < 0x10007000u) || // VIF1 / GIF FIFOs
+           (phys >= 0x11008000u && phys < 0x11010000u);   // VU1 micro and data memory
+}
+
 void PS2Memory::queueCompletedDmacCause(uint32_t cause)
 {
     std::lock_guard<std::mutex> lock(m_completedDmacMutex);
@@ -2079,6 +2344,7 @@ std::vector<uint32_t> PS2Memory::consumeCompletedDmacCauses()
 
 void PS2Memory::flushMaskedPath3Packets(bool drainImmediately)
 {
+    syncGsWorkerIfOtherThread("flushMaskedPath3");
     if (m_path3Masked || m_path3MaskedFifo.empty())
         return;
 
@@ -2103,6 +2369,7 @@ void PS2Memory::flushMaskedPath3Packets(bool drainImmediately)
 
 void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool drainImmediately, bool path2DirectHl)
 {
+    syncGsWorkerIfOtherThread("submitGifPacket");
     if (!data || sizeBytes < 16)
         return;
 
@@ -2127,6 +2394,7 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t 
 
 void PS2Memory::processGIFPacket(uint32_t srcPhysAddr, uint32_t qwCount)
 {
+    syncGsWorkerIfOtherThread("processGIFPacket");
     if (!m_rdram || qwCount == 0)
         return;
     const uint64_t bytes64 = static_cast<uint64_t>(qwCount) * 16ull;
@@ -2161,6 +2429,7 @@ void PS2Memory::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
 
 bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint32_t chcr)
 {
+    syncGsWorkerIfOtherThread("nativeGifImage");
     static constexpr uint32_t GIF_CHANNEL = 0x1000A000u;
     static constexpr uint32_t D_STAT = 0x1000E010u;
     static constexpr uint32_t D_CTRL = 0x1000E000u;
@@ -2357,6 +2626,7 @@ bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint3
 
 bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t chcr)
 {
+    syncGsWorkerIfOtherThread("nativeGifPacked");
     static constexpr uint32_t GIF_CHANNEL = 0x1000A000u;
     static constexpr uint32_t D_STAT = 0x1000E010u;
     static constexpr uint32_t D_CTRL = 0x1000E000u;
@@ -2442,6 +2712,7 @@ int PS2Memory::pollDmaRegisters()
 
 uint32_t PS2Memory::readIORegister(uint32_t address)
 {
+    syncGsWorkerFor(address);
     size_t timerIndex = 0u;
     uint32_t timerOffset = 0u;
     if (decodeEeTimerRegister(address, timerIndex, timerOffset))

@@ -253,6 +253,7 @@ void PS2Memory::submitVif1DirectPayload(const uint8_t *data, uint32_t sizeBytes,
 
 void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 {
+    syncGsWorkerIfOtherThread("processVIF1Data"); // GOW-Port: VIF1 FIFO writes etc. run behind queued worker jobs
     if (sizeBytes == 0u)
         return;
 

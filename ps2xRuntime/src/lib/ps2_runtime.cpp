@@ -504,6 +504,7 @@ PS2Runtime::~PS2Runtime()
     try
     {
         requestStop();
+        m_memory.stopGsWorker(); // GOW-Port: the worker uses m_gs/m_vu1, destroyed before m_memory
 #if !defined(PLATFORM_VITA)
         stopSpu2Audio(); // GOW-Port: antes de destruir el IOP que produce las muestras
 #endif
@@ -665,44 +666,56 @@ bool PS2Runtime::syncCoreSubsystems()
     m_gifArbiter.setProcessPathPacketFn([this](GifPathId path, const uint8_t *data, uint32_t size)
                                     { m_gs.processGIFPacket(data, size, path); });
     m_memory.setGifArbiter(&m_gifArbiter);
-    m_memory.setVu1MscalCallback([this](uint32_t startPC, uint32_t top, uint32_t itop)
+    // GOW-Port: on the GS worker (PS2X_GS_WORKER=1) the EE context belongs to another thread: the D/T-bit
+    // enables come from the FBRST captured when the job was queued, and VPU_STAT is not written back
+    // (this game has no CFC2/CTC2).
+    auto eeContextForVu1 = [this]() -> R5900Context *
+    {
+        if (m_memory.onGsWorkerThread())
+            return nullptr;
+        R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
+        return cpuContext ? cpuContext : &m_cpuContext;
+    };
+    auto setVu1StopEnables = [this](const R5900Context *cpuContext)
+    {
+        const uint32_t fbrst = cpuContext ? cpuContext->vu0_fbrst : m_memory.gsWorkerJobFbrst();
+        m_vu1.state().dBitEnabled = (fbrst & (1u << 10)) != 0u;
+        m_vu1.state().tBitEnabled = (fbrst & (1u << 11)) != 0u;
+    };
+    auto publishVu1Stop = [this](R5900Context *cpuContext)
+    {
+        if (!cpuContext)
+            return;
+        cpuContext->vu0_vpu_stat =
+            (cpuContext->vu0_vpu_stat & ~0x0600u) |
+            (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
+            (m_vu1.state().stoppedByT ? 0x0400u : 0u);
+    };
+    m_memory.setFbrstProvider([eeContextForVu1]() { return eeContextForVu1()->vu0_fbrst; });
+    // ExternalWake with a type no thread waits on: only runs the event pass (which polls the GS interrupt).
+    m_memory.setGsWorkerWake([this]()
+                             {
+                                 if (m_eeScheduler)
+                                     m_eeScheduler->postEvent(EeEvent{EeEventType::ExternalWake, 0xFFFFFFFFu, ~0ull});
+                             });
+    m_memory.setVu1MscalCallback([this, eeContextForVu1, setVu1StopEnables, publishVu1Stop](uint32_t startPC, uint32_t top, uint32_t itop)
                                  {
-                                     R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
-                                     if (!cpuContext)
-                                     {
-                                         cpuContext = &m_cpuContext;
-                                     }
-                                     m_vu1.state().dBitEnabled =
-                                         (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
-                                     m_vu1.state().tBitEnabled =
-                                         (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
+                                     R5900Context *cpuContext = eeContextForVu1();
+                                     setVu1StopEnables(cpuContext);
                                      m_vu1.execute(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                    m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
                                                    m_gs, &m_memory, startPC, top, itop, 65536);
                                      gowReportVu1Budget(m_vu1, "MSCAL", startPC);
-                                     cpuContext->vu0_vpu_stat =
-                                         (cpuContext->vu0_vpu_stat & ~0x0600u) |
-                                         (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
-                                         (m_vu1.state().stoppedByT ? 0x0400u : 0u); });
-    m_memory.setVu1MscntCallback([this](uint32_t top, uint32_t itop)
+                                     publishVu1Stop(cpuContext); });
+    m_memory.setVu1MscntCallback([this, eeContextForVu1, setVu1StopEnables, publishVu1Stop](uint32_t top, uint32_t itop)
                                  {
-                                     R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
-                                     if (!cpuContext)
-                                     {
-                                         cpuContext = &m_cpuContext;
-                                     }
-                                     m_vu1.state().dBitEnabled =
-                                         (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
-                                     m_vu1.state().tBitEnabled =
-                                         (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
+                                     R5900Context *cpuContext = eeContextForVu1();
+                                     setVu1StopEnables(cpuContext);
                                      m_vu1.resume(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                   m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
                                                   m_gs, &m_memory, top, itop, 65536);
                                      gowReportVu1Budget(m_vu1, "MSCNT", 0xFFFFu);
-                                     cpuContext->vu0_vpu_stat =
-                                         (cpuContext->vu0_vpu_stat & ~0x0600u) |
-                                         (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
-                                         (m_vu1.state().stoppedByT ? 0x0400u : 0u); });
+                                     publishVu1Stop(cpuContext); });
     resetIop();
     m_vu0.reset();
     m_vu1.reset();
@@ -774,6 +787,7 @@ void PS2Runtime::shutdownHostGraphics()
 {
     if (!m_hostWindowOwned)
         return;
+    m_memory.stopGsWorker(); // GOW-Port: no GS work after the host context goes away
     m_hostPresentation->shutdown(m_gs);
     if (IsWindowReady())
         CloseWindow();
@@ -1438,7 +1452,24 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     const uint64_t checkpointSerial = m_eeCheckpointSerial;
     const uint64_t jumpSerial = g_guestJumpSerial;
     ps2_perf::guestEntry(targetPc); // GOW-Port: también cuenta llamadas que no vuelven al dispatcher.
+    // GOW-Port: PS2X_GS_WORKER_TRACE=<s>: for 2 s after <s> s of uptime, host µs of vid::Flip (0x1837B8),
+    // vid::WaitForDMAComplete (0x183878) and 0x13F730 entry/return, to see the per-frame dependency chain.
+    static const double traceFrom = [] { const char *v = std::getenv("PS2X_GS_WORKER_TRACE"); return v ? std::atof(v) : -1.0; }();
+    const bool traced = traceFrom >= 0.0 && (targetPc == 0x1837B8u || targetPc == 0x183878u || targetPc == 0x13F730u);
+    static const auto traceStart = std::chrono::steady_clock::now();
+    auto traceEvent = [&](const char *what)
+    {
+        const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - traceStart).count();
+        if (s >= traceFrom && s < traceFrom + 2.0)
+            std::fprintf(stderr, "[gsw-trace] %.0f %s 0x%X\n",
+                         std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+                         what, targetPc);
+    };
+    if (traced)
+        traceEvent("enter");
     targetFn(rdram, ctx, this);
+    if (traced)
+        traceEvent("leave");
 
     if (isStopRequested() || ctx->pc == 0u)
     {
