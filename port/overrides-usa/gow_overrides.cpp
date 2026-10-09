@@ -147,6 +147,24 @@ namespace
                     return seconds >= when;
                 return gameplayStart >= 0.0 && seconds - gameplayStart >= when - kGameplayTime;
             };
+            // GOW-Port: GOW_RAM_DUMP=<time>:<file> writes the 32 MB EE RAM once (time as in GOW_PAD_CAPTURAS,
+            // e.g. g5:ram.bin), to compare with eeMemory.bin from a PCSX2 save state at the same point.
+            static const char *ramDump = std::getenv("GOW_RAM_DUMP");
+            static bool ramDumped = false;
+            if (ramDump && !ramDumped)
+            {
+                const char *colon = std::strchr(ramDump, ':');
+                if (colon && reached(parseTime(std::string(ramDump, colon))))
+                {
+                    ramDumped = true;
+                    if (std::FILE *file = std::fopen(colon + 1, "wb"))
+                    {
+                        std::fwrite(rdram, 1, 0x02000000u, file);
+                        std::fclose(file);
+                    }
+                    std::fprintf(stderr, "[gow-pad2:test] RAM dumped to %s at %.2f s\n", colon + 1, seconds);
+                }
+            }
             // GOW-Port: comprobar el estado durante el perfil sin escribir capturas ni volcados.
             static const bool noCapture = [] {
                 const char *value = std::getenv("GOW_PAD_TEST_NO_CAPTURE");
@@ -475,7 +493,7 @@ namespace
         }
         sub_00100C50_0x100c50(rdram, ctx, runtime);
         static unsigned samples = 0;
-        if (readGuest32(rdram, 0x29E560u) == 4u && ctx->pc == ra && samples++ % 100 == 0)
+        if ((readGuest32(rdram, 0x29E560u) == 4u || readGuest32(rdram, 0x29E560u) == 11u) && ctx->pc == ra && samples++ % 100 == 0)
         {
             float delta = 0;
             std::memcpy(&delta, rdram + 0x29C64Cu, sizeof(delta));

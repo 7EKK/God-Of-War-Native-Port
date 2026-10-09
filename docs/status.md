@@ -322,3 +322,16 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
   This is only the window: the GS still renders at native PS2 resolution (~512x448). **Full-HD internal
   rendering** (user, next after the Kratos fix) needs an upscaled render-target path in the GPU backend
   (PCSX2 HW renderer / texture cache style) — a large feature, planned, not started.
+- **Twist repro (port/tw1)**: save slot 2, `g8:ldown*16` (walk toward the camera): legs run forward, torso turned
+  ~180° with blades raised behind — clearly visible in gow_pad_test_1.
+- Eliminated (2026-10-10, all match PCSX2 / sane): EE code during the walk (ed6: ~16 000 calls after gameplay start,
+  no significant difference; ed4/ed5 never reached gameplay — all-function hooks slow loading, start the diff after
+  gameplay), libc stubs (__divdi3/memcmp/rand differ only in scratch regs), SPR DMA (no interleave mode used, no
+  aborted chains; `[dma] SPR ... not handled` diag added), animation dt (0.033 s, GOW_FAST_BOOT diag now also in
+  state 11), EE timers (T0 mode 0x082 = BUSCLK/256, read ~660/s; `PS2X_TIMER_DIAG=1`), no VU0 micro-programs
+  (no VCALLMS in the ELF). Not comparable = kernel/syscalls/COP0 + DMA register code (ed7, now printed).
+- Remaining suspects: data coming from the IOP side (disc-loaded animation data, pad bytes).
+- **Next step**: ground truth from PCSX2. Our dump: port/ram_desert_g5.bin (`GOW_RAM_DUMP=g5:<file>`, standing in
+  the desert room 5 s after load). Needed: PCSX2 save state (ref/pcsx2, USA ISO, card ref/saves/Mcd002.ps2, slot 2)
+  standing in the same room → extract eeMemory.bin (7-Zip) → compare level/animation data regions (static data
+  loaded from disc must be identical; differences = IOP/disc path bug).
