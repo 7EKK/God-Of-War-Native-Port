@@ -1139,6 +1139,11 @@ void VU1Interpreter::finishXgkick()
 {
     if (!m_xgkick.active)
         return;
+    if (m_verifySilent)
+    {
+        m_xgkick.active = false;
+        return;
+    }
 
     if (m_activeMemory)
         m_activeMemory->submitGifPacket(GifPathId::Path1, m_xgkick.packet.data(), m_xgkick.totalBytes);
@@ -1759,6 +1764,10 @@ void VU1Interpreter::rebuildDecodedCodeCache(const uint8_t *vuCode, uint32_t cod
         if (!pair.iBit && (pair.lower >> 25) == 0x15u) // FSSET
             m_statusQuiet = false;
     }
+    // GOW-Port: GOW_VU1C_FLAGS_VIVOS=1 calcula siempre los flags de las FMAC "muertas" de los bloques (diagnostico).
+    static const bool liveFlags = std::getenv("GOW_VU1C_FLAGS_VIVOS") != nullptr;
+    if (liveFlags)
+        m_statusQuiet = false;
 }
 
 const VU1Interpreter::DecodedInstructionPair &VU1Interpreter::getDecodedInstructionPairForPc(
@@ -1871,6 +1880,116 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     m_state.cycles = m_cycle;
     if (useVuRounding && previousRoundingMode != -1)
         std::fesetround(previousRoundingMode);
+}
+
+// GOW-Port: GOW_VU1C_VERIFICAR. Antes de un bloque compilado se ejecutan sus pares con el interprete desde el
+// mismo estado, se guarda el resultado y se restaura todo; al acabar el bloque compilado se compara.
+// Se omiten los bloques con XGKICK o con un XGKICK en curso (efectos fuera de VU1).
+void VU1Interpreter::verifyBlockStart(StepContext &context, uint32_t pc, const uint32_t *words, size_t bytes)
+{
+    (void)words;
+    if (m_verifyLeft != 0u || context.vuData == nullptr)
+        return;
+    const uint32_t pairs = static_cast<uint32_t>(bytes / 8u);
+    const VU1Interpreter saved = *this;
+    const StepContext savedContext = context;
+    const std::vector<uint8_t> savedData(context.vuData, context.vuData + context.dataSize);
+    uint32_t done = 0;
+    m_verifySilent = true;
+    while (done < pairs && m_state.pc == pc + done * 8u)
+    {
+        ++done;
+        if (!stepInterpreted(context))
+            break;
+    }
+    m_verifySilent = false;
+    const VU1State expected = m_state;
+    const uint64_t expectedCycle = m_cycle;
+    const bool kickActive = m_xgkick.active;
+    const uint32_t kickBytes = m_xgkick.copiedBytes;
+    std::vector<uint8_t> kick(m_xgkick.packet.begin(), m_xgkick.packet.begin() + std::min<uint32_t>(kickBytes, XgkickPipeline::kBufferSize));
+    std::vector<uint8_t> expectedData(context.vuData, context.vuData + context.dataSize);
+    *this = saved;
+    context = savedContext;
+    std::memcpy(context.vuData, savedData.data(), savedData.size());
+    if (done == 0u)
+        return;
+    m_verifyExpected = expected;
+    m_verifyCycle = expectedCycle;
+    m_verifyData = std::move(expectedData);
+    m_verifyKickActive = kickActive;
+    m_verifyKickBytes = kickBytes;
+    m_verifyKick = std::move(kick);
+    m_verifyHead = pc;
+    m_verifyPairs = done;
+    m_verifyLeft = done;
+}
+
+void VU1Interpreter::verifyBlockEnd(StepContext &context)
+{
+    static int reports = 0;
+    static unsigned long checked = 0, withKick = 0;
+    ++checked;
+    withKick += m_verifyKickBytes != 0u ? 1u : 0u;
+    if (checked % 5000u == 0u)
+        std::fprintf(stderr, "[vu1c-verify] checked %lu blocks (%lu with XGKICK data)\n", checked, withKick);
+    if (reports >= 200)
+        return;
+    const VU1State &e = m_verifyExpected;
+    const VU1State &g = m_state;
+    char what[160] = {};
+    for (int r = 0; r < 32 && !what[0]; ++r)
+        for (int l = 0; l < 4; ++l)
+            if (std::memcmp(&e.vf[r][l], &g.vf[r][l], 4) != 0)
+            {
+                std::snprintf(what, sizeof(what), "vf%02d.%c exp=%g got=%g", r, "xyzw"[l], e.vf[r][l], g.vf[r][l]);
+                break;
+            }
+    for (int r = 1; r < 16 && !what[0]; ++r)
+        if (static_cast<int16_t>(e.vi[r]) != static_cast<int16_t>(g.vi[r]))
+            std::snprintf(what, sizeof(what), "vi%02d exp=%d got=%d", r, e.vi[r], g.vi[r]);
+    for (int l = 0; l < 4 && !what[0]; ++l)
+        if (std::memcmp(&e.acc[l], &g.acc[l], 4) != 0)
+            std::snprintf(what, sizeof(what), "acc.%c exp=%g got=%g", "xyzw"[l], e.acc[l], g.acc[l]);
+    if (!what[0] && std::memcmp(&e.q, &g.q, 4) != 0)
+        std::snprintf(what, sizeof(what), "q exp=%g got=%g", e.q, g.q);
+    if (!what[0] && std::memcmp(&e.p, &g.p, 4) != 0)
+        std::snprintf(what, sizeof(what), "p exp=%g got=%g", e.p, g.p);
+    if (!what[0] && (e.pc != g.pc || e.clip != g.clip || e.r != g.r))
+        std::snprintf(what, sizeof(what), "pc %x/%x mac %x/%x clip %x/%x status %x/%x r %x/%x", e.pc, g.pc, e.mac,
+                      g.mac, e.clip, g.clip, e.status, g.status, e.r, g.r);
+    if (!what[0] && (e.ebit != g.ebit || e.branchPending != g.branchPending || m_verifyCycle != m_cycle))
+        std::snprintf(what, sizeof(what), "ebit %d/%d branch %d/%d cycle %llu/%llu", e.ebit, g.ebit, e.branchPending,
+                      g.branchPending, static_cast<unsigned long long>(m_verifyCycle), static_cast<unsigned long long>(m_cycle));
+    if (!what[0] && (m_verifyKickActive != m_xgkick.active || m_verifyKickBytes != m_xgkick.copiedBytes))
+        std::snprintf(what, sizeof(what), "xgkick active %d/%d copied %u/%u", m_verifyKickActive, m_xgkick.active,
+                      m_verifyKickBytes, m_xgkick.copiedBytes);
+    if (!what[0])
+        for (uint32_t a = 0; a + 4u <= m_verifyKick.size(); a += 4u)
+            if (std::memcmp(m_verifyKick.data() + a, m_xgkick.packet.data() + a, 4) != 0)
+            {
+                uint32_t ev, gv;
+                std::memcpy(&ev, m_verifyKick.data() + a, 4);
+                std::memcpy(&gv, m_xgkick.packet.data() + a, 4);
+                std::snprintf(what, sizeof(what), "xgkick packet +%04x exp=%08x got=%08x (src %04x)", a, ev, gv,
+                              m_xgkick.sourceAddress);
+                break;
+            }
+    if (!what[0] && context.vuData != nullptr && m_verifyData.size() == context.dataSize)
+        for (uint32_t a = 0; a < context.dataSize; a += 4u)
+            if (std::memcmp(m_verifyData.data() + a, context.vuData + a, 4) != 0)
+            {
+                uint32_t ev, gv;
+                std::memcpy(&ev, m_verifyData.data() + a, 4);
+                std::memcpy(&gv, context.vuData + a, 4);
+                std::snprintf(what, sizeof(what), "mem %04x exp=%08x got=%08x", a, ev, gv);
+                break;
+            }
+    if (!what[0])
+        return;
+    ++reports;
+    std::fprintf(stderr, "[vu1c-verify] block %04x pairs=%u code=%016llx: %s\n", m_verifyHead, m_verifyPairs,
+                 static_cast<unsigned long long>(hashMicrocode(context.vuCode, context.codeSize)), what);
 }
 
 bool VU1Interpreter::stepInterpreted(StepContext &context)

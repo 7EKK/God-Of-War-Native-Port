@@ -1091,12 +1091,49 @@ struct VU1CompiledAccess
     using C = VU1Interpreter::StepContext;
     using Pipeline = VU1Interpreter::Pipeline;
     template <class T, bool DeadFlags, bool Plain = false>
-    static VU1_STEP_INLINE bool step(VU1Interpreter &vu, C &c) { return vu.stepPairT<T, DeadFlags, Plain>(c); }
+    static VU1_STEP_INLINE bool step(VU1Interpreter &vu, C &c)
+    {
+        const bool more = vu.stepPairT<T, DeadFlags, Plain>(c);
+        if (vu.m_verifyLeft != 0u && (--vu.m_verifyLeft == 0u || !more))
+        {
+            vu.m_verifyLeft = 0u;
+            vu.verifyBlockEnd(c);
+        }
+        return more;
+    }
     static bool interpret(VU1Interpreter &vu, C &c) { return vu.stepInterpreted(c); }
     static uint32_t pc(const VU1Interpreter &vu) { return vu.m_state.pc; }
     static bool block(const VU1Interpreter &vu, C &c, uint32_t pc, const uint32_t *words, size_t bytes)
     {
-        return vu.blockPreconditions(c, pc, words, bytes);
+        if (!vu.blockPreconditions(c, pc, words, bytes))
+            return false;
+        // GOW-Port: GOW_VU1C_EXCLUIR=xgkick|flags (diagnostico): no usar bloques con XGKICK o con lectores de
+        // flags MAC/estado (FMEQ/FMAND/FMOR/FSEQ/FSAND/FSOR); esos pares van sueltos.
+        static const int exclude = [] {
+            const char *v = std::getenv("GOW_VU1C_EXCLUIR");
+            return !v ? 0 : std::strcmp(v, "xgkick") == 0 ? 1 : std::strcmp(v, "flags") == 0 ? 2 : 0;
+        }();
+        if (exclude != 0)
+            for (size_t i = 0; i < bytes / 8u; ++i)
+            {
+                const uint32_t lower = words[i * 2u], upper = words[i * 2u + 1u];
+                if ((upper & 0x80000000u) != 0u)
+                    continue;
+                const uint32_t op = lower >> 25;
+                if (exclude == 1 && op == 0x40u && (lower & 0x7FFu) == 0x6FCu)
+                    return false;
+                if (exclude == 2 && (op == 0x14u || op == 0x16u || op == 0x17u || op == 0x18u || op == 0x1Au || op == 0x1Bu))
+                    return false;
+            }
+        // GOW_VU1C_VERIFICAR=<N>: verifica uno de cada N bloques (copiar el interprete es caro).
+        static const unsigned long verifyEvery = [] {
+            const char *v = std::getenv("GOW_VU1C_VERIFICAR");
+            return v ? std::max(1ul, std::strtoul(v, nullptr, 10)) : 0ul;
+        }();
+        static unsigned long verifyCount = 0;
+        if (verifyEvery != 0ul && ++verifyCount % verifyEvery == 0ul)
+            const_cast<VU1Interpreter &>(vu).verifyBlockStart(c, pc, words, bytes);
+        return true;
     }
 };
 

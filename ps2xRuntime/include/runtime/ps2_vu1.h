@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <vector>
 #include <cstdint>
 
 // GOW-Port: las funciones en línea de VU1 usan el mismo modo de coma flotante que ps2_vu1_*.cpp (sin
@@ -283,6 +284,19 @@ private:
     // GOW-Port: además, nadie escribe el estado con FSSET; el código compilado puede omitir los flags de
     // una FMAC que nadie llega a ver (solo acumula sus bits pegajosos).
     bool m_statusQuiet = false;
+    // GOW-Port: GOW_VU1C_VERIFICAR=1 ejecuta cada bloque compilado tambien con el interprete y compara (diagnostico).
+    uint32_t m_verifyLeft = 0;
+    uint32_t m_verifyHead = 0;
+    uint32_t m_verifyPairs = 0;
+    uint64_t m_verifyCycle = 0;
+    bool m_verifySilent = false; // la pasada del interprete no envia paquetes XGKICK al GIF
+    uint32_t m_verifyKickBytes = 0;
+    bool m_verifyKickActive = false;
+    std::vector<uint8_t> m_verifyKick;
+    VU1State m_verifyExpected{};
+    std::vector<uint8_t> m_verifyData;
+    void verifyBlockStart(StepContext &context, uint32_t pc, const uint32_t *words, size_t bytes);
+    void verifyBlockEnd(StepContext &context);
 
     std::array<FlagPipelineEntry, kMaxFlagEntries> m_flagPipeline{};
     ScalarPipelineEntry m_fdiv{};
