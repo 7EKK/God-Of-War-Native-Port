@@ -73,6 +73,11 @@ namespace ps2x::iop::detail
         {
             bool active = false;
             uint32_t nax = 0;          // siguiente bloque ADPCM (medias palabras)
+            // GOW-Port: block currently being played and whether it has been decoded yet. The NAX register reads
+            // from these (like PCSX2's NextA: always inside the playing block), not from 'nax', which already points
+            // past the block (lazy decode) and, after a half's last block, lies outside the stream ring.
+            uint32_t playBlock = 0;
+            bool playStarted = false;
             uint32_t lsa = 0;          // inicio del bucle
             bool lsaFromRegister = false;
             uint32_t pitchCounter = 0; // 4.12
@@ -92,6 +97,7 @@ namespace ps2x::iop::detail
         [[nodiscard]] uint16_t &reg(uint32_t offset) noexcept { return m_regs[(offset & 0x7FFu) >> 1u]; }
         [[nodiscard]] uint16_t reg(uint32_t offset) const noexcept { return m_regs[(offset & 0x7FFu) >> 1u]; }
         [[nodiscard]] uint32_t reg32(uint32_t offset) const noexcept; // par alto/bajo (direccion de 20 bits)
+        [[nodiscard]] static uint32_t naxRegister(const VoiceState &v) noexcept;
         void setReg32(uint32_t offset, uint32_t value) noexcept;
         [[nodiscard]] uint32_t voiceReg(uint32_t core, uint32_t voice, uint32_t field) const noexcept
         {

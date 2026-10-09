@@ -125,10 +125,12 @@ namespace ps2x::iop::detail
             {
                 const uint32_t index = (local - RegVoiceAddr) / 0xCu;
                 const uint32_t field = (local - RegVoiceAddr) % 0xCu;
+                // GOW-Port: NAX as PCSX2 reports NextA (inside the playing block). 989snd's polled streams kill
+                // the stream (error 0x35) when NAX falls outside both ring halves.
                 if (field == 8u)
-                    return static_cast<uint16_t>(m_voices[core][index].nax >> 16u);
+                    return static_cast<uint16_t>(naxRegister(m_voices[core][index]) >> 16u);
                 if (field == 10u)
-                    return static_cast<uint16_t>(m_voices[core][index].nax);
+                    return static_cast<uint16_t>(naxRegister(m_voices[core][index]));
             }
             else if (local == RegEndx)
                 return static_cast<uint16_t>(m_endx[core]);
@@ -136,6 +138,19 @@ namespace ps2x::iop::detail
                 return static_cast<uint16_t>(m_endx[core] >> 16u);
         }
         return reg(offset);
+    }
+
+    // GOW-Port: value read from the NAX register pair. PCSX2 (Mixer.cpp DecodeSamples/IncrementNextA) keeps NextA
+    // in [block + 1, block + 7] and jumps to LoopStartA as soon as a loop-end block finishes, so NAX never points
+    // past the end of a block. Here 'nax' is the next block to decode, which during the last block of a streaming
+    // half equals the first address after that half; 989snd (989NOMID.IRX 0x13258) then sees NAX outside both
+    // ring halves and aborts the stream (error 0x35), so the music restarts every few seconds.
+    uint32_t Spu2::naxRegister(const VoiceState &v) noexcept
+    {
+        if (!v.playStarted)
+            return (v.playBlock | 1u) & (RamHalfwords - 1u);
+        const uint32_t played = std::min<uint32_t>(v.decodedIndex, 27u) / 4u; // 0..6 (4 samples per halfword)
+        return (v.playBlock + 1u + played) & (RamHalfwords - 1u);
     }
 
     void Spu2::write16(uint32_t physical, uint16_t value)
@@ -192,6 +207,8 @@ namespace ps2x::iop::detail
             else if (field == 8u || field == 10u)
             {
                 v.nax = reg32(voiceAddrReg(core, index, 8u)) & ~7u;
+                v.playBlock = v.nax; // GOW-Port: reads back as written (| 1) until the next block is decoded
+                v.playStarted = false;
             }
         }
     }
@@ -242,6 +259,7 @@ namespace ps2x::iop::detail
             v.active = true;
             v.nax = ssa;
             v.lsa = ssa;
+            v.playBlock = ssa; // GOW-Port: NAX reads SSA | 1 until the first block is decoded (PCSX2 Start())
             v.phase = VoiceState::Phase::Attack;
             m_endx[core] &= ~(1u << index);
         }
@@ -309,6 +327,8 @@ namespace ps2x::iop::detail
         checkIrqAddress(block);
         v.decodedIndex = 0;
         v.nax = (block + 8u) & (RamHalfwords - 1u);
+        v.playBlock = block; // GOW-Port: see naxRegister()
+        v.playStarted = true;
     }
 
     void Spu2::stepEnvelope(uint32_t core, uint32_t index)
