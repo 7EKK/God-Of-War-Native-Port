@@ -1640,7 +1640,16 @@ bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
     if (mode == 1u)
         return processScratchpadChain(channelBase, chcr);
     if (mode != 0u)
+    {
+        // GOW-Port: interleave (MOD=2) is not implemented; report it so a missing transfer is visible.
+        static unsigned reports = 0u;
+        if (++reports <= 20u)
+            std::fprintf(stderr, "[dma] SPR %s mode %u not handled (chcr=%08x qwc=%u madr=%08x sadr=%04x)\n",
+                         channelBase == 0x1000D000u ? "fromSPR" : "toSPR", mode, chcr,
+                         m_ioRegisters[channelBase + 0x20u] & 0xFFFFu, m_ioRegisters[channelBase + 0x10u],
+                         m_ioRegisters[channelBase + 0x80u] & 0x3FF0u);
         return false;
+    }
 
     const uint32_t qwc = m_ioRegisters[channelBase + 0x20u] & 0xFFFFu;
     const uint32_t byteCount = qwc * 16u;
@@ -2721,7 +2730,15 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
         switch (timerOffset)
         {
         case kEeTimerCountOffset:
+        {
+            // GOW-Port: PS2X_TIMER_DIAG=1 prints the first count reads of each timer with its mode (clock source).
+            static const bool diag = std::getenv("PS2X_TIMER_DIAG") != nullptr;
+            static unsigned reads[4] = {};
+            if (diag && timerIndex < 4u && (++reads[timerIndex] <= 3u || reads[timerIndex] % 20000u == 0u))
+                std::fprintf(stderr, "[timer] T%zu read #%u count=%04x mode=%03x\n", timerIndex, reads[timerIndex],
+                             timer.count & 0xFFFFu, timer.mode & 0x3FFu);
             return timer.count & 0xFFFFu;
+        }
         case kEeTimerModeOffset:
             return timer.mode & (kEeTimerModeConfigMask | kEeTimerModeStatusMask);
         case kEeTimerCompareOffset:

@@ -84,7 +84,17 @@ namespace
                                                 after, rdram, scratch, maxSteps);
         static unsigned identical = 0, stopped = 0, differing = 0;
         if (!result.completed)
+        {
             ++stopped;
+            // Report each not-comparable function once, so unchecked code is visible.
+            static std::unordered_map<uint32_t, bool> reported;
+            if (!reported[address])
+            {
+                reported[address] = true;
+                std::fprintf(stderr, "[eediff] %08X (ra %08X) not comparable: %s (%llu steps)\n", address, returnPc,
+                             result.stopReason.c_str(), (unsigned long long)result.steps);
+            }
+        }
         else if (result.differences.empty())
             ++identical;
         else
