@@ -314,3 +314,11 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
   sampler: run `PS2X_EE_DIFF=all PS2X_EE_DIFF_MAX=50 PS2X_EE_DIFF_START=<walk start>` on a short run and look for
   non-ULP differences; also log Kratos' joint matrices (skeleton+0x8C) per frame while walking to see which joint
   rotates progressively, then find its writer with PS2X_EE_WATCH (not yet ported to the USA build).
+- ed4 (all functions, 50 calls each during the walk): 7153 identical, 773 differing, 74 not comparable; no
+  significant non-stack memory difference (large gaps only in dead scratch FPRs, e.g. 0x10FC88 chain f5..f10;
+  0x20D420 = ULP). Open: which calls were "not comparable" (quiet mode does not print the stop reason).
+- **Window 1920x1080 (2026-10-10)**: `GOW_WINDOW=<w>x<h>`; default 1920x1080 with GOW_WIDESCREEN=1 (was 1280x720),
+  shrunk to the monitor if needed; image letterboxed at 4:3/16:9 (gs_host_present.cpp). port/hd1: 26-30 fps.
+  This is only the window: the GS still renders at native PS2 resolution (~512x448). **Full-HD internal
+  rendering** (user, next after the Kratos fix) needs an upscaled render-target path in the GPU backend
+  (PCSX2 HW renderer / texture cache style) — a large feature, planned, not started.
