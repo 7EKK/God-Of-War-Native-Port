@@ -21,6 +21,7 @@ The user wants the game **totally playable**; work continues until then. Game da
 | [runtime-changes.md](runtime-changes.md) | Every change made to the EE runtime (ps2xRuntime) and recompiler, and why. |
 | [iop-changes.md](iop-changes.md) | Every change made to the IOP emulator (ps2xIOP), and why. |
 | [switch.md](switch.md) | Switch toolchain (WSL + devkitPro), Switch build changes, open Switch issues. |
+| [gemini-helper.md](gemini-helper.md) | Read-only helper agent (`agy`/Gemini) to offload log/dump analysis: when and how to call it. |
 
 ## Project layout
 
@@ -46,3 +47,4 @@ The user wants the game **totally playable**; work continues until then. Game da
 - Prefer generic fixes in PS2Recomp (runtime/IOP/recompiler) over game hacks; game-specific code goes only in
   `port/overrides/god_of_war_overrides.cpp` and is documented in game-internals.md.
 - Never run two builds of `out/build` at the same time (they corrupt each other; see build-and-run.md).
+- performance.md — speed work toward 60 fps: baseline, levers, measurements

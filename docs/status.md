@@ -149,3 +149,30 @@ Plan:
 3. Profile the rest (their tools/perfil/muestrear.cpp sampling profiler; needs /Zi build).
 Measurements must run with no compiler or other game instance active.
 - 2026-10-09 ~13:15: stopped by the user while the 2nd load-game test (port/usa3.log, GOW_PAD_GUION start@5,abajo@16,x@24...) was running; its captures were not reviewed. Performance step 1 (OpenGL + VU1 capture) not started yet.
+- 2026-10-09 (resumed session): reviewed port/usa3 captures (converted to port/usa3/*.png). Menu → LOAD → X:
+  **the user's memory card is read correctly**: "Select Load file from Memory Card Slot 1" lists 4 saves with
+  thumbnails (first: OLYMPUS, Sep 27 2021 23:54:43, Hero (Normal) 10:11:50) — visible from ~90 s (state=5) to the
+  end (240 s). The scripted X presses ended at ~90 s, so no save was selected yet. Next: rerun with X presses after
+  ~100 s (port/usa4).
+- 2026-10-09: their configureGowCdImage() (gow_overrides.cpp) uses GOW_ISO, else "<elf dir>/../God of War.iso",
+  else the first .iso in the ELF folder, **else an IOP "virtual ISO" built from the extracted folder**. So step
+  (c) (DiscSource port) may be unnecessary — to verify with a run without GOW_ISO (port/usa5).
+- port/usa4 (running): GOW_PAD_GUION='5:start,16:abajo,24:x,105:x,125:x,145:x,175:x,205:x,250:x', 620 s.
+- **2026-10-09: user's USA save loads and plays (port/usa4, verified by captures).** Script above: save list at
+  ~90 s, "Load Complete." at 190 s (state=5→6), gameplay at 360 s (state=11, flashReady=1): Kratos in Olympus at
+  the save altar, R2 prompt, scene fully textured/lit (port/usa4/gow_pad_test_14.png). Next step (a) done.
+  User now asked (2026-10-09): **performance, target ≥ 60 fps**. Starting performance plan step 1–2.
+- 2026-10-09 perf1 (port/perf1.log): OpenGL GS (PS2X_GS_GPU=1) + GOW_PERF_DIAG + GOW_VU1_CAPTURA=port/vu1_micro,
+  same save-load script. Title ~5-5.8 game frames/s; loaded gameplay (state=11, ~375 s) **4.0 game frames/s**
+  (host presents 60/s). Per 5 s window in gameplay: VU 3.07 s, EE 1.58 s, GS 0.20 s, IOP 0.15 s → VU1 is ~61 %.
+  (Capture adds overhead.) 351 VU1 micro-memories captured (5.7 MB). Next: reconfigure out/build-kl with
+  -DPS2X_VU1_MICROCODE_DIR=port/vu1_micro -DPS2X_VU1_GENERATOR_SOURCE=ref/other-recomp/.../tools/vu1/generar_vu1.cpp,
+  rebuild, re-measure. 60 fps needs ~15x: requires a real VU1 recompiler (microVU-style) and EE speedups.
+  Stopped here by the user.
+- 2026-10-09 perf analysis of perf1 gameplay windows: the game thread is saturated (ee+vu+gs+iop ≈ 4.98 s per 5 s);
+  per game frame ≈ 250 ms = VU1 155 + EE 77 + GS 10 + IOP 7. 60 fps = 16.7 ms total. host_wait (~4.95 s) is the
+  presentation thread, not a bottleneck.
+- Rebuilding out/build-kl with compiled VU1 (PS2X_VU1_MICROCODE_DIR=port/vu1_micro, 351 images) **and /Zi + /DEBUG**
+  (still /O2) so their sampling profiler (tools/perfil/muestrear.cpp) can name hot functions. Log port/kl_build_vu1.log.
+- agy note: first headless run produced no output — it tried a shell command (denied by settings). Prompt must say
+  "Do NOT run shell commands; only read files and search the web".

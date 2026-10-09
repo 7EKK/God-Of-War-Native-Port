@@ -60,3 +60,5 @@
 
 Note: `dis.py` reads comments in port/output; a few delay-slot lines are missing there. For exact bytes use capstone
 on the ELF (file offset = vaddr − 0xFF000). Capstone mis-decodes R5900 128-bit ops (lq/sq/MMI).
+- Pitfall (2026-10-09): editing C++ through a Python heredoc in the Bash tool turned "\n" inside C string
+  literals into real newlines (C2001). Use the Edit tool for lines containing escapes.
