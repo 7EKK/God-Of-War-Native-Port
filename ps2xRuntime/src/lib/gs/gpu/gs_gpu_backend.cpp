@@ -1,6 +1,7 @@
 // GOW-Port: adaptado de Taylor N. Albarnaz / LightVelox (GPL-3.0).
 // Origen: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
 #include "runtime/gs/gs_gpu_backend.h"
+#include "runtime/gs/ps2_gs_common.h"
 #include "runtime/gs/gs_shared_present.h"
 #include "runtime/gs/gs_swizzle.h"
 #include "runtime/gs/ps2_gs_memory.h"
@@ -1254,6 +1255,10 @@ struct GSGpuBackend::Impl
             return false;
         body += shading;
         hwFragmentHead = version + "#extension GL_ARB_fragment_shader_interlock : require\n";
+        // GOW-Port: conservar la variante anterior para comparaciones de imagen y rendimiento.
+        const char *discardSetting = std::getenv("PS2X_GS_HW_DISCARD_UNCOVERED");
+        if (discardSetting && *discardSetting == '0')
+            hwFragmentHead += "#define GOW_HW_KEEP_UNCOVERED\n";
         std::string common = GSGpuShaders::kCommon;
         const std::string vramDeclaration = "layout(std430, binding = 0) buffer VramBuffer";
         if (common.find(vramDeclaration) == std::string::npos)
@@ -2893,7 +2898,7 @@ bool GSGpuBackend::ClearFramebuffer(const GSContext &context, uint32_t rgba)
     else
     {
         source = ((r >> 3) & 0x1Fu) | (((g >> 3) & 0x1Fu) << 5) | (((b >> 3) & 0x1Fu) << 10) | ((a >= 0x40u) ? 0x8000u : 0u);
-        mask &= 0xFFFFu;
+        mask = GSInternal::frameMask16(mask);
     }
     const uint32_t x0 = context.scissor.x0;
     const uint32_t x1 = std::max<uint32_t>(x0, context.scissor.x1);

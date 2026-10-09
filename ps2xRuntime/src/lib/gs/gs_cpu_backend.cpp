@@ -1947,7 +1947,7 @@ bool GSCpuBackend::ClearFramebuffer(const GSContext &context, uint32_t rgba)
     if (context.frame.psm == GS_PSM_CT16 || context.frame.psm == GS_PSM_CT16S)
     {
         const uint16_t source = encodeFramePixelPSMCT16(r, g, b, a);
-        const uint16_t mask = static_cast<uint16_t>(context.frame.fbmsk);
+        const uint16_t mask = static_cast<uint16_t>(GSInternal::frameMask16(context.frame.fbmsk));
         for (uint32_t y = y0; y <= y1; ++y)
             for (uint32_t x = x0; x <= x1; ++x)
             {
