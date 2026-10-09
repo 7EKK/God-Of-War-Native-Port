@@ -213,3 +213,10 @@ Measurements must run with no compiler or other game instance active.
 - **Music restart FIXED (2026-10-09)**: SPU2 NAX read one block ahead → 989snd (polling streamer) aborted the
   music stream (error 0x35) on a ring half's last block. NAX now reported like PCSX2 NextA. Details
   port/agents/music/REPORT.md; verified by port/music2.pcm (no ~6 s repetition). User to confirm by ear.
+- Purple fog (2026-10-09): fog agent found GS fog code = PCSX2 (port/agents/fog: diag.diff applied uncommitted in
+  ext/PS2Recomp-kl — env PS2X_GS_FOG_DIAG=<s>, PS2X_GS_FOG_FORCE=RRGGBB, PS2X_GS_FOG_OFF=1). Run port/fog1:
+  **the game uses no GS fog at all (74808 draws, 0 with FGE)**. The haze comes from full-screen ctx1 sprite
+  passes on 16-bit views (psm=0x2) of the 32-bit framebuffer with FBMSK masks 0x00003FFF / 0xFFFF00FF = channel
+  shuffle / depth-fog effects (PCSX2 HW special-cases these). Prime suspect: our CT16 reinterpretation/masking
+  of the 32-bit target (GPU shaders vs CPU backend). Next: reach the purple canyon (desert1 recipe, absolute
+  script) and compare PS2X_GS_GPU=0 (CPU) vs GPU; fogdiag lines identify the shuffle draws.
