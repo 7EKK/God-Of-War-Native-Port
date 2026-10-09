@@ -210,3 +210,6 @@ Measurements must run with no compiler or other game instance active.
   window opens 1280x720 and gs_host_present.cpp fits the image to 16:9. Also without it the image is now shown at
   4:3 (was square pixels, "1:1" per user). Verified port/ws1. Enhanced (wider FOV) variant needs the pnach code
   rewrite 0x169250-0x16944C + recompile — not done. Agent's widescreen runtime.diff was whole-file → unused.
+- **Music restart FIXED (2026-10-09)**: SPU2 NAX read one block ahead → 989snd (polling streamer) aborted the
+  music stream (error 0x35) on a ring half's last block. NAX now reported like PCSX2 NextA. Details
+  port/agents/music/REPORT.md; verified by port/music2.pcm (no ~6 s repetition). User to confirm by ear.
