@@ -199,3 +199,7 @@ Measurements must run with no compiler or other game instance active.
 - 16:9: PCSX2 patches.zip has SCUS-97399_D6385328.pnach (enhanced widescreen code patch 0x169250-0x16944C +
   native widescreen flag 0x29CC90 and aspect floats).
 - Parallel agents (user request) analysing music / fog / Kratos / widescreen; outputs in port/agents/<topic>/.
+- 2026-10-09 ~19:55: agents put on standby by the user (token budget). Partial outputs, NOT reviewed yet:
+  port/agents/fog/diag.diff, port/agents/widescreen/{runtime.diff,make_ws_variants.py}; music/kratos wrote no
+  report. A/B run (gameplay-anchored script, worker on = port/abA, off = port/abB) was running at standby; compare
+  Kratos frames there first when resuming (tools/sheet.py). Next: finish A/B, review agent diffs, then fix.
