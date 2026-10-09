@@ -93,6 +93,18 @@ namespace
 
     void gowPad2Read(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        // GOW-Port: GOW_WIDESCREEN=1 — the data part of PCSX2's SCUS-97399_D6385328.pnach "Widescreen 16:9":
+        // the game's own widescreen flag and three 16:9 aspect floats, re-applied every frame like PCSX2 does.
+        // (The pnach's "enhanced" code rewrite of 0x169250-0x16944C is not applied: it needs a recompile.)
+        static const bool widescreen = [] { const char *v = std::getenv("GOW_WIDESCREEN"); return v && v[0] == '1'; }();
+        if (widescreen)
+        {
+            auto put32 = [rdram](uint32_t addr, uint32_t value) { std::memcpy(rdram + addr, &value, sizeof(value)); };
+            put32(0x0029CC90u, 1u);
+            put32(0x002FD930u, 0x3FE38E39u);
+            put32(0x002FD968u, 0x3FE38E39u);
+            put32(0x0032F1B0u, 0x3FE38E39u);
+        }
         auto *buffer = padBuffer(rdram, GPR_U32(ctx, 5), 18);
         const auto *socket = padSocket(ctx);
         uint8_t state[32]{};

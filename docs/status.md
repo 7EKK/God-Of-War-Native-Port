@@ -203,3 +203,10 @@ Measurements must run with no compiler or other game instance active.
   port/agents/fog/diag.diff, port/agents/widescreen/{runtime.diff,make_ws_variants.py}; music/kratos wrote no
   report. A/B run (gameplay-anchored script, worker on = port/abA, off = port/abB) was running at standby; compare
   Kratos frames there first when resuming (tools/sheet.py). Next: finish A/B, review agent diffs, then fix.
+- 2026-10-09 A/B gameplay-anchored (port/abA worker on, port/abB off, *_sheet.png): Kratos intact in both
+  (24 frames); breakage is intermittent — needs denser capture. Sand haze correct (sandy) in A's sandstorm area.
+- **16:9 done (GOW_WIDESCREEN=1)**: gow_overrides.cpp re-applies every frame the data part of PCSX2's pnach
+  (flag 0x29CC90=1, floats 0x2FD930/0x2FD968/0x32F1B0 = 16/9) = the game's native widescreen (vertical crop);
+  window opens 1280x720 and gs_host_present.cpp fits the image to 16:9. Also without it the image is now shown at
+  4:3 (was square pixels, "1:1" per user). Verified port/ws1. Enhanced (wider FOV) variant needs the pnach code
+  rewrite 0x169250-0x16944C + recompile — not done. Agent's widescreen runtime.diff was whole-file → unused.
