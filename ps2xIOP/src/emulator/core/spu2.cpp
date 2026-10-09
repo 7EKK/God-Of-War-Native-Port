@@ -1,6 +1,8 @@
 #include "spu2.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 
 namespace ps2x::iop::detail
 {
@@ -8,6 +10,16 @@ namespace ps2x::iop::detail
     {
         constexpr int32_t kAdpcmFilters[5][2] = {{0, 0}, {60, 0}, {115, -52}, {98, -55}, {122, -60}};
         constexpr size_t kMaxBufferedFrames = 48000u * 2u; // 2 s; si nadie consume, se descarta lo mas antiguo
+
+        // GOW-Port: GOW_SPU2_DIAG=1 reports every 2 s of SPU2 time: IRQ fires, IRQA/enable, sound-RAM writes per
+        // 64 KB block and the active voices' start/next/loop addresses (music streaming investigation).
+        struct Spu2Diag
+        {
+            bool enabled = [] { const char *v = std::getenv("GOW_SPU2_DIAG"); return v && v[0] == '1'; }();
+            uint64_t writes[32]{};
+            uint64_t irqFires = 0;
+            uint64_t samples = 0;
+        } g_spu2Diag;
 
         int16_t clamp16(int32_t value) noexcept
         {
@@ -63,6 +75,8 @@ namespace ps2x::iop::detail
     {
         halfwordAddress &= RamHalfwords - 1u;
         m_ram[halfwordAddress] = value;
+        if (g_spu2Diag.enabled)
+            ++g_spu2Diag.writes[halfwordAddress >> 15u];
         checkIrqAddress(halfwordAddress);
     }
 
@@ -74,6 +88,7 @@ namespace ps2x::iop::detail
             if ((reg(base + RegAttr) & 0x40u) != 0u && reg32(base + RegIrqa) == halfwordAddress)
             {
                 m_interrupt = true;
+                ++g_spu2Diag.irqFires;
                 reg(0x7C2u) |= static_cast<uint16_t>(4u << core); // SPDIF_IRQINFO
             }
         }
@@ -455,6 +470,29 @@ namespace ps2x::iop::detail
         for (uint64_t i = 0; i < samples; ++i)
             step();
         m_lastCycle += samples * CyclesPerSample;
+        if (!g_spu2Diag.enabled)
+            return;
+        g_spu2Diag.samples += samples;
+        if (g_spu2Diag.samples < 96000u)
+            return;
+        g_spu2Diag.samples = 0;
+        std::fprintf(stderr, "[spu2-diag] irq=%llu irqa0=0x%05X en0=%u irqa1=0x%05X en1=%u writes(64K blocks):",
+                     static_cast<unsigned long long>(g_spu2Diag.irqFires), reg32(RegIrqa), (reg(RegAttr) >> 6u) & 1u,
+                     reg32(0x400u + RegIrqa), (reg(0x400u + RegAttr) >> 6u) & 1u);
+        for (uint32_t b = 0; b < 32u; ++b)
+            if (g_spu2Diag.writes[b])
+                std::fprintf(stderr, " %u:%llu", b, static_cast<unsigned long long>(g_spu2Diag.writes[b]));
+        std::fprintf(stderr, "\n");
+        for (uint32_t core = 0; core < 2u; ++core)
+            for (uint32_t index = 0; index < VoicesPerCore; ++index)
+            {
+                const VoiceState &v = m_voices[core][index];
+                if (v.active)
+                    std::fprintf(stderr, "[spu2-diag]   v%u.%02u ssa=0x%05X nax=0x%05X lsa=0x%05X\n", core, index,
+                                 reg32(voiceAddrReg(core, index, 0u)) & ~7u, v.nax, v.lsa);
+            }
+        g_spu2Diag = Spu2Diag{};
+        g_spu2Diag.enabled = true;
     }
 
     size_t Spu2::pendingFrames() const
