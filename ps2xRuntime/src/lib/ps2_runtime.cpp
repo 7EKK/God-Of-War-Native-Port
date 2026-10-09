@@ -1,4 +1,5 @@
 #include "ps2_runtime.h"
+#include "runtime/gs/gs_host_present.h" // GOW-Port: consumidor privado del host.
 #include "ps2_log.h"
 #include "runtime/ps2_perf.h"
 #include "ps2_stubs.h"
@@ -439,111 +440,8 @@ namespace
     }
 }
 
-static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
-{
-    static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
-    static bool s_hasLatchedInitialFrame = false;
-    static uint32_t s_lastDisplayFbp = std::numeric_limits<uint32_t>::max();
-    static uint32_t s_lastSourceFbp = std::numeric_limits<uint32_t>::max();
-    static bool s_lastPreferred = false;
-    static uint32_t s_lastWidth = 0u;
-    static uint32_t s_lastHeight = 0u;
-    static bool s_hasUploadedFrame = false;
-    static std::vector<uint8_t> s_scratch;
-    static std::vector<uint8_t> s_uploadBuffer(DEFAULT_FB_SIZE, 0u);
-
-    const uint64_t currentTick = rt->eeScheduler().currentVSyncTick();
-    const bool needsLatch = !s_hasLatchedInitialFrame || currentTick != s_lastPresentationTick;
-    if (needsLatch)
-    {
-        rt->gs().latchHostPresentationFrame();
-        s_lastPresentationTick = currentTick;
-        s_hasLatchedInitialFrame = true;
-    }
-    else if (s_hasUploadedFrame)
-    {
-        outWidth = (s_lastWidth != 0u) ? s_lastWidth : FB_WIDTH;
-        outHeight = (s_lastHeight != 0u) ? s_lastHeight : DEFAULT_DISPLAY_HEIGHT;
-        return;
-    }
-
-    s_scratch.clear();
-    uint32_t width = 0u;
-    uint32_t height = 0u;
-    uint32_t displayFbp = 0u;
-    uint32_t sourceFbp = 0u;
-    bool usedPreferredDisplaySource = false;
-    if (!rt->gs().copyLatchedHostPresentationFrame(s_scratch,
-                                                   width,
-                                                   height,
-                                                   &displayFbp,
-                                                   &sourceFbp,
-                                                   &usedPreferredDisplaySource))
-    {
-        Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, MAGENTA);
-        UpdateTexture(tex, blank.data);
-        UnloadImage(blank);
-        outWidth = FB_WIDTH;
-        outHeight = DEFAULT_DISPLAY_HEIGHT;
-        s_lastWidth = outWidth;
-        s_lastHeight = outHeight;
-        s_hasUploadedFrame = true;
-        return;
-    }
-
-    PS2_IF_AGRESSIVE_LOGS({
-        static uint32_t s_uploadDebugCount = 0u;
-        if (s_uploadDebugCount < 128u ||
-            displayFbp != s_lastDisplayFbp ||
-            sourceFbp != s_lastSourceFbp ||
-            usedPreferredDisplaySource != s_lastPreferred ||
-            width != s_lastWidth ||
-            height != s_lastHeight)
-        {
-            std::cout << "[frame:upload] idx=" << s_uploadDebugCount
-                      << " tick=" << currentTick
-                      << " displayFbp=" << displayFbp
-                      << " sourceFbp=" << sourceFbp
-                      << " size=" << width << "x" << height
-                      << " preferred=" << static_cast<uint32_t>(usedPreferredDisplaySource ? 1u : 0u)
-                      << std::endl;
-        }
-        ++s_uploadDebugCount;
-    });
-    s_lastDisplayFbp = displayFbp;
-    s_lastSourceFbp = sourceFbp;
-    s_lastPreferred = usedPreferredDisplaySource;
-    s_lastWidth = width;
-    s_lastHeight = height;
-
-    std::fill(s_uploadBuffer.begin(), s_uploadBuffer.end(), 0u);
-    if (!s_scratch.empty() && width != 0u && height != 0u)
-    {
-        const uint32_t copyWidth = std::min<uint32_t>(width, FB_WIDTH);
-        const uint32_t copyHeight = std::min<uint32_t>(height, FB_HEIGHT);
-        const size_t srcRowBytes = static_cast<size_t>(width) * 4u;
-        const size_t dstRowBytes = static_cast<size_t>(FB_WIDTH) * 4u;
-        const size_t copyRowBytes = static_cast<size_t>(copyWidth) * 4u;
-        for (uint32_t y = 0; y < copyHeight; ++y)
-        {
-            const size_t srcOffset = static_cast<size_t>(y) * srcRowBytes;
-            const size_t dstOffset = static_cast<size_t>(y) * dstRowBytes;
-            if (srcOffset + copyRowBytes > s_scratch.size() ||
-                dstOffset + copyRowBytes > s_uploadBuffer.size())
-            {
-                break;
-            }
-            std::memcpy(s_uploadBuffer.data() + dstOffset, s_scratch.data() + srcOffset, copyRowBytes);
-        }
-    }
-
-    UpdateTexture(tex, s_uploadBuffer.data());
-    outWidth = width;
-    outHeight = height;
-    s_hasUploadedFrame = true;
-}
-
 PS2Runtime::PS2Runtime()
+    : m_hostPresentation(std::make_unique<GSHostPresentation>())
 {
     m_iopHost = std::make_unique<PS2IopHostAdapter>(*this);
     m_iopSubsystem = std::make_unique<ps2x::iop::IopSubsystem>(*m_iopHost);
@@ -627,10 +525,7 @@ PS2Runtime::~PS2Runtime()
             m_debugUiInitialized = false;
         }
 
-        if (IsWindowReady())
-        {
-            CloseWindow();
-        }
+        shutdownHostGraphics(); // GOW-Port: el host vive hasta destruir el backend GS.
 
         m_loadedModules.clear();
     }
@@ -827,16 +722,28 @@ bool PS2Runtime::initialize(const char *title)
             return false;
         }
 
-        if (!syncCoreSubsystems())
-        {
-            std::cerr << "Failed to bind runtime core subsystems" << std::endl;
-            return false;
-        }
 #if defined(PLATFORM_VITA)
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
 #else
         SetConfigFlags(FLAG_WINDOW_RESIZABLE);
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
+#endif
+        m_hostWindowOwned = IsWindowReady();
+        if (!m_hostWindowOwned)
+        {
+            std::cerr << "Failed to create the runtime host window" << std::endl;
+            return false;
+        }
+        // GOW-Port: el backend GPU solo puede compartir si el host ya existe.
+        m_hostPresentation->captureHostContext();
+        if (!syncCoreSubsystems())
+        {
+            std::cerr << "Failed to bind runtime core subsystems" << std::endl;
+            shutdownHostGraphics();
+            return false;
+        }
+        m_hostPresentation->restoreHostContext();
+#if !defined(PLATFORM_VITA)
         InitAudioDevice();
         m_audioBackend.setAudioReady(IsAudioDeviceReady());
         startSpu2Audio(m_iopSubsystem.get()); // GOW-Port
@@ -859,7 +766,18 @@ bool PS2Runtime::initialize(const char *title)
         std::cerr << "Failed to initialize PS2 runtime: unknown exception" << std::endl;
     }
 
+    shutdownHostGraphics(); // GOW-Port: cubrir también errores después de capturar WGL.
     return false;
+}
+
+void PS2Runtime::shutdownHostGraphics()
+{
+    if (!m_hostWindowOwned)
+        return;
+    m_hostPresentation->shutdown(m_gs);
+    if (IsWindowReady())
+        CloseWindow();
+    m_hostWindowOwned = false;
 }
 
 bool PS2Runtime::loadELF(const std::string &elfPath)
@@ -2516,11 +2434,6 @@ void PS2Runtime::run()
 
     RUNTIME_LOG("Starting execution at address 0x" << std::hex << m_cpuContext.pc << std::dec);
 
-    // A blank image to use as a framebuffer
-    Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, BLANK);
-    Texture2D frameTex = LoadTextureFromImage(blank);
-    UnloadImage(blank);
-
     std::atomic<bool> gameThreadFinished{false};
 
     std::thread gameThread([&]()
@@ -2597,37 +2510,12 @@ void PS2Runtime::run()
                 }
             }
         });
-        uint32_t presentWidth = FB_WIDTH;
-        uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
+        // GOW-Port: el helper real termina el batch antes del próximo Acquire.
+        m_hostPresentation->renderFrame(m_gs, m_eeScheduler->currentVSyncTick(), [this]
         {
-            ps2_perf::Scope perf(ps2_perf::Bucket::Upload);
-            UploadFrame(frameTex, this, presentWidth, presentHeight);
-        }
-
-        BeginDrawing();
-        ClearBackground(BLACK);
-        const float srcWidth = static_cast<float>(std::max<uint32_t>(1u, presentWidth));
-        const float srcHeight = static_cast<float>(std::max<uint32_t>(1u, presentHeight));
-        const float screenWidth = static_cast<float>(GetScreenWidth());
-        const float screenHeight = static_cast<float>(GetScreenHeight());
-        const float scale = std::min(screenWidth / srcWidth, screenHeight / srcHeight);
-        const float dstWidth = srcWidth * scale;
-        const float dstHeight = srcHeight * scale;
-        const Rectangle srcRect{0.0f, 0.0f, srcWidth, srcHeight};
-        const Rectangle dstRect{
-            (screenWidth - dstWidth) * 0.5f,
-            (screenHeight - dstHeight) * 0.5f,
-            dstWidth,
-            dstHeight};
-        DrawTexturePro(frameTex, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
-        if (m_debugUiInitialized && m_debugUiDrawCallback)
-        {
-            m_debugUiDrawCallback(*this, m_debugUiUserData);
-        }
-        {
-            ps2_perf::Scope perf(ps2_perf::Bucket::HostWait);
-            EndDrawing();
-        }
+            if (m_debugUiInitialized && m_debugUiDrawCallback)
+                m_debugUiDrawCallback(*this, m_debugUiUserData);
+        });
         if (ps2_perf::countFrames()) ps2_perf::hostFrames.fetch_add(1, std::memory_order_relaxed);
         ps2_perf::report();
 
@@ -2650,8 +2538,7 @@ void PS2Runtime::run()
         m_debugUiShutdownCallback(*this, m_debugUiUserData);
         m_debugUiInitialized = false;
     }
-    UnloadTexture(frameTex);
-    CloseWindow();
+    shutdownHostGraphics();
 
     RUNTIME_LOG("[run] exiting loop");
 }

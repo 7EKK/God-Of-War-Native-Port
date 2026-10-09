@@ -920,7 +920,7 @@ void VU1Interpreter::commitReadyPipelines()
         m_state.q = m_fdiv.value;
         const uint32_t currentDi = m_fdiv.statusDi & 0x30u;
         m_state.status = (m_state.status & 0xFCFu) | currentDi | (currentDi << 6);
-        m_fdiv = {};
+        m_fdiv.valid = false; // GOW-Port: queueQ escribe todos los campos
     }
 
     for (ScalarPipelineEntry &entry : m_efu)
@@ -928,7 +928,7 @@ void VU1Interpreter::commitReadyPipelines()
         if (entry.valid && entry.readyCycle <= m_cycle)
         {
             m_state.p = entry.value;
-            entry = {};
+            entry.valid = false; // GOW-Port: queueP escribe todos los campos
         }
     }
 
@@ -1216,6 +1216,29 @@ void VU1Interpreter::flushPipelines()
     commitReadyFlags();
     while (pipelinesPending())
     {
+        // GOW-Port: al terminar un programa suele quedar solo PATH1 (XGKICK). Ciclo a ciclo, cada ciclo suma
+        // un crédito y cada dos se copia un qword, sin nada más que hacer (las demás colas están vacías y no
+        // se pueden llenar). Se hace de una vez: n iteraciones de progressXgkick con crédito inicial c0
+        // terminan en el ciclo 2n - c0, que es lo que se suma.
+        if (m_xgkick.active && m_activeVuData && m_activeVuDataSize != 0u && !m_fdiv.valid && m_flagCount == 0u &&
+            (m_storePending | m_vfPending | m_viPending | m_accPending) == 0u && !m_efu[0].valid && !m_efu[1].valid)
+        {
+            constexpr uint32_t kCredit = 0x40000000u;
+            const uint32_t startCredit = m_xgkick.cycleCredit;
+            m_xgkick.cycleCredit = kCredit;
+            progressXgkick();
+            if (!m_xgkick.active)
+            {
+                const uint64_t iterations = (static_cast<uint64_t>(kCredit) + 1u - m_xgkick.cycleCredit) / 2u;
+                m_cycle += 2u * iterations - startCredit;
+                m_state.cycles = m_cycle;
+                if (m_cycle >= m_nextCommitCycle)
+                    commitReadyPipelines();
+                commitReadyFlags();
+                continue;
+            }
+            m_xgkick.cycleCredit = startCredit; // no ocurre: el crédito alcanza para cualquier paquete
+        }
         advanceOneCycle();
         commitReadyFlags();
     }

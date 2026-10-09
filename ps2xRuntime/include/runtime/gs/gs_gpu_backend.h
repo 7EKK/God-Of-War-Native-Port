@@ -22,6 +22,8 @@ public:
     void Reset() override;
     // GOW-Port: comprobar la inicialización antes de elegir el backend.
     bool IsReady() const;
+    // GOW-Port: capacidad real de esta instancia, también si el driver rechaza sharing.
+    bool UsesSharedPresentation() const override;
 
     void Submit(const GSPrimitiveBatch &batch) override;
     void LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut) override;

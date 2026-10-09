@@ -201,7 +201,8 @@ namespace GSGL
     }
 
     bool PublishShared(const Api &gl, GLuint buffer, uint32_t width, uint32_t height, uint64_t renderSequence,
-                       GLuint hashProgram, GLint hashLocation)
+                       uint32_t displayFbp, uint32_t sourceFbp, bool usedPreferred, bool blank,
+                       uint64_t vsyncTick, GLuint hashProgram, GLint hashLocation)
     {
         std::lock_guard<std::mutex> lock(s_sharedMutex);
         if (!s_sharedActive.load(std::memory_order_relaxed))
@@ -273,8 +274,9 @@ namespace GSGL
         if (slot.frame.width != width || slot.frame.height != height)
         {
             gl.TexImage2D(kTexture2D, 0, kRgba8, width, height, 0, kRgba, kUnsignedByte, nullptr);
-            gl.TexParameteri(kTexture2D, kTextureMinFilter, kLinear);
-            gl.TexParameteri(kTexture2D, kTextureMagFilter, kLinear);
+            // GOW-Port: igualar el filtrado por defecto de la textura CPU de raylib.
+            gl.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
+            gl.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
             gl.TexParameteri(kTexture2D, kTextureWrapS, kClampToEdge);
             gl.TexParameteri(kTexture2D, kTextureWrapT, kClampToEdge);
         }
@@ -288,6 +290,11 @@ namespace GSGL
         slot.frame.height = height;
         slot.frame.sequence = ++s_sharedSequence;
         slot.frame.renderSequence = renderSequence;
+        slot.frame.displayFbp = displayFbp;
+        slot.frame.sourceFbp = sourceFbp;
+        slot.frame.usedPreferred = usedPreferred;
+        slot.frame.blank = blank;
+        slot.frame.vsyncTick = vsyncTick;
         slot.produced = gl.FenceSync(kSyncGpuCommandsComplete, 0u);
         gl.Flush();
         return true;
@@ -525,7 +532,8 @@ namespace GSGL
 #else
 namespace GSGL
 {
-    bool PublishShared(const Api &, GLuint, uint32_t, uint32_t, uint64_t, GLuint, GLint) { return false; }
+    bool PublishShared(const Api &, GLuint, uint32_t, uint32_t, uint64_t,
+                       uint32_t, uint32_t, bool, bool, uint64_t, GLuint, GLint) { return false; }
     bool SharedAvailable(const Api &) { return false; }
     void DestroyShared(const Api &) {}
     Context::~Context() = default;

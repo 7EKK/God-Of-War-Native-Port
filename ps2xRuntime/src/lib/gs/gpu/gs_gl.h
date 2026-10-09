@@ -75,6 +75,7 @@ namespace GSGL
     constexpr GLenum kTextureWrapS = 0x2802;
     constexpr GLenum kTextureWrapT = 0x2803;
     constexpr GLint kLinear = 0x2601;
+    constexpr GLint kNearest = 0x2600;
     constexpr GLint kClampToEdge = 0x812F;
 
     struct Api
@@ -174,7 +175,8 @@ namespace GSGL
     };
 
     bool PublishShared(const Api &gl, GLuint buffer, uint32_t width, uint32_t height, uint64_t renderSequence,
-                       GLuint hashProgram, GLint hashLocation);
+                       uint32_t displayFbp, uint32_t sourceFbp, bool usedPreferred, bool blank,
+                       uint64_t vsyncTick, GLuint hashProgram, GLint hashLocation);
     bool SharedAvailable(const Api &gl);
     void DestroyShared(const Api &gl);
 }

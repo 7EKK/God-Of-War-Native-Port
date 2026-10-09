@@ -382,6 +382,7 @@ add_library(ps2_runtime STATIC
     src/lib/ps2_audio_vag.cpp
     src/lib/gs/ps2_gs_memory.cpp
     src/lib/gs/gs_frontend.cpp
+    src/lib/gs/gs_host_present.cpp # GOW-Port: mismo consumidor de textura en juego y controles.
     src/lib/gs/gs_cpu_backend.cpp
     # GOW-Port: backend OpenGL y cola del fork SotC ac9efa0 (GPL-3.0).
     src/lib/gs/gs_threaded_backend.cpp
@@ -540,7 +541,8 @@ if(PS2X_VU1_MICROCODE_DIR AND PS2X_VU1_GENERATOR_SOURCE AND NOT PS2X_IS_ANDROID 
         endforeach()
         add_custom_command(OUTPUT ${PS2X_VU1_GENERATED_PARTS}
             COMMAND "${CMAKE_COMMAND}" -E make_directory "${PS2X_VU1_GENERATED_DIR}"
-            COMMAND "$<TARGET_FILE:ps2x_vu1_generator>" "${PS2X_VU1_GENERATED_DIR}" ${PS2X_VU1_IMAGES}
+            # GOW-Port: la carpeta, no cada archivo: miles de rutas superan la línea de órdenes de Windows.
+            COMMAND "$<TARGET_FILE:ps2x_vu1_generator>" "${PS2X_VU1_GENERATED_DIR}" "${PS2X_VU1_MICROCODE_DIR}"
             DEPENDS ps2x_vu1_generator ${PS2X_VU1_IMAGES}
             VERBATIM)
         target_sources(ps2EntryRunner PRIVATE ${PS2X_VU1_GENERATED_PARTS})

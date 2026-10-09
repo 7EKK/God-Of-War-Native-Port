@@ -380,6 +380,8 @@ private:
     template <uint32_t Upper, uint32_t C>
     void fmacLaneT(float &result, uint8_t &laneFlags, uint8_t &productFlags);
     template <uint32_t Upper, bool DeadFlags>
+    void fmacScalarT();
+    template <uint32_t Upper, bool DeadFlags>
     void upperT();
     template <uint32_t Lower>
     void lowerT(StepContext &context, uint32_t upperInstr);
@@ -433,6 +435,13 @@ private:
         const uint32_t exponent = (bits >> 23) & 0xFFu;
         if (exponent >= 2u && exponent <= 0xFDu)
             return (bits & 0x80000000u) != 0u ? 0x2u : 0u;
+        // GOW-Port: con un factor cero (los operandos llegan normalizados: finitos, sin subnormales) el
+        // producto exacto es cero con el signo de a XOR b, igual que productStickyFlagsExact.
+        uint32_t aBits = 0u, bBits = 0u;
+        std::memcpy(&aBits, &a, sizeof(aBits));
+        std::memcpy(&bBits, &b, sizeof(bBits));
+        if ((aBits & 0x7FFFFFFFu) == 0u || (bBits & 0x7FFFFFFFu) == 0u)
+            return ((aBits ^ bBits) & 0x80000000u) != 0u ? 0x3u : 0x1u;
         return productStickyFlagsExact(a, b);
     }
     static uint8_t productStickyFlagsExact(float a, float b)

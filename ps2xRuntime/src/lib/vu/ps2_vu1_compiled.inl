@@ -26,6 +26,12 @@
 #pragma fp_contract(off)
 #endif
 
+#if defined(_MSC_VER)
+#define VU1C_NOINLINE __declspec(noinline)
+#else
+#define VU1C_NOINLINE __attribute__((noinline))
+#endif
+
 namespace vu1c
 {
     enum class Kind : int
@@ -140,6 +146,25 @@ namespace vu1c
         if constexpr ((Dest & 2u) != 0u) dst[2] = src[2];
         if constexpr ((Dest & 1u) != 0u) dst[3] = src[3];
     }
+    // GOW-Port: store de VU1 con DEST constante, escrito en el acto. queueStore lo encolaba con un ciclo de
+    // latencia, pero el mismo paso avanza ese ciclo y commitReadyPipelines lo escribe antes de que nada más
+    // lea la memoria (el siguiente par, PATH1 o el VIF): el resultado es el mismo.
+    template <uint32_t Dest>
+    VU1_STEP_INLINE void storeT(uint8_t *target, const uint32_t words[4])
+    {
+        if constexpr (Dest == 0xFu)
+            std::memcpy(target, words, 16u);
+        else if constexpr (Dest != 0u)
+        {
+            uint32_t merged[4];
+            std::memcpy(merged, target, 16u);
+            if constexpr ((Dest & 8u) != 0u) merged[0] = words[0];
+            if constexpr ((Dest & 4u) != 0u) merged[1] = words[1];
+            if constexpr ((Dest & 2u) != 0u) merged[2] = words[2];
+            if constexpr ((Dest & 1u) != 0u) merged[3] = words[3];
+            std::memcpy(target, merged, 16u);
+        }
+    }
     // Especiales de la unidad superior sin flags MAC: ITOF0..15 (0x10-0x13), FTOI0..15 (0x14-0x17), ABS
     // (0x1D) y CLIP (0x1F). Devuelve la especial o 0 si es otra instrucción.
     constexpr uint32_t simpleSpecial(uint32_t upper)
@@ -182,7 +207,8 @@ namespace vu1c
     }
 #endif
     // Bits de MAC de una máscara de carriles en orden de componente (bit 0 = x), como laneForComponent: x = 8.
-    constexpr uint32_t reverse4(uint32_t m)
+    // VU1_STEP_INLINE: MSVC la dejaba como llamada en los bloques compilados.
+    VU1_STEP_INLINE constexpr uint32_t reverse4(uint32_t m)
     {
         return ((m & 1u) << 3) | ((m & 2u) << 1) | ((m & 4u) >> 1) | ((m & 8u) >> 3);
     }
@@ -248,6 +274,24 @@ VU1_STEP_INLINE void VU1Interpreter::fmacLaneT(float &result, uint8_t &laneFlags
         {
             if (productSumFlagsFast(result, vs * right, laneFlags))
                 return;
+        }
+        // GOW-Port: con un factor cero el producto exacto es ±0 (operandos normalizados) y el resultado en
+        // float ya es el exacto: en MUL/OPMULA un cero con el signo de vs XOR right; en MADD/MSUB/OPMSUB
+        // ACC ∓ 0, exacto también en float con las mismas reglas de signo, y ACC es cero o normal. Así
+        // normalizeFmacExactResult no cambiaría el valor y los flags son Z (si es cero) y S.
+        if constexpr (info.kind == vu1c::Kind::Mul || info.kind == vu1c::Kind::Opmula || info.kind == vu1c::Kind::Madd ||
+                      info.kind == vu1c::Kind::Msub || (info.kind == vu1c::Kind::Opmsub && C != 3u))
+        {
+            uint32_t sBits = 0u, rBits = 0u;
+            std::memcpy(&sBits, &vs, sizeof(sBits));
+            std::memcpy(&rBits, &right, sizeof(rBits));
+            if ((sBits & 0x7FFFFFFFu) == 0u || (rBits & 0x7FFFFFFFu) == 0u)
+            {
+                uint32_t bits = 0u;
+                std::memcpy(&bits, &result, sizeof(bits));
+                laneFlags = static_cast<uint8_t>(((bits & 0x80000000u) != 0u ? 0x2u : 0u) | ((bits & 0x7FFFFFFFu) == 0u ? 0x1u : 0u));
+                return;
+            }
         }
 
         if constexpr (info.kind == vu1c::Kind::Add || info.kind == vu1c::Kind::Sub || info.kind == vu1c::Kind::Mul)
@@ -388,6 +432,7 @@ VU1_STEP_INLINE void VU1Interpreter::upperT()
             }
             __m128 r;
             __m128 product = _mm_setzero_ps();
+            __m128 accValue = _mm_setzero_ps();
             bool fast = true;
             int zeroLanes = 0;   // carriles con flag Z (resultado exactamente cero)
             int zeroProduct = 0; // carriles con producto exactamente cero (un operando es cero)
@@ -403,9 +448,9 @@ VU1_STEP_INLINE void VU1Interpreter::upperT()
                     r = _mm_sub_ps(vs, right);
                 else if constexpr (productSum)
                 {
-                    const __m128 acc = vu1c::normalize4(_mm_loadu_ps(m_state.acc));
+                    accValue = vu1c::normalize4(_mm_loadu_ps(m_state.acc));
                     product = _mm_mul_ps(vs, right);
-                    r = info.kind == vu1c::Kind::Madd ? _mm_add_ps(acc, product) : _mm_sub_ps(acc, product);
+                    r = info.kind == vu1c::Kind::Madd ? _mm_add_ps(accValue, product) : _mm_sub_ps(accValue, product);
                 }
                 else
                     r = _mm_mul_ps(vs, right); // Mul, Opmula
@@ -425,6 +470,24 @@ VU1_STEP_INLINE void VU1Interpreter::upperT()
                     ok = _mm_and_si128(ok, _mm_cmpgt_epi32(er, _mm_sub_epi32(ep, _mm_set1_epi32(21))));
                     const __m128i epOk = _mm_and_si128(_mm_cmpgt_epi32(ep, _mm_set1_epi32(1)), _mm_cmplt_epi32(ep, _mm_set1_epi32(0xFE)));
                     ok = _mm_and_si128(ok, _mm_or_si128(epOk, opZero));
+                    // GOW-Port: con un factor cero, ACC ∓ 0 es exacto en float (ACC es cero o normal), así que el
+                    // carril vale también con resultado cero o en los extremos; sus flags son Z (si es cero) y S.
+                    ok = _mm_or_si128(ok, opZero);
+                    const __m128i rZero = _mm_cmpeq_epi32(_mm_and_si128(_mm_castps_si128(r), absMask), _mm_setzero_si128());
+                    // GOW-Port: con un factor ±1 el producto es exacto (el otro factor normalizado), así que el
+                    // resultado en float es la suma exacta redondeada una vez: con exponente 2..0xFD no cambia y
+                    // sus flags son el signo, y si ACC cancela exactamente el producto es un cero exacto (+0, Z).
+                    const __m128i one = _mm_set1_epi32(0x3F800000);
+                    const __m128i exactProduct = _mm_or_si128(
+                        _mm_cmpeq_epi32(_mm_and_si128(_mm_castps_si128(vs), absMask), one),
+                        _mm_cmpeq_epi32(_mm_and_si128(_mm_castps_si128(right), absMask), one));
+                    const __m128 cancelled = info.kind == vu1c::Kind::Madd
+                        ? _mm_cmpeq_ps(accValue, _mm_xor_ps(product, _mm_castsi128_ps(_mm_set1_epi32(static_cast<int>(0x80000000u)))))
+                        : _mm_cmpeq_ps(accValue, product);
+                    const __m128i exactZero = _mm_and_si128(exactProduct, _mm_and_si128(rZero, _mm_castps_si128(cancelled)));
+                    const __m128i erNormal = _mm_and_si128(_mm_cmpgt_epi32(er, _mm_set1_epi32(1)), _mm_cmplt_epi32(er, _mm_set1_epi32(0xFE)));
+                    ok = _mm_or_si128(ok, _mm_and_si128(exactProduct, _mm_or_si128(erNormal, exactZero)));
+                    zeroLanes = _mm_movemask_ps(_mm_castsi128_ps(_mm_and_si128(_mm_or_si128(opZero, exactZero), rZero))) & lanes;
                     zeroProduct = _mm_movemask_ps(_mm_castsi128_ps(opZero)) & lanes;
                 }
                 else
@@ -470,6 +533,19 @@ VU1_STEP_INLINE void VU1Interpreter::upperT()
             }
         }
 #endif
+        // GOW-Port: la ruta escalar (carriles fuera del camino rápido) va aparte y sin expandir en línea: así
+        // cada par compilado lleva solo la ruta SSE y los bloques caben mejor en la caché de instrucciones.
+        fmacScalarT<Upper, DeadFlags>();
+    }
+}
+
+// Ruta escalar de upperT para las FMAC (cuatro fmacLaneT, flags y destino), fuera de línea.
+template <uint32_t Upper, bool DeadFlags>
+VU1C_NOINLINE void VU1Interpreter::fmacScalarT()
+{
+    constexpr vu1c::UpperInfo info = vu1c::classify(Upper);
+    constexpr uint32_t dest = (Upper >> 21) & 0xFu;
+    constexpr uint32_t fd = (Upper >> 6) & 0x1Fu;
         float result[4]{};
         uint8_t laneFlags[4]{};
         uint8_t productFlags[4]{};
@@ -509,7 +585,6 @@ VU1_STEP_INLINE void VU1Interpreter::upperT()
         if constexpr ((dest & 4u) != 0u) target[1] = result[1];
         if constexpr ((dest & 2u) != 0u) target[2] = result[2];
         if constexpr ((dest & 1u) != 0u) target[3] = result[3];
-    }
 }
 
 // Instrucciones inferiores frecuentes especializadas. Cada caso es copia exacta del de execLower
@@ -555,7 +630,7 @@ VU1_STEP_INLINE void VU1Interpreter::lowerT(StepContext &context, uint32_t upper
         {
             uint32_t words[4]{};
             std::memcpy(words, m_state.vf[fs], sizeof(words));
-            queueStore(addr, words, dest);
+            vu1c::storeT<dest>(vuData + addr, words);
         }
     }
     else if constexpr (opHi == 0x04u) // ILW
@@ -579,7 +654,7 @@ VU1_STEP_INLINE void VU1Interpreter::lowerT(StepContext &context, uint32_t upper
         {
             const uint32_t val = static_cast<uint32_t>(static_cast<uint16_t>(m_state.vi[viT] & 0xFFFF));
             const uint32_t words[4] = {val, val, val, val};
-            queueStore(addr, words, dest);
+            vu1c::storeT<dest>(vuData + addr, words);
         }
     }
     else if constexpr (opHi == 0x08u || opHi == 0x09u) // IADDIU / ISUBIU
@@ -681,7 +756,7 @@ VU1_STEP_INLINE void VU1Interpreter::lowerT(StepContext &context, uint32_t upper
         {
             uint32_t words[4]{};
             std::memcpy(words, m_state.vf[fs], sizeof(words));
-            queueStore(addr, words, dest);
+            vu1c::storeT<dest>(vuData + addr, words);
         }
         if constexpr (viT != 0)
             m_state.vi[viT] = static_cast<int16_t>(m_state.vi[viT] + 1);

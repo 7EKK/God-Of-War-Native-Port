@@ -6,6 +6,7 @@
 #include "runtime/gs/ps2_gs_memory.h"
 #include "../gs_gpu_helpers.h"
 #include "../gs_gpu_profile.h" // GOW-Port: ventanas de perfil sin esperas durante el render.
+#include "../gs_gpu_upload_ring.h" // GOW-Port: no reutilizar uploads de una GPU pendiente.
 #include "../gs_sprite_rules.h"
 #include "../gs_triangle_rules.h"
 #include "gs_gl.h"
@@ -277,10 +278,7 @@ struct GSGpuBackend::Impl
     std::array<uint16_t, 32> clutWriters{};
     size_t dataCapacity = 0;
     GLuint ringBuffer = 0;
-    uint8_t *ring = nullptr;
-    uint32_t ringChunk = 0u;
-    size_t ringOffset = 0u;
-    std::array<GLsync, kRingChunks> ringFences{};
+    GSGpuUpload::Ring<GLsync, kRingChunk, kRingChunks, kRingAlign> ring;
 
     Program raster;
     Program clutLoad;
@@ -571,6 +569,14 @@ struct GSGpuBackend::Impl
     ~Impl()
     {
         stopCompileWorker();
+        // GOW-Port: el host puede conservar el share group; liberar también si
+        // la compilación de shaders falló después de crear y mapear el ring.
+        if (context.Valid() && ringBuffer != 0u)
+        {
+            ring.releaseFences([this](GLsync fence) { gl().DeleteSync(fence); });
+            gl().DeleteBuffers(1, &ringBuffer);
+            ringBuffer = 0u;
+        }
         if (initialized && prof.enabled)
         {
             prof.finish();
@@ -627,33 +633,26 @@ struct GSGpuBackend::Impl
 
     size_t ringPut(const void *data, size_t size)
     {
-        const size_t payloadSize = size;
-        size = std::max<size_t>(size, 16u);
-        if (!ring || size > kRingChunk)
-            return SIZE_MAX;
-        ringOffset = (ringOffset + kRingAlign - 1u) & ~(kRingAlign - 1u);
-        if (ringOffset + size > kRingChunk)
-        {
-            ringFences[ringChunk] = gl().FenceSync(kSyncGpuCommandsComplete, 0u);
-            ringChunk = (ringChunk + 1u) % kRingChunks;
-            if (GLsync fence = ringFences[ringChunk])
+        const bool wasDisabled = ring.disabled();
+        const size_t offset = ring.put(data, size,
+            [this] { return gl().FenceSync(kSyncGpuCommandsComplete, 0u); },
+            [this](GLsync fence)
             {
                 const auto waitStart = std::chrono::steady_clock::now();
-                gl().ClientWaitSync(fence, kSyncFlushCommandsBit, 5000000000ull);
+                const GLenum status = gl().ClientWaitSync(fence, kSyncFlushCommandsBit, 5000000000ull);
                 hwRingWaitMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waitStart).count();
-                gl().DeleteSync(fence);
-                ringFences[ringChunk] = nullptr;
-            }
-            ringOffset = 0u;
-        }
-        const size_t offset = static_cast<size_t>(ringChunk) * kRingChunk + ringOffset;
-        if (data)
+                if (status == kAlreadySignaled || status == kConditionSatisfied)
+                    return GSGpuUpload::WaitResult::Signaled;
+                return status == kTimeoutExpired ? GSGpuUpload::WaitResult::Timeout : GSGpuUpload::WaitResult::Failed;
+            },
+            [this](GLsync fence) { gl().DeleteSync(fence); });
+        if (!wasDisabled && ring.disabled())
         {
-            std::memcpy(ring + offset, data, payloadSize);
-            if (payloadSize < size)
-                std::memset(ring + offset + payloadSize, 0, size - payloadSize);
+            const char *reason = ring.failure() == GSGpuUpload::Failure::Timeout ? "wait timeout" :
+                                 ring.failure() == GSGpuUpload::Failure::NullFence ? "fence creation failed" : "wait failed";
+            // GOW-Port: fallback de uploads, no certifica recuperación de un contexto perdido.
+            std::fprintf(stderr, "[gs-gpu] persistent uploads disabled (%s); using streaming buffers\n", reason);
         }
-        ringOffset += size;
         return offset;
     }
 
@@ -672,8 +671,13 @@ struct GSGpuBackend::Impl
 
     void setBuffer(GLuint buffer, size_t size, const void *data)
     {
+        const size_t allocated = std::max<size_t>(size, 16u);
         gl().BindBuffer(kShaderStorageBuffer, buffer);
-        gl().BufferData(kShaderStorageBuffer, static_cast<GLsizeiptr>(std::max<size_t>(size, 16u)), nullptr, kStreamDraw);
+        gl().BufferData(kShaderStorageBuffer, static_cast<GLsizeiptr>(allocated), nullptr, kStreamDraw);
+        // GOW-Port: un upload streaming puede encoger el buffer de salida;
+        // reserveData debe conocer su tamaño real al volver a presentar o copiar.
+        if (buffer == dataBuffer)
+            dataCapacity = allocated;
         if (size != 0u && data)
             gl().BufferSubData(kShaderStorageBuffer, 0, static_cast<GLsizeiptr>(size), data);
     }
@@ -1331,8 +1335,8 @@ struct GSGpuBackend::Impl
         gl().BindBuffer(kShaderStorageBuffer, ringBuffer);
         gl().BufferStorage(kShaderStorageBuffer, static_cast<GLsizeiptr>(kRingChunk * kRingChunks), nullptr,
                            kMapWriteBit | kMapPersistentBit | kMapCoherentBit);
-        ring = static_cast<uint8_t *>(gl().MapBufferRange(kShaderStorageBuffer, 0, static_cast<GLsizeiptr>(kRingChunk * kRingChunks),
-                                                          kMapWriteBit | kMapPersistentBit | kMapCoherentBit));
+        ring.setStorage(static_cast<uint8_t *>(gl().MapBufferRange(kShaderStorageBuffer, 0, static_cast<GLsizeiptr>(kRingChunk * kRingChunks),
+                                                                 kMapWriteBit | kMapPersistentBit | kMapCoherentBit)));
 
         const bool ok = compile(raster, prefix, GSGpuShaders::kRaster, {"uRaster"}) &&
                         compile(pageCopy, prefix, GSGpuShaders::kPageCopy, {}) &&
@@ -2584,6 +2588,11 @@ bool GSGpuBackend::IsReady() const
     return m_impl->initialized && !m_impl->failed;
 }
 
+bool GSGpuBackend::UsesSharedPresentation() const
+{
+    return m_impl->context.Shared() && GSSharedPresent::Active();
+}
+
 void GSGpuBackend::Reset()
 {
     Impl &d = *m_impl;
@@ -2736,7 +2745,8 @@ PresentationFrame GSGpuBackend::Present(const GSPresentationRequest &request)
     if (!d.ensure())
         return result;
     d.flushBatch();
-    const bool shared = d.context.Shared() && GSSharedPresent::Active();
+    // GOW-Port: las capturas solicitadas conservan la lectura síncrona del CPU.
+    const bool shared = !request.forceReadback && UsesSharedPresentation();
     // GOW-Port: paridad real del GS en modo de campos; el modo progresivo no alterna.
     const uint32_t fieldFlags = (request.smode2 & 3u) == 1u
         ? 1u | (static_cast<uint32_t>(request.vsyncTick & 1u) << 1u) : 0u;
@@ -2802,6 +2812,8 @@ PresentationFrame GSGpuBackend::Present(const GSPresentationRequest &request)
     pack(circuits[0], c1);
     pack(circuits[1], c2);
     result.displayFbp = circuits[0].enabled ? circuits[0].fbp : circuits[1].fbp;
+    if (blank)
+        result.displayFbp = 0u;
     result.sourceFbp = result.displayFbp;
     // GOW-Port: igualar la selección del CPU sin cambiar el renderer de referencia.
     // TEX0/preferredSource usa bloques de 256 B; DISPFB usa páginas de 8 KB.
@@ -2835,7 +2847,9 @@ PresentationFrame GSGpuBackend::Present(const GSPresentationRequest &request)
     d.profFrame();
     if (shared)
     {
-        if (PublishShared(gl, d.dataBuffer, width, height, d.renderedSequence + 1u, d.presentHash.id, d.presentHash.loc[0]))
+        if (PublishShared(gl, d.dataBuffer, width, height, d.renderedSequence + 1u,
+                          result.displayFbp, result.sourceFbp, result.usedPreferred, blank,
+                          request.vsyncTick, d.presentHash.id, d.presentHash.loc[0]))
         {
             ++d.renderedSequence;
             d.presentedRevision = d.contentRevision;
@@ -2847,7 +2861,7 @@ PresentationFrame GSGpuBackend::Present(const GSPresentationRequest &request)
             d.reportPresentStats();
         return {};
     }
-    if (s_asyncPresent.load(std::memory_order_relaxed))
+    if (!request.forceReadback && s_asyncPresent.load(std::memory_order_relaxed))
         return gowPresentationRows(d.presentAsync(width, height, result.displayFbp, result.sourceFbp, result.usedPreferred));
     result.pixels.resize(static_cast<size_t>(width) * height * 4u);
     d.readData(result.pixels.data(), result.pixels.size());

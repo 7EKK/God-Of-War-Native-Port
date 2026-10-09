@@ -298,6 +298,7 @@ void GSThreadedBackend::Initialize(uint8_t *vram, uint32_t vramSize)
             m_inner = std::make_unique<GSCpuBackend>();
             m_inner->Initialize(vram, vramSize);
         }
+        m_sharedPresentation.store(m_inner->UsesSharedPresentation(), std::memory_order_release);
     });
 }
 
@@ -354,7 +355,7 @@ void GSThreadedBackend::Sync(GSSyncReason reason)
         Enqueue(Op::Sync, &reason, sizeof(reason));
         return;
     }
-    if (reason == GSSyncReason::Presentation && GSSharedPresent::Active())
+    if (reason == GSSyncReason::Presentation && UsesSharedPresentation())
         return;
     // GOW-Port: FINISH solo se publica cuando terminaron los comandos anteriores.
     RunOnWorker([&] { m_inner->Sync(reason); });
@@ -362,7 +363,7 @@ void GSThreadedBackend::Sync(GSSyncReason reason)
 
 PresentationFrame GSThreadedBackend::Present(const GSPresentationRequest &request)
 {
-    if (GSSharedPresent::Active())
+    if (UsesSharedPresentation() && !request.forceReadback)
     {
         Enqueue(Op::Present, &request, sizeof(request));
         std::lock_guard<std::mutex> lock(m_producerMutex);
