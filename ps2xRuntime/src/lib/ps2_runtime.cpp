@@ -771,13 +771,10 @@ bool PS2Runtime::initialize(const char *title)
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
 #else
         SetConfigFlags(FLAG_WINDOW_RESIZABLE);
-        // GOW-Port: window size. GOW_WINDOW=<w>x<h> (e.g. 1920x1080); default 1920x1080 with GOW_WIDESCREEN=1.
-        // The image is always fitted at 4:3 or 16:9 (gs_host_present.cpp); the window stays resizable and is
-        // shrunk to the monitor when it does not fit.
+        // GOW-Port: window size. GOW_WINDOW=<w>x<h>; default 1920x1080. The image is always fitted at 16:9
+        // (gs_host_present.cpp); the window stays resizable and is shrunk to the monitor when it does not fit.
         {
-            int width = HOST_WINDOW_WIDTH, height = HOST_WINDOW_HEIGHT;
-            if (const char *widescreen = std::getenv("GOW_WIDESCREEN"); widescreen && widescreen[0] == '1')
-                width = 1920, height = 1080;
+            int width = 1920, height = 1080;
             if (const char *size = std::getenv("GOW_WINDOW"))
             {
                 int w = 0, h = 0;

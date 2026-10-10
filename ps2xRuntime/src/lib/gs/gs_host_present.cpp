@@ -293,11 +293,8 @@ GSHostPresentation::View GSHostPresentation::renderFrame(GS &gs, uint64_t vsyncT
     const float screenWidth = static_cast<float>(GetScreenWidth());
     const float screenHeight = static_cast<float>(GetScreenHeight());
     // GOW-Port: a PS2 frame (e.g. 512x448) is shown at the TV's aspect, not with square pixels:
-    // 4:3, or 16:9 with GOW_WIDESCREEN=1 (the game then renders widescreen, see gow_overrides.cpp).
-    static const float displayAspect = [] {
-        const char *value = std::getenv("GOW_WIDESCREEN");
-        return value && value[0] == '1' ? 16.0f / 9.0f : 4.0f / 3.0f;
-    }();
+    // always 16:9 (the game renders widescreen, see gow_overrides.cpp; 4:3 is not supported any more).
+    constexpr float displayAspect = 16.0f / 9.0f;
     const float destinationWidth = std::min(screenWidth, screenHeight * displayAspect);
     const float destinationHeight = destinationWidth / displayAspect;
     const Rectangle source{0.0f, 0.0f, sourceWidth, sourceHeight};
