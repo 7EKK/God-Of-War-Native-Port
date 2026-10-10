@@ -553,6 +553,16 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 
             const bool zeroExtend = (imm & 0x4000u) != 0u;
 
+            // GOW-Port: report UNPACKs whose data runs past the end of this buffer (they are dropped below).
+            if (totalBytes > 0 && pos + totalBytes > sizeBytes)
+            {
+                static unsigned cuts = 0;
+                if (++cuts <= 30u || cuts % 1000u == 0u)
+                    std::fprintf(stderr, "[vif1] UNPACK cut #%u: vn=%u vl=%u num=%u addr=%03x need=%u have=%u\n", cuts,
+                                 static_cast<unsigned>(vn), static_cast<unsigned>(vl), static_cast<unsigned>(num),
+                                 static_cast<unsigned>(imm & 0x3FFu), static_cast<unsigned>(totalBytes),
+                                 static_cast<unsigned>(sizeBytes - pos));
+            }
             if (m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
             {
                 const uint8_t *srcBase = data + pos;
@@ -713,7 +723,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 
                     // GOW-Port: sin máscara, con datos y sin sumar la fila (STMOD 0/3), cada componente es el
                     // valor descomprimido: el bucle por componente escribiría lo mismo.
-                    if (!maskEnable && decoded && handledFormat && (!canAdd || (mode != 1u && mode != 2u)))
+                    if (!maskEnable && decoded && handledFormat && (!canAdd || mode == 0u))
                     {
                         std::memcpy(m_vu1Data + destOff, decompressed, sizeof(decompressed));
                         continue;
@@ -743,6 +753,11 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                                     writeVal = writeVal + vif1_regs.row[field];
                                     if (mode == 2u)
                                         vif1_regs.row[field] = writeVal;
+                                }
+                                else if (canAdd && mode == 3u)
+                                {
+                                    // GOW-Port: STMOD 3 also stores the data in ROW (PCSX2 Vif_Unpack.cpp setVifRow).
+                                    vif1_regs.row[field] = writeVal;
                                 }
                             }
                         }

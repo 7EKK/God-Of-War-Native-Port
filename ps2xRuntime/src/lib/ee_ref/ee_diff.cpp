@@ -74,6 +74,12 @@ namespace
         const eeref::CpuSnapshot after = snapshotCpu(ctx);
         if (after.gpr[29][0] != before.gpr[29][0] || ctx->pc != returnPc)
         {
+            static std::unordered_map<uint32_t, bool> skippedOnce;
+            if (g_quiet && !skippedOnce[address])
+            {
+                skippedOnce[address] = true;
+                std::fprintf(stderr, "[eediff] %08X (ra %08X) skipped: did not return normally (pc %08X sp %08X->%08X)\n", address, returnPc, ctx->pc, static_cast<uint32_t>(before.gpr[29][0]), static_cast<uint32_t>(after.gpr[29][0]));
+            }
             if (!g_quiet)
                 std::fprintf(stderr, "[eediff] %08X: call did not return normally, skipped\n", address);
             return;
@@ -99,6 +105,24 @@ namespace
             ++identical;
         else
             ++differing;
+        // GOW-Port: differences written above the entry stack pointer land in a caller's frame (outputs or the
+        // locals of a never-returning loop); report them separately, they are invisible in the caller's own diff.
+        if (result.completed)
+        {
+            const uint32_t entrySp = static_cast<uint32_t>(before.gpr[29][0]) & 0x01FFFFFFu;
+            static unsigned callerFrame = 0;
+            for (const std::string &line : result.differences)
+            {
+                unsigned long addr = 0;
+                if (line.rfind("mem ", 0) == 0 && std::sscanf(line.c_str() + 4, "%lx", &addr) == 1 &&
+                    addr >= entrySp && addr < 0x02000000ul && callerFrame < 200u)
+                {
+                    ++callerFrame;
+                    std::fprintf(stderr, "[eediff-callerframe] %08X (ra %08X) sp=%08X %s\n", address, returnPc, entrySp,
+                                 line.c_str());
+                }
+            }
+        }
         if (result.completed && !result.differences.empty())
         {
             std::fprintf(stderr, "[eediff] %08X (ra %08X) call %d: %zu+ differences (%llu steps)\n", address, returnPc,

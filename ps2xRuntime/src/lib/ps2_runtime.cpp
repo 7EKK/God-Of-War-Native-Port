@@ -18,6 +18,7 @@ static bool gowUsePcsx2Vu1(); // GOW_VU1_PCSX2=1, defined before PS2Runtime::ini
 #include "ps2_iop_host.h"
 #include "ps2x/iop/iop_subsystem.h"
 
+#include <xmmintrin.h>
 #include <iostream>
 #include <stdexcept>
 #include <fstream>
@@ -2526,6 +2527,11 @@ void PS2Runtime::run()
     std::thread gameThread([&]()
                            {
         ThreadNaming::SetCurrentThreadName("GameThread");
+        // GOW-Port: EE FPU like PCSX2's default (Pcsx2Config.cpp DEFAULT_FPU_FP_CONTROL_REGISTER): round toward
+        // zero, flush-to-zero and denormals-are-zero for all EE float math on this thread (division keeps its own
+        // round-to-nearest, see ps2FpuDivideNearest, = PCSX2's FPUDivFPCR). GOW_EE_FPU_NEAREST=1 = old behavior.
+        if (const char *nearest = std::getenv("GOW_EE_FPU_NEAREST"); !(nearest && nearest[0] == '1'))
+            _mm_setcsr((_mm_getcsr() & ~0x6000u) | 0x6000u | 0x8000u | 0x0040u);
         try
         {
             m_eeScheduler->reset(m_memory.getRDRAM(), m_cpuContext);
