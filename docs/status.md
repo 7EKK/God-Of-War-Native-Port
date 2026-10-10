@@ -572,3 +572,11 @@ set/weights (same 43 controllers of the player animator 0x74ED74 at identical ad
   readback pass is not reproduced yet).
 - No VRAM image anywhere in the draw path; the CPU backend is only the payload store for uploaded texture bytes / CLUT.
 - Still open: the mask passes (G-plane / CT16-view effects: shadows/fog masks), scale > 1 in the host presenter, slot 3 (Cliffs) 11 fps.
+
+## 2026-10-10 (night 3): internal resolution 3x through the render-target renderer
+- `PS2X_GS_HW=1 PS2X_GS_HW_SCALE=3`: Olympus renders at 1536x1341 internal (port/zones_hw33), ~36 fps; host presentation carries frames
+  larger than 640x512 (texture sized to the frame, frontend row stride = frame width).
+- Remaining visual defect: dark blotches on stone (missing mask passes). Cause: the game builds lighting masks through CT16 views of
+  CT32 targets (frame psm=2 on fbp 0, FBMSK 3fff/ffffff/ffff00ff) and single-plane G fills; those draws are currently skipped. Plan:
+  a view round trip — proxy target in the view's format filled from the owner by the reinterpreting fetch, draw, resolve back by the
+  inverse address mapping (needs texelBits > source bits support in the shader: two source pixels per word).
