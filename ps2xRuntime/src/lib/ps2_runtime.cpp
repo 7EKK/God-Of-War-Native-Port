@@ -588,8 +588,12 @@ void PS2Runtime::notifyIopSifTransfer(uint8_t *rdram, const ps2x::iop::SifTransf
 
 void PS2Runtime::advanceIopEeCycles(uint64_t eeCycles) noexcept
 {
+    // Called at every EE checkpoint (millions/s): only the batched IOP run is timed, the accrual is a few adds
+    // (the perf scope reads the host clock twice, which was ~40 % of the EE thread with GOW_PERF_DIAG=1).
+    if (!m_iopSubsystem->accrueEeCycles(eeCycles))
+        return;
     ps2_perf::Scope perf(ps2_perf::Bucket::Iop);
-    m_iopSubsystem->runEeCycles(eeCycles);
+    m_iopSubsystem->runPendingEeCycles();
 }
 
 void PS2Runtime::resetIop()
@@ -1476,7 +1480,9 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                      GuestBranchKind kind,
                                      const char *debugName)
 {
-    { uint32_t k = g_gowRingPos.fetch_add(1) & 255u; g_gowRing[k] = {sourcePc, targetPc, ctx ? (uint32_t)_mm_cvtsi128_si32(ctx->r[31]) : 0u, (uint32_t)kind}; }
+    // Guest code runs on the EE executor thread only: a relaxed load/store pair instead of a locked fetch_add.
+    { const uint32_t pos = g_gowRingPos.load(std::memory_order_relaxed); g_gowRingPos.store(pos + 1u, std::memory_order_relaxed);
+      g_gowRing[pos & 255u] = {sourcePc, targetPc, ctx ? (uint32_t)_mm_cvtsi128_si32(ctx->r[31]) : 0u, (uint32_t)kind}; }
 
     ctx->pc = targetPc;
     const bool isCall = (kind == GuestBranchKind::DirectCall || kind == GuestBranchKind::IndirectCall);

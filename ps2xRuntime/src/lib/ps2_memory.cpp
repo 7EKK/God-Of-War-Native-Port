@@ -419,6 +419,19 @@ bool PS2Memory::initialize(size_t ramSize)
 void PS2Memory::resetEeTimers() noexcept
 {
     m_eeTimers = {};
+    m_eeTimerPendingCycles = 0;
+    m_eeTimerBudget = 0;
+}
+
+void PS2Memory::flushEeTimers() noexcept
+{
+    // pending < budget always holds, so this never crosses a timer event (no interrupt to raise here).
+    if (m_eeTimerPendingCycles != 0u)
+    {
+        const uint64_t cycles = m_eeTimerPendingCycles;
+        m_eeTimerPendingCycles = 0;
+        (void)stepEeTimers(cycles);
+    }
 }
 
 uint32_t PS2Memory::advanceEeTimers(uint64_t eeCycles) noexcept
@@ -439,6 +452,21 @@ uint32_t PS2Memory::advanceEeTimers(uint64_t eeCycles) noexcept
     if (m_gifStatSlot != nullptr)
         *m_gifStatSlot &= ~kGifFqcMask;
 
+    m_eeTimerPendingCycles += eeCycles;
+    if (m_eeTimerPendingCycles < m_eeTimerBudget)
+    {
+        return 0u;
+    }
+    const uint64_t cycles = m_eeTimerPendingCycles;
+    m_eeTimerPendingCycles = 0;
+    const uint32_t interruptMask = stepEeTimers(cycles);
+    const uint64_t next = cyclesUntilNextEeTimerInterrupt();
+    m_eeTimerBudget = next;
+    return interruptMask;
+}
+
+uint32_t PS2Memory::stepEeTimers(uint64_t eeCycles) noexcept
+{
     uint32_t interruptMask = 0u;
     for (size_t index = 0; index < m_eeTimers.size(); ++index)
     {
@@ -541,7 +569,12 @@ uint64_t PS2Memory::cyclesUntilNextEeTimerInterrupt() const noexcept
         const uint64_t cycles = (numerator + clockHz - 1u) / clockHz;
         nearest = std::min(nearest, std::max<uint64_t>(1u, cycles));
     }
-    return nearest;
+    // The timer state is as of the last advance; m_eeTimerPendingCycles (< nearest) have elapsed since.
+    if (nearest == std::numeric_limits<uint64_t>::max())
+    {
+        return nearest;
+    }
+    return std::max<uint64_t>(1u, nearest - m_eeTimerPendingCycles);
 }
 
 bool PS2Memory::isScratchpad(uint32_t address) const
@@ -1161,6 +1194,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
     uint32_t timerOffset = 0u;
     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
     {
+        flushEeTimers();
+        m_eeTimerBudget = 0; // recompute the distance to the next interrupt at the next advance
         EeTimer &timer = m_eeTimers[timerIndex];
         switch (timerOffset)
         {
@@ -2777,6 +2812,7 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
     uint32_t timerOffset = 0u;
     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
     {
+        flushEeTimers();
         const EeTimer &timer = m_eeTimers[timerIndex];
         switch (timerOffset)
         {

@@ -1077,18 +1077,27 @@ namespace ps2x::iop::detail
 
     void IopEmulator::runEeCycles(uint64_t eeCycles) noexcept
     {
+        if (accrueEeCycles(eeCycles))
+            runPendingEeCycles();
+    }
+
+    bool IopEmulator::accrueEeCycles(uint64_t eeCycles) noexcept
+    {
         const uint64_t total = m_impl->eeCycleCarry + eeCycles;
         m_impl->eeCycleCarry = total % 8u;
         // GOW-Port: the EE accounts a few cycles at a time (millions of calls per second); every call paid for the
         // whole IOP service loop (SPU2 catch-up, timers, scheduler) to advance ~10 IOP cycles. The cycles are now run
         // in batches of kIopCycleBatch (~14 us of IOP time); RPC and sync paths call runCycles directly.
         m_impl->pendingIopCycles += total / 8u;
-        if (m_impl->pendingIopCycles >= kIopCycleBatch)
-        {
-            const uint64_t cycles = m_impl->pendingIopCycles;
-            m_impl->pendingIopCycles = 0;
+        return m_impl->pendingIopCycles >= kIopCycleBatch;
+    }
+
+    void IopEmulator::runPendingEeCycles() noexcept
+    {
+        const uint64_t cycles = m_impl->pendingIopCycles;
+        m_impl->pendingIopCycles = 0;
+        if (cycles != 0u)
             m_impl->runCycles(cycles);
-        }
     }
 
     RpcResult IopEmulator::handleRpc(const RpcRequest &request)
