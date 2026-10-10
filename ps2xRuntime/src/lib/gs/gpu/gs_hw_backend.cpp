@@ -144,6 +144,19 @@ vec4 reinterpretTexel(ivec2 p)
     }
     return texelFetch(uPalette, ivec2(int(value & 255u), 0), 0);
 }
+// Paletted textures (T8/T4 and their H variants): uTex holds the indices (R8, cached per VRAM upload), the colour comes
+// from uIdxPalette (256x1, cached per CLUT); filtering is done on the looked-up colours like the GS.
+uniform int uIndexed, uLinear;
+uniform ivec4 uWrap; // per axis (x, y): 0 repeat, 1 clamp
+uniform sampler2D uIdxPalette;
+vec4 indexedTexel(ivec2 p)
+{
+    ivec2 size = max(ivec2(uTexDim), ivec2(1));
+    p.x = (uWrap.x == 0) ? ((p.x % size.x) + size.x) % size.x : clamp(p.x, 0, size.x - 1);
+    p.y = (uWrap.y == 0) ? ((p.y % size.y) + size.y) % size.y : clamp(p.y, 0, size.y - 1);
+    int idx = int(texelFetch(uTex, p, 0).r * 255.0 + 0.5);
+    return texelFetch(uIdxPalette, ivec2(idx, 0), 0);
+}
 uniform int uTme, uFst, uTfx, uTcc, uIip;
 uniform int uRtTex24; // sampling a render target as PSMCT24 (1) or PSMCT16 (2): alpha comes from TEXA
 uniform float uTa0;
@@ -203,6 +216,19 @@ void main()
             ivec2 ip = ivec2(floor(uv));
             ip = ivec2(clamp(ip.x, 0, uTex0.z - 1), clamp(ip.y, 0, uTex0.w - 1));
             t = reinterpretTexel(ip) * 255.0;
+        }
+        else if (uIndexed != 0)
+        {
+            if (uLinear != 0)
+            {
+                vec2 f = uv - 0.5;
+                ivec2 i0 = ivec2(floor(f));
+                vec2 w = f - floor(f);
+                t = mix(mix(indexedTexel(i0), indexedTexel(i0 + ivec2(1, 0)), w.x),
+                        mix(indexedTexel(i0 + ivec2(0, 1)), indexedTexel(i0 + ivec2(1, 1)), w.x), w.y) * 255.0;
+            }
+            else
+                t = indexedTexel(ivec2(floor(uv))) * 255.0;
         }
         else if (uZTex != 0)
         {
@@ -318,6 +344,29 @@ void main()
         float x, y, ox, oy;
     };
 
+    // Display output: copies one read circuit (offset DBX/DBY) into the presentation framebuffer; circuit 1 is blended over
+    // circuit 2 by fixed-function blending (ALP or its own alpha x2).
+    const char *kPresentVs = R"(#version 430 core
+void main()
+{
+    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+)";
+    const char *kPresentFs = R"(#version 430 core
+out vec4 oColor;
+uniform sampler2D uSrc;
+uniform ivec4 uSrcOffset; // x, y: source pixel of output pixel 0; z: 1 = CT24 (alpha 0x80); w: 1 = alpha x2 as blend factor
+void main()
+{
+    ivec2 p = ivec2(gl_FragCoord.xy) + uSrcOffset.xy;
+    ivec2 size = textureSize(uSrc, 0);
+    vec4 c = (p.x < size.x && p.y < size.y) ? texelFetch(uSrc, p, 0) : vec4(0.0);
+    float a = (uSrcOffset.z != 0) ? 128.0 / 255.0 : c.a;
+    oColor = vec4(c.rgb, (uSrcOffset.w != 0) ? min(1.0, a * 2.0) : a);
+}
+)";
+
     // GS vertex as sent to the GPU.
     struct HwVertex
     {
@@ -381,9 +430,13 @@ struct GSHwBackend::Impl
     GLint locInvSize = -1, locTex = -1, locTexSize = -1, locTexDim = -1, locTme = -1, locFst = -1, locTfx = -1, locTcc = -1, locIip = -1,
           locAte = -1, locAtst = -1, locAref = -1, locPass = -1, locBlendScale = -1, locRtTex24 = -1, locTa0 = -1, locTa1 = -1, locReinterp = -1, locDate = -1, locDatm = -1, locDest = -1, locZTex = -1, locZMax = -1, locTables = -1, locRtColor = -1, locPalette = -1, locTexFmt = -1, locTexFmt2 = -1,
           locRtFmt = -1, locRtFmt2 = -1, locTex0 = -1, locRtPx = -1, locAem = -1;
+    GLint locIndexed = -1, locLinear = -1, locWrap = -1, locIdxPalette = -1;
     GLint locSwBlend = -1, locColClamp = -1, locAbcd = -1, locFix = -1, locZAlias = -1, locZAliasWrite = -1, locZAliasMax = -1;
 
     GLuint tableTex = 0, paletteTex = 0;
+    GLuint presentProgram = 0, presentVao = 0, presentFbo = 0, presentTex = 0;
+    GLint locPresentSrc = -1, locPresentOffset = -1;
+    uint32_t presentW = 0, presentH = 0;
     GLuint shuffleProgram = 0, shuffleVao = 0, shuffleVbo = 0;
     GLint locShTexa = -1;
     GLint locShInvSize = -1, locShSrc = -1, locShSrcZ = -1, locShZMax = -1, locShHs = -1, locShHd = -1, locShScale = -1;
@@ -481,6 +534,7 @@ struct GSHwBackend::Impl
         locReinterp = loc("uReinterp"); locDate = loc("uDate"); locDatm = loc("uDatm"); locDest = loc("uDest"); locZTex = loc("uZTex"); locZMax = loc("uZMax"); locTables = loc("uTables"); locRtColor = loc("uRtColor"); locPalette = loc("uPalette");
         locTexFmt = loc("uTexFmt"); locTexFmt2 = loc("uTexFmt2"); locRtFmt = loc("uRtFmt"); locRtFmt2 = loc("uRtFmt2");
         locTex0 = loc("uTex0"); locRtPx = loc("uRtPx");
+        locIndexed = loc("uIndexed"); locLinear = loc("uLinear"); locWrap = loc("uWrap"); locIdxPalette = loc("uIdxPalette");
         locSwBlend = loc("uSwBlend"); locColClamp = loc("uColClamp"); locAbcd = loc("uAbcd"); locFix = loc("uFix");
         locZAlias = loc("uZAlias"); locZAliasWrite = loc("uZAliasWrite"); locZAliasMax = loc("uZAliasMax");
         locRtTex24 = loc("uRtTex24"); locTa0 = loc("uTa0"); locTa1 = loc("uTa1"); locAem = loc("uAem");
@@ -519,6 +573,20 @@ struct GSHwBackend::Impl
                 g.EnableVertexAttribArray(1);
                 g.BindVertexArray(vao);
                 g.BindBuffer(kArrayBuffer, vbo);
+            }
+        }
+        {
+            const GLuint pv = compile(GSGL::kVertexShader, kPresentVs), pf = compile(GSGL::kFragmentShader, kPresentFs);
+            if (pv && pf)
+            {
+                presentProgram = g.CreateProgram();
+                g.AttachShader(presentProgram, pv);
+                g.AttachShader(presentProgram, pf);
+                g.LinkProgram(presentProgram);
+                locPresentSrc = g.GetUniformLocation(presentProgram, "uSrc");
+                locPresentOffset = g.GetUniformLocation(presentProgram, "uSrcOffset");
+                g.GenVertexArrays(1, &presentVao);
+                g.BindVertexArray(vao);
             }
         }
         if (const char *s = std::getenv("PS2X_GS_HW_SCALE"))
@@ -696,6 +764,82 @@ struct GSHwBackend::Impl
         if (textures.size() > 6000u)
             evictOld();
         return tex;
+    }
+
+    // Index texture of a paletted format: the raw indices, read from GS memory with the swizzle tables. Independent of
+    // the CLUT, so palette changes (animated CLUTs, the same image with several palettes) cost nothing.
+    Texture &indexTextureFor(const GSDrawState &s)
+    {
+        const GSTex0Reg &t = s.context.tex0;
+        const uint64_t key = (1ull << 63) | t.tbp0 | (static_cast<uint64_t>(t.tbw) << 14) | (static_cast<uint64_t>(t.psm & 63) << 20) |
+                             (static_cast<uint64_t>(s.textureWidth) << 26) | (static_cast<uint64_t>(s.textureHeight) << 38);
+        Texture &tex = textures[key];
+        tex.lastUse = ++useCounter;
+        if (tex.valid)
+        {
+            ++stats.texHits;
+            return tex;
+        }
+        ++stats.texDecodes;
+        const GSSwizzle::Format &f = GSSwizzle::GetFormat(t.psm);
+        tex.width = std::max<uint32_t>(1u, s.textureWidth);
+        tex.height = std::max<uint32_t>(1u, s.textureHeight);
+        std::vector<uint8_t> indices(static_cast<size_t>(tex.width) * tex.height);
+        for (uint32_t y = 0; y < tex.height; ++y)
+        {
+            const GSSwizzle::AxisPart row = GSSwizzle::RowPart(f, t.tbp0, t.tbw, y);
+            uint8_t *line = indices.data() + static_cast<size_t>(y) * tex.width;
+            for (uint32_t x = 0; x < tex.width; ++x)
+            {
+                const GSSwizzle::Location at = GSSwizzle::Combine(f, row, GSSwizzle::ColumnPart(f, x));
+                line[x] = static_cast<uint8_t>(GSSwizzle::LoadAt(f, vram + at.byte, at.shift));
+            }
+        }
+        tex.blockLo = t.tbp0;
+        tex.blockHi = t.tbp0 + spanBlocks(t.psm, t.tbw, tex.height);
+        const Api &g = gl();
+        if (!tex.id)
+            g.GenTextures(1, &tex.id);
+        g.BindTexture(kTexture2D, tex.id);
+        g.PixelStorei(kUnpackAlignment, 1);
+        g.TexImage2D(kTexture2D, 0, 0x8229 /*R8*/, tex.width, tex.height, 0, 0x1903 /*RED*/, kUnsignedByte, indices.data());
+        g.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
+        g.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
+        tex.valid = true;
+        if (textures.size() > 6000u)
+            evictOld();
+        return tex;
+    }
+
+    // 256x1 RGBA palette of the current CLUT as the draw reads it (format, offset, TEXA alpha)
+    std::unordered_map<uint64_t, GLuint> palettes;
+    GLuint paletteFor(const GSDrawState &s)
+    {
+        const GSTex0Reg &t = s.context.tex0;
+        uint64_t key = clutHash;
+        key = key * 1099511628211ull ^ (t.cpsm | (t.csm << 8) | (t.csa << 16) | (static_cast<uint64_t>(t.psm & 63) << 24));
+        key = key * 1099511628211ull ^ (static_cast<uint64_t>(s.texa.ta0) | (static_cast<uint64_t>(s.texa.ta1) << 8) | (static_cast<uint64_t>(s.texa.aem) << 16));
+        const auto it = palettes.find(key);
+        if (it != palettes.end())
+            return it->second;
+        const Api &g = gl();
+        if (palettes.size() > 4096u)
+        {
+            for (auto &kv : palettes)
+                g.DeleteTextures(1, &kv.second);
+            palettes.clear();
+        }
+        uint32_t colors[256];
+        cpu.BuildPalette(s, colors);
+        GLuint id = 0;
+        g.GenTextures(1, &id);
+        g.BindTexture(kTexture2D, id);
+        g.PixelStorei(kUnpackAlignment, 4);
+        g.TexImage2D(kTexture2D, 0, static_cast<GLint>(kRgba8), 256, 1, 0, kRgba, kUnsignedByte, colors);
+        g.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
+        g.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
+        palettes[key] = id;
+        return id;
     }
 
     void evictOld()
@@ -1434,7 +1578,17 @@ struct GSHwBackend::Impl
                 rsrc = findReinterpretSource(c.tex0.tbp0, c.tex0.psm);
             if (rsrc == &rt)
                 g.TextureBarrier();
-            Texture &tex = (src || rsrc || zsrc) ? dummy : textureFor(s);
+            const bool indexed = !(src || rsrc || zsrc) && isIndexed(c.tex0.psm) && vram != nullptr;
+            Texture &tex = (src || rsrc || zsrc) ? dummy : indexed ? indexTextureFor(s) : textureFor(s);
+            g.Uniform1i(locIndexed, indexed ? 1 : 0);
+            if (indexed)
+            {
+                g.ActiveTexture(kTexture0 + 5);
+                g.BindTexture(kTexture2D, paletteFor(s));
+                g.Uniform1i(locIdxPalette, 5);
+                g.Uniform1i(locLinear, s.linearFilter ? 1 : 0);
+                g.Uniform4i(locWrap, (c.clamp & 3u) == 0u ? 0 : 1, ((c.clamp >> 2) & 3u) == 0u ? 0 : 1, 0, 0);
+            }
             g.ActiveTexture(kTexture0);
             g.BindTexture(kTexture2D, zsrc ? zsrc->depth : src ? src->color : rsrc ? rsrc->color : tex.id);
             g.Uniform1i(locZTex, !zsrc ? 0 : c.tex0.psm == 0x32 || c.tex0.psm == 0x3A ? 16 : c.tex0.psm == 0x31 ? 24 : 32);
@@ -1453,6 +1607,11 @@ struct GSHwBackend::Impl
             const GLint wu = (clamp & 3u) == 0u ? kRepeat : kClampToEdge, wv = ((clamp >> 2) & 3u) == 0u ? kRepeat : kClampToEdge;
             g.TexParameteri(kTexture2D, kTextureWrapS, wu);
             g.TexParameteri(kTexture2D, kTextureWrapT, wv);
+            if (indexed)
+            {
+                g.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
+                g.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
+            }
             g.Uniform1i(locTex, 0);
             g.Uniform2f(locTexDim, static_cast<float>(std::max<uint16_t>(s.textureWidth, 1)), static_cast<float>(std::max<uint16_t>(s.textureHeight, 1)));
             if (zsrc)
@@ -1764,52 +1923,78 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
         }
     }
 
-    // one circuit's pixels at output size (RGBA, alpha as the GS stores it; CT24 reads as 0x80)
-    const auto readCircuit = [&](uint32_t cfbp, uint64_t dispfb, uint32_t cdbx, uint32_t cdby, std::vector<uint8_t> &out)
+    // compose the read circuits on the GPU, then read the result back once
+    if (!d.presentProgram)
+        return frame;
+    if (!d.presentFbo || d.presentW != outW || d.presentH != outH)
     {
-        out.assign(static_cast<size_t>(outW) * outH * 4u, 0u);
-        RenderTarget *rt = d.findTarget(cfbp);
-        if (!rt)
-            return false;
-        g.BindFramebuffer(kFramebuffer, rt->fbo);
-        const uint32_t sx = static_cast<uint32_t>(cdbx * d.scale), sy = static_cast<uint32_t>(cdby * d.scale);
-        const uint32_t cw = std::min(outW, rt->glW > sx ? rt->glW - sx : 0u), ch = std::min(outH, rt->glH > sy ? rt->glH - sy : 0u);
-        std::vector<uint8_t> tmp(static_cast<size_t>(cw) * ch * 4u);
-        g.ReadPixels(sx, sy, cw, ch, kRgba, kUnsignedByte, tmp.data());
-        for (uint32_t y = 0; y < ch; ++y)
-            std::memcpy(out.data() + static_cast<size_t>(y) * outW * 4u, tmp.data() + static_cast<size_t>(y) * cw * 4u, static_cast<size_t>(cw) * 4u);
-        if (((dispfb >> 15) & 0x1Fu) == GS_PSM_CT24)
-            for (size_t i = 3; i < out.size(); i += 4)
-                out[i] = 0x80;
-        return true;
-    };
+        if (d.presentTex)
+            g.DeleteTextures(1, &d.presentTex);
+        if (!d.presentFbo)
+            g.GenFramebuffers(1, &d.presentFbo);
+        g.GenTextures(1, &d.presentTex);
+        g.BindTexture(kTexture2D, d.presentTex);
+        g.TexImage2D(kTexture2D, 0, static_cast<GLint>(kRgba8), outW, outH, 0, kRgba, kUnsignedByte, nullptr);
+        g.BindFramebuffer(kFramebuffer, d.presentFbo);
+        g.FramebufferTexture2D(kFramebuffer, kColorAttachment0, kTexture2D, d.presentTex, 0);
+        d.presentW = outW;
+        d.presentH = outH;
+    }
+    g.BindFramebuffer(kFramebuffer, d.presentFbo);
+    g.Viewport(0, 0, outW, outH);
+    g.Disable(kScissorTest);
+    g.Disable(kDepthTest);
+    g.ColorMask(kTrue, kTrue, kTrue, kTrue);
+    g.ClearColor(0.f, 0.f, 0.f, 1.f);
+    g.Clear(kColorBufferBit);
+    g.UseProgram(d.presentProgram);
+    g.BindVertexArray(d.presentVao);
+    g.ActiveTexture(kTexture0);
+    g.Uniform1i(d.locPresentSrc, 0);
     const bool mmod = ((request.pmode >> 5) & 1u) != 0u, slbg = ((request.pmode >> 7) & 1u) != 0u;
     const uint32_t alp = static_cast<uint32_t>((request.pmode >> 8) & 0xFFu);
+    const auto drawCircuit = [&](uint32_t cfbp, uint64_t dispfb, uint32_t cdbx, uint32_t cdby, bool alphaFactor)
+    {
+        RenderTarget *rt = d.findTarget(cfbp);
+        if (!rt)
+            return;
+        g.BindTexture(kTexture2D, rt->color);
+        g.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
+        g.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
+        g.Uniform4i(d.locPresentOffset, static_cast<GLint>(cdbx * d.scale), static_cast<GLint>(cdby * d.scale),
+                    ((dispfb >> 15) & 0x1Fu) == GS_PSM_CT24 ? 1 : 0, alphaFactor ? 1 : 0);
+        g.DrawArrays(kTriangles, 0, 3);
+        g.TexParameteri(kTexture2D, kTextureMinFilter, kLinear);
+        g.TexParameteri(kTexture2D, kTextureMagFilter, kLinear);
+    };
+    g.Disable(kBlend);
     if (ok1 && ok2)
     {
-        std::vector<uint8_t> top, bottom;
-        readCircuit(fbp1, request.dispfb1, dbx1, dby1, top);
         if (slbg)
         {
-            bottom.assign(top.size(), 0u);
-            for (size_t i = 0; i < bottom.size(); i += 4)
-                for (int c = 0; c < 3; ++c)
-                    bottom[i + c] = static_cast<uint8_t>((request.bgcolor >> (8 * c)) & 0xFFu);
+            g.ClearColor(static_cast<float>(request.bgcolor & 0xFFu) / 255.f, static_cast<float>((request.bgcolor >> 8) & 0xFFu) / 255.f,
+                         static_cast<float>((request.bgcolor >> 16) & 0xFFu) / 255.f, 1.f);
+            g.Clear(kColorBufferBit);
         }
         else
-            readCircuit(fbp2, request.dispfb2, dbx2, dby2, bottom);
-        for (size_t i = 0; i < top.size(); i += 4)
+            drawCircuit(fbp2, request.dispfb2, dbx2, dby2, false);
+        g.Enable(kBlend);
+        g.BlendEquationSeparate(kFuncAdd, kFuncAdd);
+        if (mmod)
         {
-            const int factor = static_cast<int>(mmod ? alp : std::min<uint32_t>(255u, top[i + 3] * 2u));
-            for (int c = 0; c < 3; ++c)
-            {
-                const int dst = bottom[i + c];
-                frame.pixels[i + c] = static_cast<uint8_t>(std::clamp(dst + ((static_cast<int>(top[i + c]) - dst) * factor) / 255, 0, 255));
-            }
+            const float f = static_cast<float>(alp) / 255.f;
+            g.BlendColor(f, f, f, f);
+            g.BlendFuncSeparate(kConstantColor, kOneMinusConstantColor, kZero, kOne);
         }
+        else
+            g.BlendFuncSeparate(0x0302 /*SRC_ALPHA*/, 0x0303 /*ONE_MINUS_SRC_ALPHA*/, kZero, kOne);
+        drawCircuit(fbp1, request.dispfb1, dbx1, dby1, true);
+        g.Disable(kBlend);
     }
     else
-        readCircuit(fbp, ok1 ? request.dispfb1 : request.dispfb2, ok1 ? dbx1 : dbx2, ok1 ? dby1 : dby2, frame.pixels);
+        drawCircuit(fbp, ok1 ? request.dispfb1 : request.dispfb2, ok1 ? dbx1 : dbx2, ok1 ? dby1 : dby2, false);
+    g.BindVertexArray(d.vao);
+    g.ReadPixels(0, 0, outW, outH, kRgba, kUnsignedByte, frame.pixels.data());
     for (size_t i = 3; i < frame.pixels.size(); i += 4)
         frame.pixels[i] = 255;
     // the frontend packs presentation rows with a fixed 640 pixel stride

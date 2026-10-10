@@ -32,14 +32,9 @@ add_library(ps2_test_lib STATIC
     src/ps2_vu1_tests.cpp
     src/ps2_vu_tests.cpp
     src/ps2_gs_tests.cpp
-    src/ps2_gs_backend_tests.cpp # GOW-Port: cola, VRAM y comparación CPU/OpenGL.
     src/ps2_gpu_profile_tests.cpp # GOW-Port: ventanas y lecturas de timestamps sin espera.
     src/ps2_gpu_upload_ring_tests.cpp # GOW-Port: datos pendientes y fallback de uploads.
-    src/ps2_gpu_ring_gl_tests.cpp # GOW-Port: liberar objetos con host compartido vivo.
-    src/ps2_gpu_streaming_gl_tests.cpp # GOW-Port: capacidad real tras fallback streaming.
-    src/ps2_gpu_shared_present_gl_tests.cpp # GOW-Port: compositor compartido en host raylib.
     src/ps2_gs_shared_queue_tests.cpp # GOW-Port: FIFO y capturas bajo demanda.
-    src/ps2_gs_host_present_tests.cpp # GOW-Port: consumidor real, escala y cierre.
     src/ps2_iop_tests.cpp
     src/ps2_sif_rpc_tests.cpp
     src/ps2_sif_dma_tests.cpp

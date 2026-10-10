@@ -23,7 +23,6 @@ public:
 
     static std::unique_ptr<GSRasterBackend> MakeDefault();
     static void SetEnabledByDefault(bool enabled);
-    static void SetGpuByDefault(bool enabled);
 
     void Initialize(uint8_t *vram, uint32_t vramSize) override;
     void Reset() override;

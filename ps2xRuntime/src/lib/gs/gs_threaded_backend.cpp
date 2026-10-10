@@ -2,7 +2,6 @@
 // Origen: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
 #include "runtime/gs/gs_threaded_backend.h"
 #include "runtime/gs/gs_cpu_backend.h"
-#include "runtime/gs/gs_gpu_backend.h"
 #include "runtime/gs/gs_hw_backend.h"
 #include "runtime/gs/gs_shared_present.h"
 #include "gs_inventory.h"
@@ -21,7 +20,6 @@ namespace
     constexpr size_t kPublishBytes = 64u * 1024u;
     constexpr size_t kMaxPendingChunks = 256u;
     std::atomic<bool> s_enabledByDefault{false};
-    std::atomic<bool> s_gpuByDefault{false};
 
     bool discardDraws()
     {
@@ -86,18 +84,8 @@ GSThreadedBackend::~GSThreadedBackend()
 
 std::unique_ptr<GSRasterBackend> GSThreadedBackend::MakeDefault()
 {
-    const char *value = std::getenv("PS2X_GS_THREAD");
-    const bool enabled = (value && *value) ? *value != '0' : s_enabledByDefault.load();
-    const char *gpu = std::getenv("PS2X_GS_GPU");
-    const bool useGpu = (gpu && *gpu) ? *gpu != '0' : s_gpuByDefault.load();
-    const char *hw = std::getenv("PS2X_GS_HW");
-    if (hw && *hw && *hw != '0') // GOW-Port: render-target renderer (see gs_hw_backend.h)
-        return std::make_unique<GSThreadedBackend>(std::make_unique<GSHwBackend>());
-    if (useGpu)
-        return std::make_unique<GSThreadedBackend>(std::make_unique<GSGpuBackend>());
-    if (!enabled)
-        return std::make_unique<GSCpuBackend>();
-    return std::make_unique<GSThreadedBackend>(std::make_unique<GSCpuBackend>());
+    // GOW-Port: the native render-target renderer is the only GS renderer (no VRAM-emulating rasteriser).
+    return std::make_unique<GSThreadedBackend>(std::make_unique<GSHwBackend>());
 }
 
 void GSThreadedBackend::SetEnabledByDefault(bool enabled)
@@ -105,10 +93,6 @@ void GSThreadedBackend::SetEnabledByDefault(bool enabled)
     s_enabledByDefault.store(enabled);
 }
 
-void GSThreadedBackend::SetGpuByDefault(bool enabled)
-{
-    s_gpuByDefault.store(enabled);
-}
 
 void GSThreadedBackend::Enqueue(Op op, const void *payload, uint32_t size)
 {
@@ -296,13 +280,6 @@ void GSThreadedBackend::Initialize(uint8_t *vram, uint32_t vramSize)
 {
     RunOnWorker([&] {
         m_inner->Initialize(vram, vramSize);
-        // GOW-Port: un error GL debe conservar la salida CPU, no descartar los dibujos.
-        if (auto *gpu = dynamic_cast<GSGpuBackend *>(m_inner.get()); gpu && !gpu->IsReady())
-        {
-            std::fprintf(stderr, "[gow-gs] OpenGL no disponible; usando CPU en el hilo GS.\n");
-            m_inner = std::make_unique<GSCpuBackend>();
-            m_inner->Initialize(vram, vramSize);
-        }
         m_sharedPresentation.store(m_inner->UsesSharedPresentation(), std::memory_order_release);
     });
 }

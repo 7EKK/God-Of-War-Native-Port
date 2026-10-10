@@ -13,14 +13,9 @@ void register_ps2_memory_tests();
 void register_ps2_vu1_tests();
 void register_ps2_vu_tests();
 void register_ps2_gs_tests();
-void register_ps2_gs_backend_tests(); // GOW-Port
 void register_ps2_gpu_profile_tests(); // GOW-Port
 void runGpuUploadRingTests(); // GOW-Port
-void runGpuRingGlTests(); // GOW-Port
-void runGpuStreamingGlTests(); // GOW-Port
-void runGpuSharedPresentGlTests(); // GOW-Port
 void runGsSharedQueueTests(); // GOW-Port
-void runGsHostPresentTests(); // GOW-Port
 void register_ps2_iop_tests();
 void register_ps2_sif_rpc_tests();
 void register_ps2_sif_dma_tests();
@@ -46,14 +41,9 @@ int main()
     register_ps2_vu1_tests();
     register_ps2_vu_tests();
     register_ps2_gs_tests();
-    register_ps2_gs_backend_tests();
     register_ps2_gpu_profile_tests();
     runGpuUploadRingTests();
-    runGpuRingGlTests();
-    runGpuStreamingGlTests();
-    runGpuSharedPresentGlTests();
     runGsSharedQueueTests();
-    runGsHostPresentTests();
     register_ps2_iop_tests();
     register_ps2_sif_rpc_tests();
     register_ps2_sif_dma_tests();

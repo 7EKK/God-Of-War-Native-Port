@@ -19,8 +19,7 @@ add_library(ps2_gs_cache_backend_under_test STATIC
     "${PS2_GS_RUNTIME_DIR}/src/lib/gs/gs_threaded_backend.cpp"
     "${PS2_GS_RUNTIME_DIR}/src/lib/gs/gs_swizzle.cpp"
     "${PS2_GS_RUNTIME_DIR}/src/lib/gs/gpu/gs_gl.cpp"
-    "${PS2_GS_RUNTIME_DIR}/src/lib/gs/gpu/gs_gpu_backend.cpp"
-    "${PS2_GS_RUNTIME_DIR}/src/lib/gs/gpu/gs_gpu_shaders.cpp"
+    "${PS2_GS_RUNTIME_DIR}/src/lib/gs/gpu/gs_hw_backend.cpp"
 )
 target_include_directories(ps2_gs_cache_backend_under_test PUBLIC "${PS2_GS_RUNTIME_DIR}/include")
 target_compile_features(ps2_gs_cache_backend_under_test PUBLIC cxx_std_20)
