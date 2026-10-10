@@ -10,6 +10,8 @@ for PC has to stay portable to it: AArch64 (no x86-only intrinsics without a por
 APIs outside platform code, GPU features available in switch-mesa (the native GS uses GL 4.3 core shaders, dual-source
 blending and texture barriers: to verify there), ~3 GB memory, and a CPU ~5-8x slower than the dev PC, so CPU-side speed
 (EE, VU1, IOP) is a requirement. See [switch.md](switch.md).
+Order: the Switch build itself (toolchain port to ext/PS2Recomp-kl, NRO, tests in Citron: `ref/citron/citron-cmd.exe`)
+starts only after the PC port is complete.
 The user wants the game **totally playable**; work continues until then. Game data is read from **extracted files**
 (`disc/`), never from the ISO.
 
