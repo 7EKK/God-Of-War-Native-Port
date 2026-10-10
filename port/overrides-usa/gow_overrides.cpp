@@ -569,7 +569,7 @@ namespace
         {
             for (auto &kv : info)
             {
-                if (kv.first < 0x600000u || kv.first > 0x900000u) continue;
+                if (kv.second.calls == kv.second.lastCalls) continue;
                 std::fprintf(stderr, "[gow-ctrl] %x calls=%u time=%.3f (was %.3f) rate=%.3f\n", kv.first, kv.second.calls - kv.second.lastCalls, kv.second.last, kv.second.prev, kv.second.rate);
                 kv.second.lastCalls = kv.second.calls; kv.second.prev = kv.second.last;
             }
