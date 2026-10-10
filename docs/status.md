@@ -380,3 +380,8 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
     Next: compare Kratos' animator layers' state (time/rate/weight fields of its two controllers, type 0x2C2D20,
     reached via owner → layer parent (type 0x2BF1A0, +0x10 = owner) → controller (+0x18/+0x1C pointers)) between
     PCSX2 walking states and ours.
+- Kratos' own animator layers/controllers are identical to PCSX2 while walking (port/pcsx2walk3 vs rdump/ram.3).
+- `GOW_VU1_PCSX2=1` (ps2_runtime.cpp: MSCAL/MSCNT on PCSX2's VU1 interpreter via vu_pcsx2/pcsx2_vu1_bridge, as in
+  the PAL stack): port/pv1 still shows the twisted pose → **VU1 semantics ruled out** (both ours and PCSX2's VU1 give
+  the same broken pose). Still open: where the bone matrices that reach VU1 get the wrong rotation. Next: dump the
+  skinning matrix palette Kratos sends to VU1 (VIF1 UNPACK source in EE RAM) in ours vs PCSX2 while walking.
