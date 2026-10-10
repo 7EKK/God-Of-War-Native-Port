@@ -72,6 +72,14 @@ struct VU1Interpreter::NativeState
 #pragma fp_contract(off)
 #endif
 
+#if defined(_MSC_VER)
+#define VU1N_INLINE __forceinline
+#define VU1N_NOINLINE __declspec(noinline)
+#else
+#define VU1N_INLINE inline __attribute__((always_inline))
+#define VU1N_NOINLINE __attribute__((noinline))
+#endif
+
 namespace vu1n
 {
     inline uint64_t fnv(uint64_t h, uint32_t w)
@@ -130,19 +138,11 @@ namespace vu1n
         s.mac = static_cast<uint32_t>(kRev4[z] | (kRev4[sg] << 4) | (kRev4[o] << 12));
     }
     // acc +/- a*b. The exact engine evaluates it unrounded, so a product that overflows float can still cancel against ACC:
-    // when the float result is not finite the lanes are redone in double.
+    // when the float result is not finite the lanes are redone in double (out of line: rare, and keeping it out lets the
+    // fast path inline into the generated blocks; MSVC x64 passes __m128 arguments of a real call through memory).
     template <bool Sub>
-    inline __m128 madd(__m128 acc, __m128 a, __m128 b)
+    VU1N_NOINLINE __m128 maddWide(__m128 acc, __m128 a, __m128 b)
     {
-        const __m128 p = _mm_mul_ps(a, b);
-        __m128 r = Sub ? _mm_sub_ps(acc, p) : _mm_add_ps(acc, p);
-        // round-toward-zero saturates an overflowing product to FLT_MAX instead of infinity: any lane at/over FLT_MAX in the product
-        // or the sum needs the wide evaluation
-        const __m128i lim = _mm_set1_epi32(0x7F7FFFFE);
-        const __m128i hot = _mm_or_si128(_mm_cmpgt_epi32(_mm_and_si128(_mm_castps_si128(p), _mm_set1_epi32(0x7FFFFFFF)), lim),
-                                         _mm_cmpgt_epi32(_mm_and_si128(_mm_castps_si128(r), _mm_set1_epi32(0x7FFFFFFF)), lim));
-        if (_mm_movemask_epi8(hot) == 0)
-            return r;
         alignas(16) float fa[4], fb[4], fc[4], out[4];
         _mm_store_ps(fa, acc);
         _mm_store_ps(fb, a);
@@ -154,6 +154,20 @@ namespace vu1n
             out[i] = x > static_cast<double>(FLT_MAX) ? HUGE_VALF : x < -static_cast<double>(FLT_MAX) ? -HUGE_VALF : static_cast<float>(x);
         }
         return _mm_load_ps(out);
+    }
+    template <bool Sub>
+    VU1N_INLINE __m128 madd(__m128 acc, __m128 a, __m128 b)
+    {
+        const __m128 p = _mm_mul_ps(a, b);
+        __m128 r = Sub ? _mm_sub_ps(acc, p) : _mm_add_ps(acc, p);
+        // round-toward-zero saturates an overflowing product to FLT_MAX instead of infinity: any lane at/over FLT_MAX in the product
+        // or the sum needs the wide evaluation
+        const __m128i lim = _mm_set1_epi32(0x7F7FFFFE);
+        const __m128i hot = _mm_or_si128(_mm_cmpgt_epi32(_mm_and_si128(_mm_castps_si128(p), _mm_set1_epi32(0x7FFFFFFF)), lim),
+                                         _mm_cmpgt_epi32(_mm_and_si128(_mm_castps_si128(r), _mm_set1_epi32(0x7FFFFFFF)), lim));
+        if (_mm_movemask_epi8(hot) == 0)
+            return r;
+        return maddWide<Sub>(acc, a, b);
     }
     template <int M>
     inline uint32_t macVal(__m128 r)
