@@ -8,7 +8,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <map>
+#include <string>
 #include <vector>
 #include <mutex>
 #include <chrono>
@@ -40,6 +42,12 @@ public:
         if (b.state.dthe) ++m_dither;
         if (b.state.pabe) ++m_pabe;
         if (b.state.scanmsk) ++m_scanmsk;
+        ++m_hist["alpha a|b|c|d lo8=" + hex(c.alpha & 0xFF) + (((c.alpha >> 4) & 3) == 2 ? " fix=" + hex((c.alpha >> 32) & 0xFF) : "") + (b.state.prim.abe ? " ABE" : " noABE")];
+        ++m_hist["test ate=" + hex(c.test & 1) + " atst=" + hex((c.test >> 1) & 7) + " aref=" + hex((c.test >> 4) & 0xFF) + " afail=" + hex((c.test >> 12) & 3) + " ztst=" + hex((c.test >> 17) & 3)];
+        ++m_hist["frame psm=" + hex(c.frame.psm) + " fbw=" + hex(c.frame.fbw) + " fbp=" + hex(c.frame.fbp) + " zpsm=" + hex(c.zbuf.psm) + " zbp=" + hex(c.zbuf.zbp) + (c.zbuf.zmask ? " ZMSK" : "")];
+        if (b.state.prim.tme)
+            ++m_hist["tex tfx=" + hex(c.tex0.tfx) + " tcc=" + hex(c.tex0.tcc) + " fst=" + hex(b.state.prim.fst) + " iip=" + hex(b.state.prim.iip) + " lin=" + hex(b.state.linearFilter) + " clamp=" + hex(c.clamp & 0xF) + " size=" + hex(b.state.textureWidth) + "x" + hex(b.state.textureHeight)];
+        if (c.frame.fbmsk) ++m_hist["fbmsk=" + hex(c.frame.fbmsk)];
         noteTarget(fbp, c.frame.fbw, c.frame.psm);
         if (!c.zbuf.zmask && ((c.test >> 16) & 1u) != 0u)
             noteTarget(c.zbuf.zbp, c.frame.fbw, static_cast<uint8_t>(c.zbuf.psm | 0x30u)); // depth, flagged
@@ -152,8 +160,23 @@ private:
         }
         return nullptr;
     }
+    static std::string hex(uint64_t v)
+    {
+        char buf[24];
+        std::snprintf(buf, sizeof(buf), "%llx", (unsigned long long)v);
+        return buf;
+    }
     void report()
     {
+        {
+            std::vector<std::pair<uint64_t, std::string>> top;
+            for (const auto &kv : m_hist)
+                top.emplace_back(kv.second, kv.first);
+            std::sort(top.rbegin(), top.rend());
+            for (size_t i = 0; i < top.size() && i < 70u; ++i)
+                std::fprintf(stderr, "[gs-inv-h] %8llu  %s\n", (unsigned long long)top[i].first, top[i].second.c_str());
+            m_hist.clear();
+        }
         std::fprintf(stderr,
                      "[gs-inv] 5s: presents=%llu draws=%llu untextured=%llu plainTex=%llu | RT-as-texture: same=%llu samePageOtherPsm=%llu reinterpret=%llu insideSame=%llu insideOther=%llu"
                      " | feedback(fbp==tbp)=%llu depthAsTex=%llu clutFromRt=%llu/%llu\n",
@@ -193,6 +216,7 @@ private:
     std::chrono::steady_clock::time_point m_last;
     std::vector<Target> m_targets;
     std::map<uint32_t, uint64_t> m_reinterpKinds, m_texPsm;
+    std::map<std::string, uint64_t> m_hist;
     uint64_t m_prim[8]{};
     uint64_t m_draws = 0, m_untextured = 0, m_plainTex = 0, m_rtSame = 0, m_rtSameFamilyOtherPsm = 0, m_rtReinterpret = 0;
     uint64_t m_rtInsideSame = 0, m_rtInsideOther = 0, m_feedback = 0, m_depthAsTex = 0, m_clutFromRt = 0, m_clutLoads = 0;
