@@ -20,6 +20,7 @@ The user wants the game **totally playable**; work continues until then. Game da
 | [game-internals.md](game-internals.md) | God of War code knowledge: boot flow, addresses, heap, loaders, 989snd/SMPD protocol, waits. |
 | [runtime-changes.md](runtime-changes.md) | Every change made to the EE runtime (ps2xRuntime) and recompiler, and why. |
 | [iop-changes.md](iop-changes.md) | Every change made to the IOP emulator (ps2xIOP), and why. |
+| [native-port.md](native-port.md) | Inventory of every emulated layer, its native replacement, measured cost and the order of work. |
 | [switch.md](switch.md) | Switch toolchain (WSL + devkitPro), Switch build changes, open Switch issues. |
 | [gemini-helper.md](gemini-helper.md) | Read-only helper agent (`agy`/Gemini) to offload log/dump analysis: when and how to call it. |
 
