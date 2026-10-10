@@ -4,6 +4,7 @@
 #include "runtime/gs/gs_cpu_backend.h"
 #include "runtime/gs/gs_gpu_backend.h"
 #include "runtime/gs/gs_shared_present.h"
+#include "gs_inventory.h"
 #include "ThreadPriority.h"
 #include "ThreadNaming.h"
 
@@ -309,17 +310,23 @@ void GSThreadedBackend::Reset()
 
 void GSThreadedBackend::Submit(const GSPrimitiveBatch &batch)
 {
+    if (GsInventory::get().enabled())
+        GsInventory::get().draw(batch);
     Enqueue(Op::Submit, &batch, sizeof(batch));
 }
 
 void GSThreadedBackend::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
 {
+    if (GsInventory::get().enabled())
+        GsInventory::get().clut(tex0);
     const LoadClutArgs args{tex0, texclut};
     Enqueue(Op::LoadClut, &args, sizeof(args));
 }
 
 void GSThreadedBackend::BeginTransfer(const GSTransferCommand &command)
 {
+    if (GsInventory::get().enabled())
+        GsInventory::get().transfer(command);
     Enqueue(Op::BeginTransfer, &command, sizeof(command));
 }
 
@@ -363,6 +370,8 @@ void GSThreadedBackend::Sync(GSSyncReason reason)
 
 PresentationFrame GSThreadedBackend::Present(const GSPresentationRequest &request)
 {
+    if (GsInventory::get().enabled())
+        GsInventory::get().present();
     if (UsesSharedPresentation() && !request.forceReadback)
     {
         Enqueue(Op::Present, &request, sizeof(request));
@@ -377,6 +386,8 @@ PresentationFrame GSThreadedBackend::Present(const GSPresentationRequest &reques
 
 bool GSThreadedBackend::ClearFramebuffer(const GSContext &context, uint32_t rgba)
 {
+    if (GsInventory::get().enabled())
+        GsInventory::get().clear();
     bool result = false;
     RunOnWorker([&] { result = m_inner->ClearFramebuffer(context, rgba); });
     return result;
@@ -384,6 +395,8 @@ bool GSThreadedBackend::ClearFramebuffer(const GSContext &context, uint32_t rgba
 
 uint32_t GSThreadedBackend::ConsumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes)
 {
+    if (GsInventory::get().enabled())
+        GsInventory::get().consumeL2H();
     uint32_t result = 0u;
     RunOnWorker([&] { result = m_inner->ConsumeLocalToHostBytes(dst, maxBytes); });
     return result;
@@ -391,6 +404,8 @@ uint32_t GSThreadedBackend::ConsumeLocalToHostBytes(uint8_t *dst, uint32_t maxBy
 
 uint32_t GSThreadedBackend::ReadVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y) const
 {
+    if (GsInventory::get().enabled())
+        GsInventory::get().cpuRead();
     uint32_t result = 0u;
     RunOnWorker([&] { result = m_inner->ReadVram(psm, base, bw, x, y); });
     return result;
@@ -398,12 +413,16 @@ uint32_t GSThreadedBackend::ReadVram(uint32_t psm, uint32_t base, uint32_t bw, u
 
 void GSThreadedBackend::WriteVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y, uint32_t value)
 {
+    if (GsInventory::get().enabled())
+        GsInventory::get().cpuWrite();
     const WriteVramArgs args{psm, base, bw, x, y, value};
     Enqueue(Op::WriteVram, &args, sizeof(args));
 }
 
 void GSThreadedBackend::SnapshotVram(std::vector<uint8_t> &out) const
 {
+    if (GsInventory::get().enabled())
+        GsInventory::get().snapshot();
     RunOnWorker([&] { m_inner->SnapshotVram(out); });
 }
 
