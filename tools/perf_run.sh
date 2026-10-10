@@ -13,7 +13,7 @@ case "$1" in [0-9]*) prof_at=$1; prof_len=$2; shift 2;; esac
 cd "$EXE_DIR"
 rm -f gow_pad_test_*.ppm
 cp "$ROOT/ref/saves/Mcd002.ps2" "$ROOT/disc-usa/Mcd001.ps2"  # fresh copy of the user's card each run
-env PS2X_GS_GPU=1 GOW_PERF_DIAG=1 GOW_PERF_FRAME_PC=0x001837B8 GOW_FAST_BOOT=1 GOW_PAD_TEST=1 GOW_SKIP_FMV=1 \
+env GOW_PERF_DIAG=1 GOW_PERF_FRAME_PC=0x001837B8 GOW_FAST_BOOT=1 GOW_PAD_TEST=1 GOW_SKIP_FMV=1 \
     GOW_ISO="$ROOT/iso-usa/God of War (USA).iso" GOW_MC0="$ROOT/disc-usa/Mcd001.ps2" \
     GOW_PAD_GUION="${GOW_PAD_GUION:-5:start,16:abajo,24:x,105:x,125:x,145:x,175:x,205:x}" "$@" \
     ./ps2EntryRunner.exe "$ROOT/disc-usa/SCUS_973.99" > "$ROOT/port/$name.log" 2>&1 &

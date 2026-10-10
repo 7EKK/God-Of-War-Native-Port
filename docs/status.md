@@ -610,10 +610,17 @@ set/weights (same 43 controllers of the player animator 0x74ED74 at identical ad
 - Native GS on all zones (port/zones_hw5): Olympus 39, slot 2 55, slot 4 37, **Cliffs 10 fps** (blocks GS_HW default).
 - fps measurements: close other emulators/the game first (a forgotten PCSX2 instance halved several runs).
 
-## RESUME POINT (2026-10-10, end of session)
-State: native VU1 (done, verified) + native GS renderer (`PS2X_GS_HW=1`, opt-in, Olympus correct at 1x-3x incl. mask passes and HUD, ~40 fps; ext 99afa2d).
-Open, in order: (1) Cliffs 10 fps on the native GS, then make it the default and drop the bicubic upscale at
-internal >= window; (3) SPU2 / SIO2 / CDVD hardware models -> native services (IRX code is already native); (4) EE speed; (5) LAST: read extracted game files
+## 2026-10-11: native GS is the only renderer (ext c122cad)
+- The VRAM-emulating GPU rasteriser is deleted; `PS2X_GS_HW` / `PS2X_GS_GPU` no longer exist. Internal scale `PS2X_GS_HW_SCALE`
+  (default 2).
+- Paletted textures: index texture (R8, per upload) + palette texture (per CLUT), lookup/filter in the shader; replaces the
+  per-texel CPU decode per texture x palette (cause of the hitches when enemies load: Cliffs had 1500 live textures, now ~180).
+- Present: the two read circuits are composed on the GPU (was 2 full readbacks + CPU blend per frame).
+- Zones at scale 2 (port/native2): Olympus 37 fps, Cliffs 30-39 fps.
+
+## RESUME POINT (2026-10-11)
+State: native EE (recompiled), VU1 (compiled), IOP IRX code (compiled), GS (native renderer, only one; ext c122cad).
+Open, in order: (1) GS: native texture store instead of the GSCpuBackend byte store, drop the bicubic upscale at internal >= window; (2) SPU2 / SIO2 / CDVD hardware models -> native services (IRX code is already native); (4) EE speed; (5) LAST: read extracted game files
 instead of the ISO. Port KIexster's game-speed meter (ps2recomp-game-speed.patch, GOW_DELTA_DIAG=1) before quoting fps again.
 Debug env for the GS renderer: see the "night 2" section (GOW_GS_HW_STATS/_DUMP/_DUMPAT/_RTDUMPAT/_ONLY/_NODEPTH...).
-Run: `set PS2X_GS_HW=1 & set PS2X_GS_HW_SCALE=3 & python -I tools/zones.py --slots 1`.
+Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`).

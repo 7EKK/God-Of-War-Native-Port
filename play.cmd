@@ -10,7 +10,6 @@ if not exist "%EXE_DIR%\ps2EntryRunner.exe" (echo Runner not built: %EXE_DIR% & 
 if not exist "%ROOT%disc-usa\play.mcd" (
   if exist "%ROOT%ref\saves\Mcd002.ps2" (copy /y "%ROOT%ref\saves\Mcd002.ps2" "%ROOT%disc-usa\play.mcd" >nul) else (echo No memory card found; the game will create one.)
 )
-set PS2X_GS_GPU=1
 set PS2X_GS_WORKER=1
 set GOW_GS_FINISH_ASINCRONO=1
 set GOW_SKIP_FMV=1

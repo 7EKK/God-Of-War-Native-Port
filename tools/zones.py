@@ -32,7 +32,7 @@ ELF = os.path.join(ROOT, 'disc-usa', 'SCUS_973.99')
 DEFAULT_CARD = os.path.join(ROOT, 'ref', 'saves', 'Mcd002.ps2')
 
 PLAY_ENV = {
-    'PS2X_GS_GPU': '1', 'PS2X_GS_WORKER': '1', 'GOW_GS_FINISH_ASINCRONO': '1', 'GOW_SKIP_FMV': '1',
+    'PS2X_GS_WORKER': '1', 'GOW_GS_FINISH_ASINCRONO': '1', 'GOW_SKIP_FMV': '1',
     'GOW_PAD_TEST': '1', 'GOW_PERF_DIAG': '1', 'GOW_PERF_FRAME_PC': '0x001837B8', 'GOW_FAST_BOOT': '1',
 }
 ERROR_PATTERNS = [
