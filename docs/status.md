@@ -597,12 +597,14 @@ set/weights (same 43 controllers of the player animator 0x74ED74 at identical ad
 - Verified: Olympus 40 fps (scale 1), 0 skipped batches, Kratos/flames/HUD/light shaft present (port/ui5).
 - PCSX2 reference driving: docs/diagnostics.md "PCSX2 driven automatically"; the old CPU GS backend (no PS2X_GS_HW) is also a
   correct oracle for the menu.
-- Open: main menu Kratos face darker than PCSX2/old backend (one pass still off); Kratos sometimes yellow/green tinted in gameplay
+- Menu fixed (ext 99afa2d): STQ texturing divided by |Q| (the menu Kratos has negative Q -> face texture rotated 180 degrees);
+  Present now merges both CRTC read circuits like the hardware (menu "Soften": two circuits 1 px apart, ALP 0x80).
+- Open: Kratos sometimes yellow/green tinted in gameplay
   (also in the 19:44 baseline); fps of the zone run varied 21-40 between runs (CPU-bound EE/VU windows, re-measure).
 
 ## RESUME POINT (2026-10-10, end of session)
-State: native VU1 (done, verified) + native GS renderer (`PS2X_GS_HW=1`, opt-in, Olympus correct at 1x-3x incl. mask passes and HUD, ~40 fps; ext 2509d00).
-Open, in order: (1) menu Kratos face lighting (see night 4); (2) re-run all 4 zones with PS2X_GS_HW=1 (Cliffs was 11 fps), then make it the default and drop the bicubic upscale at
+State: native VU1 (done, verified) + native GS renderer (`PS2X_GS_HW=1`, opt-in, Olympus correct at 1x-3x incl. mask passes and HUD, ~40 fps; ext 99afa2d).
+Open, in order: (1) re-run all 4 zones with PS2X_GS_HW=1 (Cliffs was 11 fps), then make it the default and drop the bicubic upscale at
 internal >= window; (3) IOP / SPU2 / CDVD native replacement (no emulation rule); (4) EE speed; (5) LAST: read extracted game files
 instead of the ISO. Port KIexster's game-speed meter (ps2recomp-game-speed.patch, GOW_DELTA_DIAG=1) before quoting fps again.
 Debug env for the GS renderer: see the "night 2" section (GOW_GS_HW_STATS/_DUMP/_DUMPAT/_RTDUMPAT/_ONLY/_NODEPTH...).
