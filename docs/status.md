@@ -489,3 +489,22 @@ set/weights (same 43 controllers of the player animator 0x74ED74 at identical ad
   (pmulth is the only MMI multiply in the ELF: 4 sites, 3 functions). Verify any other MMI op the same way if new symptoms appear.
 - Tools added this session (all env-gated): GOW_SKEL_DUMP/GOW_SKEL_OBJECT, GOW_DMA_BLOCKDUMP, GOW_VIF_MATDUMP, GOW_CTRL_DIAG,
   GOW_BLEND_DIAG, GOW_HEAP_ZERO, PS2X_EE_DIFF_EVERY, PS2X_EE_DIFF_LINES, PS2X_EE_WATCH_FROM, VU0 control-state compare in eediff.
+
+## Checks 2026-10-10 (after the PMULTH fix): MMI, fps, 16:9, internal resolution
+- **MMI audit**: all 41 distinct MMI/HI1/LO1 ops present in the USA ELF (pcpyld 1124, ppacw 566, por 380, prot3w 268, pexew 150,
+  pextlw 104, paddh, plzcw, pand, psrlh, pceqw, ppach, qfsrv, pextlb, pnor, madd, padduw, psraw, pcpyud, mult1, pextub, pminh,
+  pmaxh, psubw, psubb, paddw, ppacb, pcgth, psrah, psllh, mthi1/mtlo1/mfhi1/mflo1, pextuw, pcpyh, pxor, pextlh, psllw, div1,
+  multu1, pmulth) were reviewed against PCSX2 MMI.cpp (macros + generated lines): all correct except PMULTH (fixed).
+  Full `PS2X_EE_DIFF=all` run during the walk (7269 compared calls, uncapped lines): no non-ULP memory difference outside
+  stack garbage, rand-dependent functions (rand stubbed) and VU0 Q-precision noise. qfsrv uses SA in bits consistently
+  (MTSAB/MTSAH/MTSA store bits). Unused but still approximate in the generator: PMADDH/PHMADH/PMSUBH/PHMSBH/PMULTW/PMADDW/PMSUBW
+  (not in this ELF; fix before porting another title).
+- **FPS** (play config PS2X_GS_GPU=1 PS2X_GS_WORKER=1 GOW_GS_FINISH_ASINCRONO=1 GOW_WIDESCREEN=1, desert walk, port/fps1.log):
+  guest_flip_hz 42.6-43.0 game fps, host 60 Hz; floor of 25 OK.
+- **16:9**: GOW_WIDESCREEN=1 → 1920x1080 window, picture fills the whole window with the pnach's widened projection, no bars,
+  Kratos correct (port/win1_window.png).
+- **Internal resolution does NOT match the window**: GS framebuffer/VRAM emulation is native 512x448 (captures
+  gow_pad_test_*.png are 512x448); the host upscales to 1920x1080 with a bilinear filter → soft image. True internal
+  upscaling needs a PCSX2-style HW renderer (render targets + texture cache, because the GS emulation is VRAM-faithful,
+  incl. framebuffer feedback/channel-shuffle passes); not a flag. Cheap interim option: sharper present filter
+  (sharp-bilinear/Lanczos/CAS) in gs_host_present.cpp.
