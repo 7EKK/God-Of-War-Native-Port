@@ -79,6 +79,15 @@ uniform vec2 uTexDim;    // TEX0 TW/TH: size STQ coordinates are scaled by
 // math on the GPU, no memory image.
 uniform int uReinterp;
 uniform int uDate, uDatm;   // destination alpha test (reads the target itself)
+// GS blend done in the shader (reads the target): destination-alpha factor (Ad, 0x80 = 1.0) and COLCLAMP=0 wrap-around,
+// which fixed-function blending cannot express. uAbcd = ALPHA A, B, C, D selectors.
+uniform int uSwBlend, uColClamp;
+uniform ivec4 uAbcd;
+uniform float uFix;
+// Z buffer in the colour memory of the target itself (ZBP == FBP): the test reads the Z word from the target's colour,
+// a passing write stores the Z word there. 0 = off, else 1 + ZTST.
+uniform int uZAlias, uZAliasWrite;
+uniform float uZAliasMax;
 uniform sampler2D uDest;
 uniform int uZTex;     // 16/24/32: sampling a depth buffer (Z16/Z24/Z32 texture)
 uniform float uZMax;
@@ -162,8 +171,19 @@ bool alphaPasses(float a)
     }
 }
 
+vec3 blendSel(int sel, vec3 cs, vec3 cd) { return sel == 0 ? cs : sel == 1 ? cd : vec3(0.0); }
+
 void main()
 {
+    uint zFrag = uint(clamp(gl_FragCoord.z, 0.0, 1.0) * uZAliasMax + 0.5);
+    if (uZAlias != 0)
+    {
+        vec4 d = floor(texelFetch(uDest, ivec2(gl_FragCoord.xy), 0) * 255.0 + 0.5);
+        uint zd = uint(d.r) | (uint(d.g) << 8) | (uint(d.b) << 16);
+        int ztst = uZAlias - 1;
+        bool pass = ztst == 1 || (ztst == 2 && zFrag >= zd) || (ztst == 3 && zFrag > zd);
+        if (!pass) discard;
+    }
     if (uDate != 0)
     {
         bool bit = texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5;
@@ -229,34 +249,72 @@ void main()
         if (uPass == 1 && !pass) discard;
         if (uPass == 2 && pass) discard;
     }
+    if (uSwBlend != 0)
+    {
+        vec4 d = floor(texelFetch(uDest, ivec2(gl_FragCoord.xy), 0) * 255.0 + 0.5);
+        vec3 cs = floor(rgb);
+        float c = uAbcd.z == 0 ? a : uAbcd.z == 1 ? d.a : uFix;
+        vec3 r = floor((blendSel(uAbcd.x, cs, d.rgb) - blendSel(uAbcd.y, cs, d.rgb)) * c / 128.0) + blendSel(uAbcd.w, cs, d.rgb);
+        rgb = (uColClamp != 0) ? clamp(r, 0.0, 255.0) : r - 256.0 * floor(r / 256.0);
+    }
+    if (uZAlias != 0 && uZAliasWrite != 0)
+        rgb = vec3(float(zFrag & 255u), float((zFrag >> 8) & 255u), float((zFrag >> 16) & 255u));
     oColor = vec4(rgb / 255.0, a / 255.0);
     float f = min(a * uBlendScale, 1.0);
     oBlend = vec4(f);
 }
 )";
 
-    // Colour -> depth: the game draws "colour" into the memory its Z buffer uses (a CT24 target at the Z buffer's base) to write
-    // depth values; the written colour words are the Z words. Resolved into the depth attachment of the target that uses them.
-    const char *kResolveVs = R"(#version 430 core
-out vec2 vUv;
+    // Channel shuffle: the game moves bytes between the colour channels of a 32 bit target (or out of the Z buffer) by drawing
+    // 8 px sprites through a 16 bit view of that memory. In a 16 bit view, the two 8 px halves of each 16 px column group are
+    // the low and high halfwords of the same 8 owner pixels, so every such sprite is a halfword move between owner pixels:
+    // one quad per 8x8 owner block, source = owner pixel of the texel (+ offset), halfword selected by uHs / uHd. The written
+    // bytes are chosen by the colour mask (FBMSK). The alpha bit goes through TEXA (uTexa), the colour bits are copied.
+    const char *kShuffleVs = R"(#version 430 core
+layout(location = 0) in vec2 aPos;   // destination owner pixel (PS2 px)
+layout(location = 1) in vec2 aOff;   // source owner pixel - destination owner pixel
+uniform vec2 uInvSize;
+flat out vec2 vOff;
 void main()
 {
-    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
-    vUv = p;
-    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+    gl_Position = vec4(aPos * uInvSize * 2.0 - 1.0, 0.0, 1.0);
+    vOff = aOff;
 }
 )";
-    const char *kResolveFs = R"(#version 430 core
-in vec2 vUv;
+    const char *kShuffleFs = R"(#version 430 core
+flat in vec2 vOff;
+out vec4 oColor;
 uniform sampler2D uSrc;
-uniform float uDiv;
+uniform int uSrcZ;     // source is a depth buffer (Z words)
+uniform float uZMax;
+uniform int uHs, uHd;  // source / destination halfword (0 low = R,G; 1 high = B,A)
+uniform float uScale;
+uniform ivec4 uTexa;   // TA0 >> 7, TA1 >> 7, AEM: what the 16 bit texel's alpha bit becomes after expansion and re-packing
 void main()
 {
-    vec4 c = floor(texture(uSrc, vUv) * 255.0 + 0.5);
-    float z = c.r + c.g * 256.0 + c.b * 65536.0;
-    gl_FragDepth = clamp(z / uDiv, 0.0, 1.0);
+    ivec2 p = ivec2(gl_FragCoord.xy) + ivec2(round(vOff * uScale));
+    vec4 c;
+    if (uSrcZ != 0)
+    {
+        uint z = uint(clamp(texelFetch(uSrc, p, 0).r, 0.0, 1.0) * uZMax + 0.5);
+        c = vec4(float(z & 255u), float((z >> 8) & 255u), float((z >> 16) & 255u), float(z >> 24)) / 255.0;
+    }
+    else
+        c = texelFetch(uSrc, p, 0);
+    vec2 h = (uHs == 0) ? c.rg : c.ba;
+    uint v = uint(h.x * 255.0 + 0.5) | (uint(h.y * 255.0 + 0.5) << 8);
+    uint rgb = v & 0x7FFFu;
+    uint a = (uTexa.z != 0 && rgb == 0u) ? 0u : uint((v & 0x8000u) != 0u ? uTexa.y : uTexa.x);
+    v = rgb | (a << 15);
+    h = vec2(float(v & 255u), float(v >> 8)) / 255.0;
+    oColor = (uHd == 0) ? vec4(h, 0.0, 0.0) : vec4(0.0, 0.0, h);
 }
 )";
+
+    struct ShuffleVertex
+    {
+        float x, y, ox, oy;
+    };
 
     // GS vertex as sent to the GPU.
     struct HwVertex
@@ -285,7 +343,7 @@ void main()
         uint32_t pxW = 0, pxH = 0; // size in PS2 pixels
         uint32_t glW = 0, glH = 0;
         bool depthCleared = false;
-        uint64_t version = 1, syncedVersion = 0, lastDrawSeq = 0, depthResolvedVersion = 0;
+        uint64_t version = 1, syncedVersion = 0, lastDrawSeq = 0;
         uint32_t usedW = 0, usedH = 0; // PS2 pixels touched by draws (scissor extents)
     };
 
@@ -321,9 +379,20 @@ struct GSHwBackend::Impl
     GLint locInvSize = -1, locTex = -1, locTexSize = -1, locTexDim = -1, locTme = -1, locFst = -1, locTfx = -1, locTcc = -1, locIip = -1,
           locAte = -1, locAtst = -1, locAref = -1, locPass = -1, locBlendScale = -1, locRtTex24 = -1, locTa0 = -1, locTa1 = -1, locReinterp = -1, locDate = -1, locDatm = -1, locDest = -1, locZTex = -1, locZMax = -1, locTables = -1, locRtColor = -1, locPalette = -1, locTexFmt = -1, locTexFmt2 = -1,
           locRtFmt = -1, locRtFmt2 = -1, locTex0 = -1, locRtPx = -1, locAem = -1;
+    GLint locSwBlend = -1, locColClamp = -1, locAbcd = -1, locFix = -1, locZAlias = -1, locZAliasWrite = -1, locZAliasMax = -1;
 
-    GLuint tableTex = 0, paletteTex = 0, resolveProgram = 0, resolveVao = 0;
-    GLint locResolveSrc = -1, locResolveDiv = -1;
+    GLuint tableTex = 0, paletteTex = 0;
+    GLuint shuffleProgram = 0, shuffleVao = 0, shuffleVbo = 0;
+    GLint locShTexa = -1;
+    GLint locShInvSize = -1, locShSrc = -1, locShSrcZ = -1, locShZMax = -1, locShHs = -1, locShHd = -1, locShScale = -1;
+    // queued shuffle sprites of one state, as owner-space quads per (source half, destination half)
+    std::vector<ShuffleVertex> shuffleQuads[4];
+    GSDrawState shuffleState{};
+    bool haveShuffle = false;
+    int shuffleWhy = 0; // debug: which tryShuffle check rejected the last sprite
+    RenderTarget *shuffleDst = nullptr, *shuffleSrc = nullptr;
+    bool shuffleSrcZ = false;
+    std::unordered_map<uint32_t, std::vector<uint16_t>> ownerInverse; // psm -> in-page word index -> y * 64 + x
     std::unordered_map<const uint16_t *, uint32_t> tableOffset;
     std::unordered_map<uint32_t, uint32_t> inverseOffset; // psm -> offset of the inverse page table
     std::vector<HwVertex> pending;
@@ -340,6 +409,7 @@ struct GSHwBackend::Impl
 
     struct Stats
     {
+        uint64_t shuffles = 0;
         uint64_t draws = 0, batches = 0, skippedPsm = 0, unsupportedBlend = 0, texDecodes = 0, texHits = 0, skippedPrim = 0;
         std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
     } stats;
@@ -409,6 +479,8 @@ struct GSHwBackend::Impl
         locReinterp = loc("uReinterp"); locDate = loc("uDate"); locDatm = loc("uDatm"); locDest = loc("uDest"); locZTex = loc("uZTex"); locZMax = loc("uZMax"); locTables = loc("uTables"); locRtColor = loc("uRtColor"); locPalette = loc("uPalette");
         locTexFmt = loc("uTexFmt"); locTexFmt2 = loc("uTexFmt2"); locRtFmt = loc("uRtFmt"); locRtFmt2 = loc("uRtFmt2");
         locTex0 = loc("uTex0"); locRtPx = loc("uRtPx");
+        locSwBlend = loc("uSwBlend"); locColClamp = loc("uColClamp"); locAbcd = loc("uAbcd"); locFix = loc("uFix");
+        locZAlias = loc("uZAlias"); locZAliasWrite = loc("uZAliasWrite"); locZAliasMax = loc("uZAliasMax");
         locRtTex24 = loc("uRtTex24"); locTa0 = loc("uTa0"); locTa1 = loc("uTa1"); locAem = loc("uAem");
 
         g.GenVertexArrays(1, &vao);
@@ -425,16 +497,26 @@ struct GSHwBackend::Impl
             g.EnableVertexAttribArray(i);
         buildTables();
         {
-            const GLuint rv = compile(GSGL::kVertexShader, kResolveVs), rf = compile(GSGL::kFragmentShader, kResolveFs);
-            if (rv && rf)
+            const GLuint sv = compile(GSGL::kVertexShader, kShuffleVs), sfs = compile(GSGL::kFragmentShader, kShuffleFs);
+            if (sv && sfs)
             {
-                resolveProgram = g.CreateProgram();
-                g.AttachShader(resolveProgram, rv);
-                g.AttachShader(resolveProgram, rf);
-                g.LinkProgram(resolveProgram);
-                locResolveSrc = g.GetUniformLocation(resolveProgram, "uSrc");
-                locResolveDiv = g.GetUniformLocation(resolveProgram, "uDiv");
-                g.GenVertexArrays(1, &resolveVao);
+                shuffleProgram = g.CreateProgram();
+                g.AttachShader(shuffleProgram, sv);
+                g.AttachShader(shuffleProgram, sfs);
+                g.LinkProgram(shuffleProgram);
+                const auto sloc = [&](const char *name) { return g.GetUniformLocation(shuffleProgram, name); };
+                locShInvSize = sloc("uInvSize"); locShSrc = sloc("uSrc"); locShSrcZ = sloc("uSrcZ"); locShZMax = sloc("uZMax");
+                locShHs = sloc("uHs"); locShHd = sloc("uHd"); locShScale = sloc("uScale"); locShTexa = sloc("uTexa");
+                g.GenVertexArrays(1, &shuffleVao);
+                g.BindVertexArray(shuffleVao);
+                g.GenBuffers(1, &shuffleVbo);
+                g.BindBuffer(kArrayBuffer, shuffleVbo);
+                g.VertexAttribPointer(0, 2, kFloat, kFalse, sizeof(ShuffleVertex), reinterpret_cast<const void *>(offsetof(ShuffleVertex, x)));
+                g.VertexAttribPointer(1, 2, kFloat, kFalse, sizeof(ShuffleVertex), reinterpret_cast<const void *>(offsetof(ShuffleVertex, ox)));
+                g.EnableVertexAttribArray(0);
+                g.EnableVertexAttribArray(1);
+                g.BindVertexArray(vao);
+                g.BindBuffer(kArrayBuffer, vbo);
             }
         }
         if (const char *s = std::getenv("PS2X_GS_HW_SCALE"))
@@ -709,11 +791,14 @@ struct GSHwBackend::Impl
     }
 
     // The render target whose memory range holds the texture's first block (and was not overwritten by an upload since).
-    RenderTarget *findReinterpretSource(uint32_t tbp)
+    // Formats that live only in bits 24-31 (T8H, T4HL, T4HH) are never written by a 24 bit target (CT24 colour, Z24): the
+    // game keeps uploaded textures there, so such a target is not their source.
+    RenderTarget *findReinterpretSource(uint32_t tbp, uint8_t tpsm)
     {
+        const bool highByte = tpsm == GS_PSM_T8H || tpsm == GS_PSM_T4HL || tpsm == GS_PSM_T4HH;
         for (RenderTarget &t : targets)
         {
-            if (t.usedW == 0u)
+            if (t.usedW == 0u || (highByte && t.psm == GS_PSM_CT24))
                 continue;
             const uint32_t tlo = t.fbp * 32u, thi = tlo + spanBlocks(t.psm, t.fbw, t.usedH);
             if (tbp < tlo || tbp >= thi)
@@ -775,37 +860,6 @@ struct GSHwBackend::Impl
         g.Uniform2f(locRtPx, static_cast<float>(rt.pxW), static_cast<float>(rt.pxH));
     }
 
-    void resolveColorToDepth(RenderTarget &src, RenderTarget &dst)
-    {
-        if (!resolveProgram || !dst.depth || src.usedW == 0u)
-            return;
-        const Api &g = gl();
-        g.BindFramebuffer(kFramebuffer, dst.fbo);
-        g.Viewport(0, 0, dst.glW, dst.glH);
-        g.Enable(kScissorTest);
-        g.Scissor(0, 0, static_cast<GLsizei>(std::ceil(src.usedW * scale)), static_cast<GLsizei>(std::ceil(src.usedH * scale)));
-        g.Disable(kBlend);
-        g.ColorMask(kFalse, kFalse, kFalse, kFalse);
-        g.Enable(kDepthTest);
-        g.DepthFunc(kAlways);
-        g.DepthMask(kTrue);
-        g.UseProgram(resolveProgram);
-        g.ActiveTexture(kTexture0);
-        g.BindTexture(kTexture2D, src.color);
-        g.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
-        g.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
-        g.Uniform1i(locResolveSrc, 0);
-        g.Uniform1f(locResolveDiv, 16777215.0f);
-        g.BindVertexArray(resolveVao);
-        g.DrawArrays(kTriangles, 0, 3);
-        g.TexParameteri(kTexture2D, kTextureMinFilter, kLinear);
-        g.TexParameteri(kTexture2D, kTextureMagFilter, kLinear);
-        g.Disable(kScissorTest);
-        g.ColorMask(kTrue, kTrue, kTrue, kTrue);
-        g.BindVertexArray(vao);
-        src.depthResolvedVersion = src.version;
-    }
-
     // ---- drawing --------------------------------------------------------------------------------------------------
     static bool sameState(const GSDrawState &a, const GSDrawState &b)
     {
@@ -843,6 +897,242 @@ struct GSHwBackend::Impl
         }
     }
 
+    // ---- channel shuffles (see kShuffleFs) -------------------------------------------------------------------------
+    const std::vector<uint16_t> &inverseFor(uint32_t ownerPsm)
+    {
+        std::vector<uint16_t> &inv = ownerInverse[ownerPsm];
+        if (inv.empty())
+        {
+            const GSSwizzle::Format &f = GSSwizzle::GetFormat(ownerPsm);
+            inv.assign(2048u, 0);
+            for (uint32_t e = 0; e < 2048u; ++e)
+                inv[f.table[e]] = static_cast<uint16_t>(e);
+        }
+        return inv;
+    }
+
+    // pixel (x, y) of a 16 bit view (psm/base/bw) -> pixel and halfword of the 32 bit owner laid out as ownerPsm at fbp/fbw
+    bool viewToOwner(uint32_t viewPsm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y, uint32_t ownerPsm, uint32_t fbp, uint32_t fbw,
+                     uint32_t &ox, uint32_t &oy, uint32_t &half)
+    {
+        const uint32_t byte = GSSwizzle::Locate(GSSwizzle::GetFormat(viewPsm), base, bw, x, y).byte;
+        const uint32_t word = byte >> 2, first = fbp * 2048u;
+        if (word < first)
+            return false;
+        const uint32_t rel = word - first, page = rel >> 11u, e = inverseFor(ownerPsm)[rel & 2047u];
+        half = (byte >> 1) & 1u;
+        ox = (page % fbw) * 64u + (e & 63u);
+        oy = (page / fbw) * 32u + (e >> 6u);
+        return true;
+    }
+
+    // an 8x8 unit of the view at (x, y) -> an 8x8 owner block at (ox, oy), one halfword (checked at the far corner)
+    bool unitToOwner(uint32_t viewPsm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y, uint32_t ownerPsm, uint32_t fbp, uint32_t fbw,
+                     uint32_t &ox, uint32_t &oy, uint32_t &half)
+    {
+        uint32_t ex, ey, eh;
+        return viewToOwner(viewPsm, base, bw, x, y, ownerPsm, fbp, fbw, ox, oy, half) &&
+               viewToOwner(viewPsm, base, bw, x + 7u, y + 7u, ownerPsm, fbp, fbw, ex, ey, eh) && eh == half && ex == ox + 7u && ey == oy + 7u;
+    }
+
+    static uint32_t fbmsk16(uint32_t m)
+    {
+        return ((m >> 3) & 0x1Fu) | ((m >> 6) & 0x3E0u) | ((m >> 9) & 0x7C00u) | ((m >> 16) & 0x8000u);
+    }
+
+    // a sprite drawn through a 16 bit view of a 32 bit target, textured from a 16 bit view of a 32 bit target or a Z buffer,
+    // 8 px aligned, copying texels 1:1: queued as a channel shuffle. False = not that shape (the caller decides).
+    bool tryShuffle(const GSDrawState &s, const GSPrimitiveBatch &b)
+    {
+        const GSContext &c = s.context;
+        const uint8_t tpsm = c.tex0.psm;
+        const bool zTex = tpsm == 0x32 || tpsm == 0x3A;
+        if (s.prim.type != GS_PRIM_SPRITE || !s.prim.tme || !s.prim.fst || s.prim.abe || !(family16(tpsm) || zTex))
+            { shuffleWhy = 1; return false; }
+        if ((c.test & 1u) != 0u && ((c.test >> 1) & 7u) != 1u) // alpha test other than ALWAYS
+            { shuffleWhy = 2; return false; }
+        if (((c.test >> 14) & 1u) != 0u) // DATE
+            { shuffleWhy = 3; return false; }
+        {
+            // the texture function must pass the texel through: decal, or modulate by 128
+            const GSVertex &v = b.vertices[1];
+            const bool identity = c.tex0.tfx == 1 || (c.tex0.tfx == 0 && v.r == 128 && v.g == 128 && v.b == 128 && (!c.tex0.tcc || v.a == 128));
+            if (!identity)
+                { shuffleWhy = 4; return false; }
+        }
+        // each byte of the halfword must be fully written or fully kept
+        const uint32_t m16 = fbmsk16(c.frame.fbmsk);
+        const uint32_t lowByte = m16 & 0xFFu, highByte = m16 & 0xFF00u;
+        if ((lowByte != 0u && lowByte != 0xFFu) || (highByte != 0u && highByte != 0xFF00u) || m16 == 0xFFFFu)
+            { shuffleWhy = 5; return false; }
+        // destination owner: an existing 32 bit target at FBP, or a new one
+        RenderTarget *dst = findTarget(c.frame.fbp);
+        if (dst && family16(dst->psm) && dst->usedW != 0u)
+            { shuffleWhy = 6; return false; }
+        // source owner
+        if ((c.tex0.tbp0 % 32u) != 0u)
+            { shuffleWhy = 7; return false; }
+        // a Z16 view reads a Z buffer, or a colour target laid out as Z (the address mapping covers both)
+        RenderTarget *src = nullptr;
+        bool srcDepth = false;
+        if (zTex)
+            for (RenderTarget &t : targets)
+                if (t.depth && t.zbp == c.tex0.tbp0 / 32u && t.fbp != t.zbp)
+                {
+                    src = &t;
+                    srcDepth = true;
+                }
+        if (!src)
+            if (RenderTarget *t = findTarget(c.tex0.tbp0 / 32u))
+                if (!family16(t->psm) && t->usedW != 0u)
+                    src = t;
+        if (!src)
+            { shuffleWhy = 8; return false; }
+        // geometry: integer, 8 px aligned rectangle, texels 1:1 at an 8 px aligned offset
+        const GSVertex &a = b.vertices[0], &e = b.vertices[1];
+        const float ofx = c.xyoffset.ofx / 16.0f, ofy = c.xyoffset.ofy / 16.0f;
+        const float fx0 = std::min(a.x, e.x) - ofx, fx1 = std::max(a.x, e.x) - ofx, fy0 = std::min(a.y, e.y) - ofy, fy1 = std::max(a.y, e.y) - ofy;
+        const auto whole = [](float v) { return std::fabs(v - std::round(v)) < 1e-3f && v >= 0.0f; };
+        if (!whole(fx0) || !whole(fx1) || !whole(fy0) || !whole(fy1))
+            { shuffleWhy = 9; return false; }
+        const int x0 = static_cast<int>(std::lround(fx0)), x1 = static_cast<int>(std::lround(fx1));
+        const int y0 = static_cast<int>(std::lround(fy0)), y1 = static_cast<int>(std::lround(fy1));
+        const GSVertex &left = (a.x <= e.x) ? a : e;
+        const GSVertex &top = (a.y <= e.y) ? a : e;
+        const int du = static_cast<int>(std::floor(left.u / 16.0f)) - x0, dv = static_cast<int>(std::floor(top.v / 16.0f)) - y0;
+        const int uSpan = static_cast<int>(std::lround(std::fabs(static_cast<float>(a.u) - static_cast<float>(e.u)) / 16.0f));
+        const int vSpan = static_cast<int>(std::lround(std::fabs(static_cast<float>(a.v) - static_cast<float>(e.v)) / 16.0f));
+        if (((x0 | x1 | y0 | y1 | du | dv) & 7) != 0 || x1 <= x0 || y1 <= y0 || uSpan != x1 - x0 || vSpan != y1 - y0)
+            { shuffleWhy = 10; return false; }
+        if (x0 + du < 0 || y0 + dv < 0 || x0 < static_cast<int>(c.scissor.x0) || y0 < static_cast<int>(c.scissor.y0) ||
+            x1 - 1 > static_cast<int>(c.scissor.x1) || y1 - 1 > static_cast<int>(c.scissor.y1))
+            { shuffleWhy = 11; return false; }
+        if (!dst)
+        {
+            // creating a target may move the others: nothing queued may point at them, src is found again
+            flushShuffle();
+            const size_t srcIndex = static_cast<size_t>(src - targets.data());
+            dst = &target(c.frame.fbp, c.frame.fbw);
+            src = &targets[srcIndex];
+        }
+        // map every 8x8 unit; the whole sprite is rejected if any unit does not land on one owner block
+        const uint32_t srcOwnerPsm = srcDepth ? 0x30u : 0x00u, srcFbp = srcDepth ? src->zbp : src->fbp;
+        std::vector<ShuffleVertex> quads[4];
+        uint32_t maxX = 0, maxY = 0;
+        for (int y = y0; y < y1; y += 8)
+            for (int x = x0; x < x1; x += 8)
+            {
+                uint32_t dx, dy, hd, sx, sy, hs;
+                if (!unitToOwner(c.frame.psm, c.frame.fbp * 32u, c.frame.fbw, x, y, 0x00u, dst->fbp, dst->fbw, dx, dy, hd) ||
+                    !unitToOwner(tpsm, c.tex0.tbp0, c.tex0.tbw, x + du, y + dv, srcOwnerPsm, srcFbp, src->fbw, sx, sy, hs))
+                    { shuffleWhy = 12; return false; }
+                if (dx + 8u > dst->pxW || dy + 8u > dst->pxH || sx + 8u > src->pxW || sy + 8u > src->pxH)
+                    { shuffleWhy = 13; return false; }
+                if (src == dst && !srcDepth && (sx != dx || sy != dy))
+                    { shuffleWhy = 14; return false; } // would read texels that other quads of the pass write
+                const float ox = static_cast<float>(sx) - static_cast<float>(dx), oy = static_cast<float>(sy) - static_cast<float>(dy);
+                const float X0 = static_cast<float>(dx), Y0 = static_cast<float>(dy), X1 = X0 + 8.0f, Y1 = Y0 + 8.0f;
+                std::vector<ShuffleVertex> &q = quads[hs * 2u + hd];
+                q.insert(q.end(), {{X0, Y0, ox, oy}, {X1, Y0, ox, oy}, {X0, Y1, ox, oy}, {X1, Y0, ox, oy}, {X1, Y1, ox, oy}, {X0, Y1, ox, oy}});
+                maxX = std::max(maxX, dx + 8u);
+                maxY = std::max(maxY, dy + 8u);
+            }
+        // queue: one GL pass per state run
+        if (havePending)
+            flushPending();
+        if (haveShuffle && (!sameState(shuffleState, s) || shuffleDst != dst || shuffleSrc != src || shuffleSrcZ != srcDepth))
+            flushShuffle();
+        if (!haveShuffle)
+        {
+            haveShuffle = true;
+            shuffleState = s;
+            shuffleDst = dst;
+            shuffleSrc = src;
+            shuffleSrcZ = srcDepth;
+        }
+        for (int i = 0; i < 4; ++i)
+            shuffleQuads[i].insert(shuffleQuads[i].end(), quads[i].begin(), quads[i].end());
+        dst->usedW = std::max(dst->usedW, std::min(maxX, dst->pxW));
+        dst->usedH = std::max(dst->usedH, std::min(maxY, dst->pxH));
+        ++stats.shuffles;
+        return true;
+    }
+
+    void flushShuffle()
+    {
+        if (!haveShuffle)
+            return;
+        haveShuffle = false;
+        if (!shuffleProgram)
+        {
+            for (auto &q : shuffleQuads)
+                q.clear();
+            return;
+        }
+        RenderTarget &dst = *shuffleDst, &src = *shuffleSrc;
+        const GSContext &c = shuffleState.context;
+        const Api &g = gl();
+        ++dst.version;
+        dst.lastDrawSeq = ++writeSeq;
+        const uint32_t m16 = fbmsk16(c.frame.fbmsk);
+        const GLboolean lo = (m16 & 0xFFu) == 0u ? kTrue : kFalse, hi = (m16 & 0xFF00u) == 0u ? kTrue : kFalse;
+        g.BindFramebuffer(kFramebuffer, dst.fbo);
+        g.Viewport(0, 0, dst.glW, dst.glH);
+        g.Disable(kScissorTest);
+        g.Disable(kBlend);
+        g.Disable(kDepthTest);
+        g.DepthMask(kFalse);
+        g.UseProgram(shuffleProgram);
+        g.ActiveTexture(kTexture0);
+        g.BindTexture(kTexture2D, shuffleSrcZ ? src.depth : src.color);
+        g.Uniform1i(locShSrc, 0);
+        g.Uniform1i(locShSrcZ, shuffleSrcZ ? 1 : 0);
+        g.Uniform1f(locShZMax, zMaxFor(c.zbuf.psm));
+        g.Uniform1f(locShScale, scale);
+        g.Uniform4i(locShTexa, shuffleState.texa.ta0 >> 7, shuffleState.texa.ta1 >> 7, shuffleState.texa.aem ? 1 : 0, 0);
+        g.Uniform2f(locShInvSize, 1.0f / dst.pxW, 1.0f / dst.pxH);
+        if (&src == &dst)
+            g.TextureBarrier();
+        g.BindVertexArray(shuffleVao);
+        g.BindBuffer(kArrayBuffer, shuffleVbo);
+        for (uint32_t i = 0; i < 4; ++i)
+        {
+            std::vector<ShuffleVertex> &q = shuffleQuads[i];
+            if (q.empty())
+                continue;
+            const uint32_t hs = i >> 1, hd = i & 1u;
+            g.Uniform1i(locShHs, static_cast<GLint>(hs));
+            g.Uniform1i(locShHd, static_cast<GLint>(hd));
+            g.ColorMask(hd == 0u ? lo : kFalse, hd == 0u ? hi : kFalse, hd == 1u ? lo : kFalse, hd == 1u ? hi : kFalse);
+            g.BufferData(kArrayBuffer, static_cast<GLsizeiptr>(q.size() * sizeof(ShuffleVertex)), q.data(), kStreamDraw);
+            g.DrawArrays(kTriangles, 0, static_cast<GLsizei>(q.size()));
+            q.clear();
+        }
+        g.ColorMask(kTrue, kTrue, kTrue, kTrue);
+        g.BindVertexArray(vao);
+        g.BindBuffer(kArrayBuffer, vbo);
+        ++stats.batches;
+    }
+
+    // GOW_GS_HW_DUMP window: skipped batches are listed in order with the drawn ones
+    void dumpSkipped(const GSDrawState &s, const GSPrimitiveBatch &b, const char *why)
+    {
+        if (dumpPresents < 0 || presentCount < dumpPresents || presentCount >= dumpPresents + 3 || dumped >= 4000)
+            return;
+        flushPending();
+        ++dumped;
+        dumpAfterSkip = true;
+        const GSContext &c = s.context;
+        const GSVertex &v0 = b.vertices[0], &v1 = b.vertices[1];
+        std::fprintf(stderr,
+                     "[gs-hw-skip] #%d %s why=%d prim=%d fbp=%u fbw=%u fpsm=%u fbmsk=%x zbp=%x zmsk=%d tme=%d tbp=%x tbw=%u tpsm=%u %ux%u cbp=%x test=%llx alpha=%llx abe=%d v0=(%.1f,%.1f uv=%u,%u col=%u,%u,%u,%u) v1=(%.1f,%.1f uv=%u,%u) scis=%u-%u,%u-%u\n",
+                     dumped, why, shuffleWhy, static_cast<int>(s.prim.type), c.frame.fbp, c.frame.fbw, c.frame.psm, c.frame.fbmsk, c.zbuf.zbp, c.zbuf.zmask ? 1 : 0,
+                     s.prim.tme ? 1 : 0, c.tex0.tbp0, c.tex0.tbw, c.tex0.psm, s.textureWidth, s.textureHeight, c.tex0.cbp,
+                     (unsigned long long)c.test, (unsigned long long)c.alpha, s.prim.abe ? 1 : 0,
+                     v0.x, v0.y, v0.u, v0.v, (unsigned)v0.r, (unsigned)v0.g, (unsigned)v0.b, (unsigned)v0.a, v1.x, v1.y, v1.u, v1.v,
+                     c.scissor.x0, c.scissor.x1, c.scissor.y0, c.scissor.y1);
+    }
+
     void submit(const GSPrimitiveBatch &b)
     {
         const GSDrawState &s = b.state;
@@ -855,6 +1145,9 @@ struct GSHwBackend::Impl
             return;
         }
         const uint8_t fpsm = s.context.frame.psm;
+        if (family16(fpsm) && tryShuffle(s, b))
+            return;
+        flushShuffle();
         if (fpsm != GS_PSM_CT32 && fpsm != GS_PSM_CT24 && fpsm != GS_PSM_CT16 && fpsm != GS_PSM_CT16S)
         {
             ++stats.skippedPsm;
@@ -866,19 +1159,9 @@ struct GSHwBackend::Impl
             if (t.fbp == s.context.frame.fbp && t.usedW != 0u && family16(t.psm) != family16(fpsm))
             {
                 ++stats.skippedPsm;
+                dumpSkipped(s, b, "view");
                 return;
             }
-        {
-            // draws that only fill a single colour plane (e.g. FBMSK=ffff00ff: G only) build an auxiliary mask that the game
-            // reads back through a differently laid out view; that readback is not reproduced yet, so keep it out of the image
-            const uint32_t m = s.context.frame.fbmsk;
-            const int open = ((m & 0xFFu) != 0xFFu) + (((m >> 8) & 0xFFu) != 0xFFu) + (((m >> 16) & 0xFFu) != 0xFFu);
-            if (open == 1 && (m >> 24) == 0xFFu && s.context.frame.fbmsk != 0xFFFFFFFFu)
-            {
-                ++stats.skippedPrim;
-                return;
-            }
-        }
         if (havePending && !sameState(pendingState, s))
             flushPending();
         if (!havePending)
@@ -947,6 +1230,7 @@ struct GSHwBackend::Impl
 
     void flushPending()
     {
+        flushShuffle();
         if (!havePending || pending.empty())
         {
             havePending = false;
@@ -963,9 +1247,10 @@ struct GSHwBackend::Impl
         pending.clear();
     }
 
-    void blendState(const GSDrawState &s, bool &enabled, GLenum &sf, GLenum &df, float &fixScale, float &constant, GLenum &equation)
+    void blendState(const GSDrawState &s, bool &enabled, GLenum &sf, GLenum &df, float &fixScale, float &constant, GLenum &equation, bool &soft)
     {
         enabled = false;
+        soft = false;
         equation = kFuncAdd;
         sf = kOne; df = kZero;
         fixScale = 1.0f / 128.0f;
@@ -978,7 +1263,10 @@ struct GSHwBackend::Impl
         GLenum cs, cd; // factor C and 1-C
         if (c == 0) { cs = kSrc1Alpha; cd = kOneMinusSrc1Alpha; }
         else if (c == 2) { cs = kConstantColor; cd = kOneMinusConstantColor; constant = std::min(fix / 128.0f, 1.0f); }
-        else { ++stats.unsupportedBlend; cs = kSrc1Alpha; cd = kOneMinusSrc1Alpha; }
+        else { soft = true; cs = kSrc1Alpha; cd = kOneMinusSrc1Alpha; } // C = Ad
+        // COLCLAMP=0: results wrap around instead of saturating, possible whenever B is not 0
+        if ((s.colclamp & 1u) == 0u && a != b && b != 2)
+            soft = true;
         if (a == b)
         {
             // (A-A)*C + D = D
@@ -992,11 +1280,15 @@ struct GSHwBackend::Impl
         else if (a == 0 && b == 2 && d == 2) { sf = cs; df = kZero; }    // Cs*C
         else if (a == 2 && b == 0 && d == 2) { sf = kZero; df = kZero; } // 0
         else if (a == 2 && b == 0 && d == 1) { sf = cs; df = kOne; equation = kFuncReverseSubtract; } // Cd - Cs*C
-        else { ++stats.unsupportedBlend; sf = cs; df = cd; }
+        else { soft = true; sf = cs; df = cd; }
+        if (soft)
+            ++stats.unsupportedBlend;
     }
 
     int dumpPresents = std::getenv("GOW_GS_HW_DUMP") ? std::atoi(std::getenv("GOW_GS_HW_DUMP")) : -1;
     int presentCount = 0, dumped = 0, dumpedAt = 0;
+    bool dumpAfterSkip = false;
+    const bool dumpAll = std::getenv("GOW_GS_HW_DUMPALL") != nullptr;
 
     int onlyLo = std::getenv("GOW_GS_HW_ONLY") ? std::atoi(std::getenv("GOW_GS_HW_ONLY")) : -1;
     int onlyHi = std::getenv("GOW_GS_HW_ONLY") && std::strchr(std::getenv("GOW_GS_HW_ONLY"), '-') ? std::atoi(std::strchr(std::getenv("GOW_GS_HW_ONLY"), '-') + 1) : 1 << 30;
@@ -1014,9 +1306,9 @@ struct GSHwBackend::Impl
         const double nowSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         if (dumpAtSec >= 0.0 && nowSec >= dumpAtSec && dumpedAt == 0 && frameBatch == 1)
             dumpedAt = 1;
-        if (dumpedAt == 1 && dumped < 800 && dumpPresents < 0)
+        if (dumpedAt == 1 && dumped < 4000 && dumpPresents < 0)
             dumpPresents = 0, presentCount = 0;
-        if (dumpPresents >= 0 && presentCount >= dumpPresents && presentCount < dumpPresents + 3 && dumped < 800 && (c.frame.fbp == 208 || c.frame.fbp == 320 || dumped < 40))
+        if (dumpPresents >= 0 && presentCount >= dumpPresents && presentCount < dumpPresents + 3 && dumped < 4000 && (dumpAll || c.frame.fbp == 208 || c.frame.fbp == 320 || dumped < 40 || dumpAfterSkip))
         {
             ++dumped;
             const HwVertex &v0 = verts[0];
@@ -1029,9 +1321,6 @@ struct GSHwBackend::Impl
         }
         RenderTarget &rt = target(c.frame.fbp, c.frame.fbw);
         attachDepth(rt, c.zbuf.zbp);
-        for (RenderTarget &z : targets)
-            if (&z != &rt && z.fbp == c.zbuf.zbp && z.version != z.depthResolvedVersion && (z.psm == GS_PSM_CT24 || z.psm == GS_PSM_CT32))
-                resolveColorToDepth(z, rt);
         rt.psm = c.frame.psm;
         ++rt.version;
         rt.lastDrawSeq = ++writeSeq;
@@ -1060,19 +1349,25 @@ struct GSHwBackend::Impl
         // depth
         const uint32_t ztst = static_cast<uint32_t>((c.test >> 17) & 3u);
         static const bool noDepth = std::getenv("GOW_GS_HW_NODEPTH") != nullptr;
-        if (noDepth) g.Disable(kDepthTest); else g.Enable(kDepthTest);
+        // Z buffer in this target's own colour memory: tested and written in the shader against the colour words
+        const bool zAlias = c.zbuf.zbp == c.frame.fbp && ((c.test >> 16) & 1u) != 0u &&
+                            (c.frame.psm == GS_PSM_CT32 || c.frame.psm == GS_PSM_CT24);
+        if (noDepth || zAlias) g.Disable(kDepthTest); else g.Enable(kDepthTest);
         g.DepthFunc(ztst == 0 ? kNever : ztst == 1 ? kAlways : ztst == 2 ? kGEqual : kGreater);
-        const bool zwrite = !c.zbuf.zmask;
+        const bool zwrite = !c.zbuf.zmask && !zAlias;
+        const bool zAliasWrite = zAlias && !c.zbuf.zmask;
 
         // colour mask
         const uint32_t fbmsk = c.frame.fbmsk;
         const GLboolean mr = (fbmsk & 0xFF) == 0xFF ? kFalse : kTrue, mg = (fbmsk & 0xFF00) == 0xFF00 ? kFalse : kTrue,
                         mb = (fbmsk & 0xFF0000) == 0xFF0000 ? kFalse : kTrue, ma = (fbmsk & 0xFF000000u) == 0xFF000000u ? kFalse : kTrue;
 
-        bool blend = false;
+        bool blend = false, softBlend = false;
         GLenum sf, df, equation;
         float fixScale, constant;
-        blendState(s, blend, sf, df, fixScale, constant, equation);
+        blendState(s, blend, sf, df, fixScale, constant, equation, softBlend);
+        if (softBlend || zAliasWrite) // the shader produces the final colour (a Z write replaces the colour word)
+            blend = false;
         if (blend)
         {
             g.Enable(kBlend);
@@ -1088,7 +1383,15 @@ struct GSHwBackend::Impl
             const bool date = ((c.test >> 14) & 1u) != 0u && c.frame.psm != GS_PSM_CT24;
             g.Uniform1i(locDate, date ? 1 : 0);
             g.Uniform1i(locDatm, ((c.test >> 15) & 1u) != 0u ? 1 : 0);
-            if (date)
+            const uint64_t al = c.alpha;
+            g.Uniform1i(locSwBlend, softBlend && !zAliasWrite ? 1 : 0);
+            g.Uniform1i(locColClamp, (s.colclamp & 1u) != 0u ? 1 : 0);
+            g.Uniform4i(locAbcd, static_cast<GLint>(al & 3u), static_cast<GLint>((al >> 2) & 3u), static_cast<GLint>((al >> 4) & 3u), static_cast<GLint>((al >> 6) & 3u));
+            g.Uniform1f(locFix, static_cast<float>((al >> 32) & 0xFFu));
+            g.Uniform1i(locZAlias, zAlias ? 1 + static_cast<GLint>(ztst) : 0);
+            g.Uniform1i(locZAliasWrite, zAliasWrite ? 1 : 0);
+            g.Uniform1f(locZAliasMax, zMaxFor(c.zbuf.psm));
+            if (date || softBlend || zAlias)
             {
                 g.ActiveTexture(kTexture0 + 4);
                 g.BindTexture(kTexture2D, rt.color);
@@ -1120,13 +1423,13 @@ struct GSHwBackend::Impl
             const bool zFormat = c.tex0.psm == 0x30 || c.tex0.psm == 0x31 || c.tex0.psm == 0x32 || c.tex0.psm == 0x3A;
             if (zFormat && (c.tex0.tbp0 % 32u) == 0u)
                 for (RenderTarget &t : targets)
-                    if (t.depth && t.zbp == c.tex0.tbp0 / 32u)
+                    if (t.depth && t.zbp == c.tex0.tbp0 / 32u && t.fbp != t.zbp)
                         zsrc = &t;
             if (zsrc)
                 src = nullptr;
             RenderTarget *rsrc = nullptr;
             if (!src && !zsrc)
-                rsrc = findReinterpretSource(c.tex0.tbp0);
+                rsrc = findReinterpretSource(c.tex0.tbp0, c.tex0.psm);
             if (rsrc == &rt)
                 g.TextureBarrier();
             Texture &tex = (src || rsrc || zsrc) ? dummy : textureFor(s);
@@ -1239,15 +1542,15 @@ struct GSHwBackend::Impl
         if (now - stats.last < std::chrono::seconds(5))
             return;
         stats.last = now;
-        std::fprintf(stderr, "[gs-hw] draws=%llu batches=%llu texDecodes=%llu texHits=%llu skippedPsm=%llu skippedPrim=%llu unsupportedBlend=%llu textures=%zu\n",
-                     (unsigned long long)stats.draws, (unsigned long long)stats.batches, (unsigned long long)stats.texDecodes,
+        std::fprintf(stderr, "[gs-hw] shuffles=%llu draws=%llu batches=%llu texDecodes=%llu texHits=%llu skippedPsm=%llu skippedPrim=%llu unsupportedBlend=%llu textures=%zu\n",
+                     (unsigned long long)stats.shuffles, (unsigned long long)stats.draws, (unsigned long long)stats.batches, (unsigned long long)stats.texDecodes,
                      (unsigned long long)stats.texHits, (unsigned long long)stats.skippedPsm, (unsigned long long)stats.skippedPrim,
                      (unsigned long long)stats.unsupportedBlend, textures.size());
         for (const auto &kv : syncCounts)
             if (kv.second > 5)
                 std::fprintf(stderr, "[gs-hw-sync] x%d %s\n", kv.second, kv.first.c_str());
         syncCounts.clear();
-        stats.draws = stats.batches = stats.texDecodes = stats.texHits = stats.skippedPsm = stats.skippedPrim = stats.unsupportedBlend = 0;
+        stats.shuffles = stats.draws = stats.batches = stats.texDecodes = stats.texHits = stats.skippedPsm = stats.skippedPrim = stats.unsupportedBlend = 0;
     }
 
     RenderTarget *findTarget(uint32_t fbp)
@@ -1391,6 +1694,7 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
         return frame;
     d.flushPending();
     ++d.presentCount;
+    d.dumpAfterSkip = false;
     d.frameBatch = 0;
     d.reportStats();
     const bool enable1 = (request.pmode & 1ull) != 0ull, enable2 = (request.pmode & 2ull) != 0ull;
