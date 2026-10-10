@@ -1,3 +1,4 @@
+#include <cstdlib>
 // EE differential tester core: memory model, execute loop, branches (PCSX2 Interpreter.cpp), COP2 moves
 // (PCSX2 VU0.cpp) and the comparison. PCSX2-derived parts are GPL-3.0+.
 #include "Common.h"
@@ -223,7 +224,7 @@ namespace eeref
         char line[220];
         const auto note = [&](const char *text)
         {
-            if (result.differences.size() < 24)
+            if (result.differences.size() < (std::getenv("PS2X_EE_DIFF_LINES") ? static_cast<size_t>(std::atoi(std::getenv("PS2X_EE_DIFF_LINES"))) : 24u))
                 result.differences.emplace_back(text);
         };
         for (int i = 1; i < 32; ++i)

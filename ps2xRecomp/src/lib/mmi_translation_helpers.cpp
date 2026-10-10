@@ -469,15 +469,8 @@ namespace ps2recomp
 
     std::string CodeGenerator::translatePMULTH(const Instruction &inst)
     {
-        // Parallel multiply halfword, results sum to HI/LO and rd
-        return fmt::format("{{ __m128i prod = _mm_madd_epi16(GPR_VEC(ctx, {}), GPR_VEC(ctx, {})); \n"
-                           "   int32_t p0 = _mm_cvtsi128_si32(prod); \n"
-                           "   int32_t p1 = _mm_cvtsi128_si32(_mm_srli_si128(prod, 4)); \n"
-                           "   int32_t p2 = _mm_cvtsi128_si32(_mm_srli_si128(prod, 8)); \n"
-                           "   int32_t p3 = _mm_cvtsi128_si32(_mm_srli_si128(prod, 12)); \n"
-                           "   int64_t result = (int64_t)p0 + (int64_t)p1 + (int64_t)p2 + (int64_t)p3; \n"
-                           "   ctx->lo = (uint32_t)result; ctx->hi = (uint32_t)(result >> 32); \n"
-                           "   SET_GPR_U64(ctx, {}, result); }}",
+        // GOW-Port: exact PMULTH (eight separate halfword products in HI/LO/Rd); see ps2PmulthExec in ps2_runtime.cpp.
+        return fmt::format("{{ extern void ps2PmulthExec(R5900Context *ctx, int rs, int rt, int rd); ps2PmulthExec(ctx, {}, {}, {}); }}",
                            inst.rs, inst.rt, inst.rd);
     }
 

@@ -1228,6 +1228,25 @@ const char *describeGuestBranchKind(PS2Runtime::GuestBranchKind kind)
     }
 }
 
+// GOW-Port: exact PMULTH (PCSX2 MMI.cpp). The recompiler template summed the eight halfword products into one scalar;
+// the instruction stores them separately: LO={p0,p1,p4,p5}, HI={p2,p3,p6,p7}, Rd={LO0,HI0,LO2,HI2}.
+void ps2PmulthExec(R5900Context *ctx, int rs, int rt, int rd)
+{
+    const __m128i a = rs ? ctx->r[rs] : _mm_setzero_si128();
+    const __m128i b = rt ? ctx->r[rt] : _mm_setzero_si128();
+    const __m128i lo16 = _mm_mullo_epi16(a, b);
+    const __m128i hi16 = _mm_mulhi_epi16(a, b);
+    uint32_t p[8];
+    _mm_storeu_si128(reinterpret_cast<__m128i *>(p), _mm_unpacklo_epi16(lo16, hi16));
+    _mm_storeu_si128(reinterpret_cast<__m128i *>(p + 4), _mm_unpackhi_epi16(lo16, hi16));
+    ctx->lo = static_cast<uint64_t>(p[0]) | (static_cast<uint64_t>(p[1]) << 32);
+    ctx->hi = static_cast<uint64_t>(p[2]) | (static_cast<uint64_t>(p[3]) << 32);
+    ctx->lo1 = static_cast<uint64_t>(p[4]) | (static_cast<uint64_t>(p[5]) << 32);
+    ctx->hi1 = static_cast<uint64_t>(p[6]) | (static_cast<uint64_t>(p[7]) << 32);
+    if (rd)
+        ctx->r[rd] = _mm_set_epi32(static_cast<int>(p[6]), static_cast<int>(p[4]), static_cast<int>(p[2]), static_cast<int>(p[0]));
+}
+
 PS2Runtime::RecompiledFunction PS2Runtime::lookupFunction(uint32_t address)
 {
     pushDispatchPc(address);
