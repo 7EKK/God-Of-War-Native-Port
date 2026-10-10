@@ -494,7 +494,9 @@ namespace GSGL
             load(a.BlitFramebuffer, "glBlitFramebuffer", hwMissing);
             load(a.PixelStorei, "glPixelStorei", hwMissing);
             load(a.TextureBarrier, "glTextureBarrier", hwMissing);
-            a.hwRaster = a.graphics && hwMissing.empty();
+            a.hwRaster = graphicsMissing.empty() && hwMissing.empty();
+            if (!a.hwRaster)
+                std::fprintf(stderr, "[gs-gl] classic raster entry points missing: %s (graphics=%d)\n", hwMissing.c_str(), graphicsMissing.empty() ? 1 : 0);
             std::string parallelMissing;
             load(a.MaxShaderCompilerThreads, "glMaxShaderCompilerThreadsARB", parallelMissing);
             if (!a.MaxShaderCompilerThreads)

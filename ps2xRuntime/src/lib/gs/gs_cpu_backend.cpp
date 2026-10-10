@@ -1367,6 +1367,28 @@ uint32_t GSCpuBackend::SampleTexture(const GSDrawState &state, float s, float t,
            (static_cast<uint32_t>(a) << 24);
 }
 
+void GSCpuBackend::DecodeTextureRgba(const GSDrawState &state, std::vector<uint32_t> &out)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    GSDrawState st = state;
+    st.prim.fst = true;
+    st.linearFilter = false;
+    const uint32_t w = std::max<uint32_t>(1u, state.textureWidth);
+    const uint32_t h = std::max<uint32_t>(1u, state.textureHeight);
+    out.resize(static_cast<size_t>(w) * h);
+    for (uint32_t y = 0; y < h; ++y)
+        for (uint32_t x = 0; x < w; ++x)
+            out[static_cast<size_t>(y) * w + x] = SampleTexture(st, 0.0f, 0.0f, 1.0f, static_cast<uint16_t>(std::min<uint32_t>(x, 4095u) * 16u), static_cast<uint16_t>(std::min<uint32_t>(y, 4095u) * 16u));
+}
+
+uint64_t GSCpuBackend::ClutHash() const
+{
+    uint64_t hash = 1469598103934665603ull;
+    for (uint16_t v : m_clut)
+        hash = (hash ^ v) * 1099511628211ull;
+    return hash;
+}
+
 void GSCpuBackend::DrawSprite(const GSPrimitiveBatch &batch)
 {
     const GSDrawState &state = batch.state;

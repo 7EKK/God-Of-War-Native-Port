@@ -35,6 +35,10 @@ public:
     void SnapshotVram(std::vector<uint8_t> &out) const override;
     GSTransferSnapshot GetTransferSnapshot() const override;
 
+    // GOW-Port: used by the render-target renderer (GSHwBackend), which keeps this backend as its VRAM / CLUT / transfer model.
+    // Decodes the texture selected by `state` (TEX0 + TEXA + CLUT) into texW*texH RGBA8 texels (point sampling, wrap not applied).
+    void DecodeTextureRgba(const GSDrawState &state, std::vector<uint32_t> &out);
+    uint64_t ClutHash() const;
     bool ExportState(GSBackendState &out) override;
     bool ImportState(const GSBackendState &state) override;
 
