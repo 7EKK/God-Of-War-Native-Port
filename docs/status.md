@@ -390,3 +390,19 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
   matches PCSX2; remaining unexplored: the per-joint pose evaluation output (joint matrix palette per frame) and the
   palette's transfer to VU1 (VIF1 UNPACK). Plan: find the palette address via VIF1 UNPACK sources while walking
   (PS2X VIF trace) and compare those matrices with PCSX2's at the same animation phase.
+
+## Session end 2026-10-10 (morning) — state of the Kratos animation bug
+- User screenshots 065930/065937: the same raised-arm/blade pose also appears for ONE frame in idle and during
+  the Q/E (L1/R1) animation → likely one bug: a wrong pose sampled/blended occasionally (continuously while walking).
+- Tried, no visual change (kept, they match PCSX2): VIF1 UNPACK STMOD 3 now stores data in ROW (PCSX2
+  Vif_Unpack.cpp setVifRow); EE FPU mode on the GameThread = PCSX2 default (round toward zero + FTZ + DAZ;
+  GOW_EE_FPU_NEAREST=1 = old). port/m3, port/chop1 look identical to before (pose deterministic).
+- Checked OK: no VIF1 UNPACK cut by buffer ends (`[vif1] UNPACK cut` diag, port/vc1), only 2 EE threads (main +
+  waiting sound/stream; `GOW_THREAD_DUMP=<t>`), caller-frame diffs are ULP only (`[eediff-callerframe]`), skipped
+  "did not return normally" calls are wrapper artifacts (0x116EF0/0x117A50/0x1064F0 compared OK individually).
+- KIexster cbb58c3 (pulled into ref/other-recomp-git): he works on the same thing — full model palette and
+  skinning-buffer diagnostics, native joint/camera comparison against a paused PCSX2 EE reference
+  (tools/render/pcsx2_ee_reference.py), optional VIF1/VU1 thread patch (PS2X_VU1_HILO=1). His ESTADO.md summary
+  was not obtained (Gemini run stopped). **Next: read his palette/joint findings first**, then compare Kratos'
+  joint palette (skinning buffer) with PCSX2 at the same animation frame.
+- Remaining stage not yet verified against PCSX2: the per-frame joint palette itself (EE output just before VIF1).

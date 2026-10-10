@@ -1,4 +1,5 @@
 // GOW-Port: enlaces manuales para God of War (SCUS-97399).
+#include "runtime/ee_scheduler.h"
 #include "game_overrides.h"
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
@@ -150,6 +151,19 @@ namespace
             };
             // GOW-Port: GOW_RAM_DUMP=<time>:<file> writes the 32 MB EE RAM once (time as in GOW_PAD_CAPTURAS,
             // e.g. g5:ram.bin), to compare with eeMemory.bin from a PCSX2 save state at the same point.
+            // GOW-Port: GOW_THREAD_DUMP=<t>: lists the EE threads once (entry, priorities, status, wait).
+            static const char *threadDump = std::getenv("GOW_THREAD_DUMP");
+            static bool threadDumped = false;
+            if (threadDump && !threadDumped && reached(parseTime(threadDump)))
+            {
+                threadDumped = true;
+                const EeKernelSnapshot snapshot = runtime->eeScheduler().snapshot();
+                std::fprintf(stderr, "[gow-threads] running=%d\n", snapshot.runningThreadId);
+                for (const EeThreadSnapshot &t : snapshot.threads)
+                    std::fprintf(stderr, "[gow-threads] id=%d entry=%08x prio=%d/%d status=%d wait=%d/%d pc=%08x ra=%08x\n",
+                                 t.id, t.entry, t.initialPriority, t.currentPriority, int(t.status), int(t.waitReason),
+                                 t.waitId, t.pc, t.ra);
+            }
             // GOW_RAM_DUMP=<t>[;<t>...]:<file>: one dump per time; with several times the files are <file>.<n>.
             static const char *ramDump = std::getenv("GOW_RAM_DUMP");
             static size_t ramDumpIndex = 0;
