@@ -18,6 +18,17 @@ This file is the inventory and the order of work. Status per layer is measured, 
 | IOP (I/O CPU + IRX modules: CDVD, SIO2, 989snd) | the game's 8 IRX modules (sio2man, dbcman, sio2d, mc2_d, ds2u_d, libsd, 989nomid, smpd_iop; 52k instructions) **compiled ahead of time** to C++ (tools/iop/iopn_gen.py -> ps2xIOP/src/native); HLE kernel imports; the R3000 interpreter only runs code without a compiled form | generated | replace the hardware models below (SPU2, SIO2, CDVD) with native services | native code, in progress |
 | SPU2 | software mixer driven by IOP register writes | in IOP | native mixer fed directly by a native sound engine | emulated |
 
+## Standing order (user, 2026-10-11): convert everything to native, nothing emulated
+Native now: EE game code (recompiled), VU0 macro, VU1 microprograms and the IOP IRX modules (compiled ahead of time), GS
+rendering (native renderer, the only one), kernel (HLE). Remaining hardware models, converted in this order, each step
+verified on the 4 zones (images, fps, audio) before the next:
+1. pad / memory card: SIO2 chip model + sio2man/dbcman/sio2d/ds2u_d/mc2_d -> native pad and memory-card services;
+2. VIF1 / GIF / DMA data path -> VU1 and GS fed directly from the game's packets;
+3. SPU2 register-level voice mixer -> native mixer;
+4. SIF (EE <-> IOP RPC/DMA) -> direct native calls;
+5. GS register / 4 MB memory image -> native texture and CLUT store;
+6. CDVD -> extracted game files (last).
+
 ## What a no-emulation port really requires
 
 The EE side is done the way static recompilation ports are done. The remaining emulation is *hardware*, and the only way to
