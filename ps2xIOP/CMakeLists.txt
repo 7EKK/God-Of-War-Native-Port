@@ -33,6 +33,17 @@ add_library(ps2_iop STATIC
     src/modules/gow_stub_services.cpp
 )
 
+# GOW-Port: IRX modules compiled ahead of time (tools/iop/iopn_gen.py)
+# (generated from the game's modules, not in git; without them the empty registry is used and the IRX code is interpreted)
+file(GLOB PS2X_IOP_NATIVE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/native/iopn_*.cpp)
+if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/native/iopn_registry.cpp)
+    list(APPEND PS2X_IOP_NATIVE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/native/iop_native_none.cpp)
+endif()
+target_sources(ps2_iop PRIVATE ${PS2X_IOP_NATIVE_SOURCES})
+if(MSVC)
+    set_source_files_properties(${PS2X_IOP_NATIVE_SOURCES} PROPERTIES COMPILE_OPTIONS "/bigobj")
+endif()
+
 target_compile_features(ps2_iop PUBLIC cxx_std_20)
 
 target_include_directories(ps2_iop
