@@ -450,3 +450,22 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
   DMA, both GS backends) all match; the frozen pose must come from something not yet compared — candidates: VU0
   state across thread switches/interrupts (vf regs, Q/flags are not saved by our thread switch?), or blend weights
   computed from a game-state variable (speed/stick) that differs between runs.
+
+## Session 2026-10-10 (afternoon) — long invasive hunt, state at end
+Ruled out (all verified, see earlier bullets for method): GPU backend (CPU GS shows the same pose), stale heap, pad, DMA tag
+semantics/SPR flag, VIF1 UNPACK/MPG/STROW (no cut data, no unhandled VIFcodes, CL=4 WL=1 stride writes OK), VU0 flag registers
+(game never uses CFC2/CTC2/VCLIP), sine table (matches PCSX2 to 1 ULP), animation clips (byte-identical to PCSX2), controller
+set/weights (same 43 controllers of the player animator 0x74ED74 at identical addresses, weights equal), sampler 0x10FC88
+(803 calls diffed against PCSX2's interpreter: only stack garbage/ULP), recompiled-function coverage (no missing functions).
+- **Player model = object 0x753E20 (103 joints)**, skeleton 0x755EF0 (+0x88 animator 0x74ED74, +0x8C world palette 0xD53910,
+  def +0x60 = 0xD4A960, local matrices array 0xD4FE40). Same addresses in PCSX2 → direct comparison possible.
+- **Palette finding**: walking in ours the arm/blade-chain joints (12-30 and 31-51) are 3-18 units from spine joint 3 (mean ~10),
+  PCSX2 coherent snapshots (6 walking frames, port/pcx_S.npy) stay 7-11. Local joint translations are constant in both
+  (rigid), so the extra excursion comes from the chain joints' ROTATIONS: in ours snapshots 1-2 the 19 chain joints each rotate
+  ~100-150 deg (curled) vs <90 in PCSX2. The pose is wrong in the WORLD PALETTE (upstream of VU1).
+- Tools: `GOW_SKEL_OBJECT=753e20 GOW_SKEL_DUMP=<file>` (per-call palette), `GOW_DMA_BLOCKDUMP`, `GOW_CTRL_DIAG`,
+  `PS2X_EE_WATCH_FROM=<s>` (write watch after s s), `PS2X_EE_DIFF_EVERY=<n>`, VU0 ctl state compared in eediff.
+  PCSX2 coherent snapshots: PINE save slot (`python snap.py <slot> <dir>` pattern in this session) + 7z extract; live PINE
+  reads are NOT coherent (mixed frames). PCSX2 slot-1 save = Olympus (walk with stick keys W/A/S/D; ~3 s holds).
+- Next: sample the chain clip (type 0x3221 clips edd800..ee3d40 at 0xED....) offline with the game's own decoder and compare
+  with the palette in both; or diff the blend (0x10A530/0x10B0C8 callers of the sampler) with PS2X_EE_DIFF_EVERY over a long walk.
