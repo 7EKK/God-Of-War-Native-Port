@@ -385,3 +385,8 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
   the PAL stack): port/pv1 still shows the twisted pose → **VU1 semantics ruled out** (both ours and PCSX2's VU1 give
   the same broken pose). Still open: where the bone matrices that reach VU1 get the wrong rotation. Next: dump the
   skinning matrix palette Kratos sends to VU1 (VIF1 UNPACK source in EE RAM) in ours vs PCSX2 while walking.
+- Kratos animator object (ours 0x7AE808 / PCSX2 0x7A69A0, ±0x400 bytes): no differing float fields, only pointers.
+  No math functions among the recompiler stubs (file/SIF/kernel only). So far everything upstream of the pose
+  matches PCSX2; remaining unexplored: the per-joint pose evaluation output (joint matrix palette per frame) and the
+  palette's transfer to VU1 (VIF1 UNPACK). Plan: find the palette address via VIF1 UNPACK sources while walking
+  (PS2X VIF trace) and compare those matrices with PCSX2's at the same animation phase.
