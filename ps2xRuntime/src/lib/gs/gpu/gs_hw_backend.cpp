@@ -1,6 +1,7 @@
 // GOW-Port: render-target GS renderer, see include/runtime/gs/gs_hw_backend.h.
 #include "runtime/gs/gs_hw_backend.h"
 #include "runtime/gs/gs_cpu_backend.h"
+#include "runtime/gs/gs_swizzle.h"
 #include "gs_gl.h"
 
 #include <algorithm>
@@ -32,7 +33,7 @@ namespace
     constexpr GLenum kOne = 1, kZero = 0;
     constexpr GLenum kSrc1Alpha = 0x8589, kOneMinusSrc1Alpha = 0x88FB;
     constexpr GLenum kConstantColor = 0x8001, kOneMinusConstantColor = 0x8002;
-    constexpr GLenum kFuncAdd = 0x8006;
+    constexpr GLenum kFuncAdd = 0x8006, kFuncReverseSubtract = 0x800B;
     constexpr GLbitfield kColorBufferBit = 0x4000, kDepthBufferBit = 0x100;
     constexpr GLenum kNever = 0x200, kGreater = 0x204, kGEqual = 0x206, kAlways = 0x207;
     constexpr GLenum kTexture0 = 0x84C0;
@@ -69,7 +70,71 @@ noperspective in vec2 vUV;
 layout(location = 0, index = 0) out vec4 oColor;
 layout(location = 0, index = 1) out vec4 oBlend;
 uniform sampler2D uTex;
-uniform vec2 uTexSize;
+uniform vec2 uTexSize;   // size the sampled image is normalised by (render targets: their own size)
+uniform vec2 uTexDim;    // TEX0 TW/TH: size STQ coordinates are scaled by
+
+// Reinterpreting fetch: the texture lives in the memory a render target was drawn into, but with another format / width /
+// layout (16 bit view of a 32 bit target, T8H = alpha plane, other pitch...). The texel's GS memory address is computed
+// from the texture format, mapped back to the render-target pixel that owns it and the bits are re-extracted: pure address
+// math on the GPU, no memory image.
+uniform int uReinterp;
+uniform int uDate, uDatm;   // destination alpha test (reads the target itself)
+uniform sampler2D uDest;
+uniform int uZTex;     // 16/24/32: sampling a depth buffer (Z16/Z24/Z32 texture)
+uniform float uZMax;
+uniform usampler2D uTables;
+uniform sampler2D uRtColor;
+uniform sampler2D uPalette;
+uniform ivec4 uTexFmt;   // pageShiftX, pageShiftY, pixelsPerPageShift, unpackedShift
+uniform ivec4 uTexFmt2;  // bitOffset, texelBits, tableOffset, kind (0 CT32, 1 CT24, 2 CT16, 3 indexed)
+uniform ivec4 uRtFmt;    // pageShiftX, pageShiftY, pixelsPerPageShift, bits per pixel
+uniform ivec4 uRtFmt2;   // inverseTableOffset, fbp (pages), fbw (64 px), 0
+uniform ivec4 uTex0;     // tbp, tbw, width, height
+uniform vec2 uRtPx;      // render target size in PS2 pixels
+
+uint tab(uint i) { return texelFetch(uTables, ivec2(int(i & 2047u), int(i >> 11)), 0).r; }
+
+vec4 reinterpretTexel(ivec2 p)
+{
+    uint x = uint(p.x), y = uint(p.y);
+    uint psx = uint(uTexFmt.x), psy = uint(uTexFmt.y);
+    uint pagesPerRow = (uint(uTex0.y) * 64u) >> psx;
+    uint page = (uint(uTex0.x) >> 5) + (y >> psy) * pagesPerRow + (x >> psx);
+    uint entry = ((uint(uTex0.x) & 31u) << (psx + psy)) + ((y & ((1u << psy) - 1u)) << psx) + (x & ((1u << psx) - 1u));
+    uint pixelIndex = (page << uint(uTexFmt.z)) + tab(uint(uTexFmt2.z) + entry);
+    uint bitpos = (pixelIndex << uint(uTexFmt.w)) + uint(uTexFmt2.x);
+    uint B = uint(uRtFmt.w);
+    uint rtIdx = bitpos / B;
+    uint within = bitpos % B;
+    uint rtBase = uint(uRtFmt2.y) << uint(uRtFmt.z);
+    if (rtIdx < rtBase) return vec4(1.0, 0.0, 1.0, 1.0);
+    uint rel = rtIdx - rtBase;
+    uint rpage = rel >> uint(uRtFmt.z);
+    uint inpage = rel & ((1u << uint(uRtFmt.z)) - 1u);
+    uint e = tab(uint(uRtFmt2.x) + inpage);
+    uint rpsx = uint(uRtFmt.x), rpsy = uint(uRtFmt.y);
+    uint fbw = uint(uRtFmt2.z);
+    uint px = (rpage % fbw) * (1u << rpsx) + (e & ((1u << rpsx) - 1u));
+    uint py = (rpage / fbw) * (1u << rpsy) + (e >> rpsx);
+    vec4 c = texture(uRtColor, (vec2(float(px), float(py)) + 0.5) / uRtPx) * 255.0;
+    c = floor(c + 0.5);
+    uint word;
+    if (B == 32u)
+        word = uint(c.r) | (uint(c.g) << 8) | (uint(c.b) << 16) | (uint(c.a) << 24);
+    else
+        word = (c.a >= 128.0 ? 0x8000u : 0u) | ((uint(c.b) >> 3) << 10) | ((uint(c.g) >> 3) << 5) | (uint(c.r) >> 3);
+    uint bits = uint(uTexFmt2.y);
+    uint value = (bits >= 32u) ? (word >> within) : ((word >> within) & ((1u << bits) - 1u));
+    int kind = uTexFmt2.w;
+    if (kind == 0) return vec4(float(value & 255u), float((value >> 8) & 255u), float((value >> 16) & 255u), float((value >> 24) & 255u)) / 255.0;
+    if (kind == 1) return vec4(float(value & 255u), float((value >> 8) & 255u), float((value >> 16) & 255u), 128.0) / 255.0; // alpha via uRtTex24 path
+    if (kind == 2)
+    {
+        vec3 rgb = vec3(float(value & 31u), float((value >> 5) & 31u), float((value >> 10) & 31u)) * 8.0;
+        return vec4(rgb, ((value & 0x8000u) != 0u) ? 128.0 : 0.0) / 255.0;
+    }
+    return texelFetch(uPalette, ivec2(int(value & 255u), 0), 0);
+}
 uniform int uTme, uFst, uTfx, uTcc, uIip;
 uniform int uRtTex24; // sampling a render target as PSMCT24 (1) or PSMCT16 (2): alpha comes from TEXA
 uniform float uTa0;
@@ -99,13 +164,38 @@ bool alphaPasses(float a)
 
 void main()
 {
+    if (uDate != 0)
+    {
+        bool bit = texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5;
+        if (bit != (uDatm != 0)) discard;
+    }
     vec4 v = (uIip != 0) ? vCol : vColFlat;
     vec3 rgb = v.rgb;
     float a = v.a;
     if (uTme != 0)
     {
-        vec2 uv = (uFst != 0) ? vUV : (vSTQ.xy / abs(vSTQ.z)) * uTexSize;
-        vec4 t = texture(uTex, uv / uTexSize) * 255.0;
+        vec2 uv = (uFst != 0) ? vUV : (vSTQ.xy / abs(vSTQ.z)) * uTexDim;
+        vec4 t;
+        if (uReinterp != 0)
+        {
+            ivec2 ip = ivec2(floor(uv));
+            ip = ivec2(clamp(ip.x, 0, uTex0.z - 1), clamp(ip.y, 0, uTex0.w - 1));
+            t = reinterpretTexel(ip) * 255.0;
+        }
+        else if (uZTex != 0)
+        {
+            float zf = texture(uTex, uv / uTexSize).r;
+            uint zi = uint(clamp(zf, 0.0, 1.0) * uZMax + 0.5);
+            if (uZTex == 16)
+            {
+                vec3 rgb = vec3(float(zi & 31u), float((zi >> 5) & 31u), float((zi >> 10) & 31u)) * 8.0;
+                t = vec4(rgb, ((zi & 0x8000u) != 0u) ? 128.0 : 0.0);
+            }
+            else
+                t = vec4(float(zi & 255u), float((zi >> 8) & 255u), float((zi >> 16) & 255u), 128.0);
+        }
+        else
+            t = texture(uTex, uv / uTexSize) * 255.0;
         t = floor(t + 0.5);
         if (uRtTex24 == 1)
             t.a = (uAem != 0 && t.r + t.g + t.b == 0.0) ? 0.0 : uTa0;
@@ -172,7 +262,7 @@ void main()
         uint32_t pxW = 0, pxH = 0; // size in PS2 pixels
         uint32_t glW = 0, glH = 0;
         bool depthCleared = false;
-        uint64_t version = 1, syncedVersion = 0;
+        uint64_t version = 1, syncedVersion = 0, lastDrawSeq = 0;
         uint32_t usedW = 0, usedH = 0; // PS2 pixels touched by draws (scissor extents)
     };
 
@@ -205,9 +295,13 @@ struct GSHwBackend::Impl
 
     float scale = 2.0f;
     GLuint program = 0, vao = 0, vbo = 0;
-    GLint locInvSize = -1, locTex = -1, locTexSize = -1, locTme = -1, locFst = -1, locTfx = -1, locTcc = -1, locIip = -1,
-          locAte = -1, locAtst = -1, locAref = -1, locPass = -1, locBlendScale = -1, locRtTex24 = -1, locTa0 = -1, locTa1 = -1, locAem = -1;
+    GLint locInvSize = -1, locTex = -1, locTexSize = -1, locTexDim = -1, locTme = -1, locFst = -1, locTfx = -1, locTcc = -1, locIip = -1,
+          locAte = -1, locAtst = -1, locAref = -1, locPass = -1, locBlendScale = -1, locRtTex24 = -1, locTa0 = -1, locTa1 = -1, locReinterp = -1, locDate = -1, locDatm = -1, locDest = -1, locZTex = -1, locZMax = -1, locTables = -1, locRtColor = -1, locPalette = -1, locTexFmt = -1, locTexFmt2 = -1,
+          locRtFmt = -1, locRtFmt2 = -1, locTex0 = -1, locRtPx = -1, locAem = -1;
 
+    GLuint tableTex = 0, paletteTex = 0;
+    std::unordered_map<const uint16_t *, uint32_t> tableOffset;
+    std::unordered_map<uint32_t, uint32_t> inverseOffset; // psm -> offset of the inverse page table
     std::vector<HwVertex> pending;
     GSDrawState pendingState{};
     bool havePending = false;
@@ -215,7 +309,9 @@ struct GSHwBackend::Impl
 
     std::unordered_map<uint64_t, Texture> textures;
     std::vector<RenderTarget> targets;
-    uint64_t useCounter = 0;
+    uint64_t useCounter = 0, writeSeq = 0;
+    struct UploadRecord { uint32_t lo, hi; uint64_t seq; };
+    std::vector<UploadRecord> uploadLog;
     uint64_t clutHash = 0;
 
     struct Stats
@@ -283,9 +379,12 @@ struct GSHwBackend::Impl
             return false;
         }
         const auto loc = [&](const char *name) { return g.GetUniformLocation(program, name); };
-        locInvSize = loc("uInvSize"); locTex = loc("uTex"); locTexSize = loc("uTexSize"); locTme = loc("uTme");
+        locInvSize = loc("uInvSize"); locTex = loc("uTex"); locTexSize = loc("uTexSize"); locTexDim = loc("uTexDim"); locTme = loc("uTme");
         locFst = loc("uFst"); locTfx = loc("uTfx"); locTcc = loc("uTcc"); locIip = loc("uIip"); locAte = loc("uAte");
         locAtst = loc("uAtst"); locAref = loc("uAref"); locPass = loc("uPass"); locBlendScale = loc("uBlendScale");
+        locReinterp = loc("uReinterp"); locDate = loc("uDate"); locDatm = loc("uDatm"); locDest = loc("uDest"); locZTex = loc("uZTex"); locZMax = loc("uZMax"); locTables = loc("uTables"); locRtColor = loc("uRtColor"); locPalette = loc("uPalette");
+        locTexFmt = loc("uTexFmt"); locTexFmt2 = loc("uTexFmt2"); locRtFmt = loc("uRtFmt"); locRtFmt2 = loc("uRtFmt2");
+        locTex0 = loc("uTex0"); locRtPx = loc("uRtPx");
         locRtTex24 = loc("uRtTex24"); locTa0 = loc("uTa0"); locTa1 = loc("uTa1"); locAem = loc("uAem");
 
         g.GenVertexArrays(1, &vao);
@@ -300,12 +399,54 @@ struct GSHwBackend::Impl
         g.VertexAttribPointer(4, 2, kFloat, kFalse, stride, reinterpret_cast<const void *>(offsetof(HwVertex, u)));
         for (GLuint i = 0; i < 5; ++i)
             g.EnableVertexAttribArray(i);
+        buildTables();
         if (const char *s = std::getenv("PS2X_GS_HW_SCALE"))
             scale = std::max(1.0f, static_cast<float>(std::atof(s)));
         std::fprintf(stderr, "[gs-hw] render-target renderer ready, scale %.2f (%s)\n", scale,
                      reinterpret_cast<const char *>(g.GetString(kRenderer)));
         initialized = true;
         return true;
+    }
+
+    // forward page tables of every texture format + inverse tables (in-page pixel index -> in-page x/y) of the render-target
+    // formats, in one R16UI texture (2048 entries per row)
+    void buildTables()
+    {
+        const Api &g = gl();
+        std::vector<uint16_t> data;
+        const uint32_t psms[] = {0x00, 0x01, 0x02, 0x0A, 0x13, 0x14, 0x1B, 0x24, 0x2C};
+        for (const uint32_t psm : psms)
+        {
+            const GSSwizzle::Format &f = GSSwizzle::GetFormat(psm);
+            if (!f.table || tableOffset.count(f.table))
+                continue;
+            const uint32_t size = 32u << (f.pageShiftX + f.pageShiftY);
+            tableOffset[f.table] = static_cast<uint32_t>(data.size());
+            data.insert(data.end(), f.table, f.table + size);
+        }
+        for (const uint32_t psm : {0x00u, 0x01u, 0x02u, 0x0Au})
+        {
+            const GSSwizzle::Format &f = GSSwizzle::GetFormat(psm);
+            const uint32_t pageSize = 1u << (f.pageShiftX + f.pageShiftY);
+            inverseOffset[psm] = static_cast<uint32_t>(data.size());
+            data.resize(data.size() + pageSize, 0);
+            uint16_t *inv = &data[inverseOffset[psm]];
+            for (uint32_t e = 0; e < pageSize; ++e)
+                inv[f.table[e]] = static_cast<uint16_t>(e);
+        }
+        const uint32_t rows = static_cast<uint32_t>((data.size() + 2047u) / 2048u);
+        data.resize(static_cast<size_t>(rows) * 2048u, 0);
+        g.GenTextures(1, &tableTex);
+        g.BindTexture(kTexture2D, tableTex);
+        g.PixelStorei(kUnpackAlignment, 1);
+        g.TexImage2D(kTexture2D, 0, 0x8234 /*R16UI*/, 2048, rows, 0, 0x8D94 /*RED_INTEGER*/, 0x1403 /*UNSIGNED_SHORT*/, data.data());
+        g.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
+        g.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
+        g.GenTextures(1, &paletteTex);
+        g.BindTexture(kTexture2D, paletteTex);
+        g.TexImage2D(kTexture2D, 0, static_cast<GLint>(kRgba8), 256, 1, 0, kRgba, kUnsignedByte, nullptr);
+        g.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
+        g.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
     }
 
     // ---- render targets -------------------------------------------------------------------------------------------
@@ -494,6 +635,9 @@ struct GSHwBackend::Impl
     }
 
     // does the block range [lo, hi) overlap a render target? then bring that target's pixels into the shadow VRAM first
+    std::unordered_map<std::string, int> syncCounts;
+    uint32_t probeTbw = 0, probePsm = 0, probeRows = 0, probeFbp = 0, probeFbw = 0, probeFpsm = 0, probeTme = 0;
+    size_t probeVerts = 0;
     void syncOverlapping(uint32_t lo, uint32_t hi, const RenderTarget *except)
     {
         for (RenderTarget &t : targets)
@@ -502,8 +646,96 @@ struct GSHwBackend::Impl
                 continue;
             const uint32_t tlo = t.fbp * 32u, thi = tlo + spanBlocks(t.psm, t.fbw, t.usedH);
             if (lo < thi && tlo < hi)
+            {
+                // VRAM is reused over time: when an upload hit this range after the target was last drawn, the data is the
+                // upload's (the target is dead there), not the target's
+                bool overwritten = false;
+                for (const UploadRecord &u : uploadLog)
+                    if (u.seq > t.lastDrawSeq && u.lo < hi && lo < u.hi)
+                    {
+                        overwritten = true;
+                        break;
+                    }
+                if (overwritten)
+                    continue;
+                if (statsEnabled)
+                {
+                    static std::unordered_map<std::string, int> &seen = syncCounts;
+                    char key[200];
+                    std::snprintf(key, sizeof(key), "tex tbp=%x tbw=%u psm=%u (%u rows) vs RT fbp=%u(blk %x) fbw=%u psm=%u used=%ux%u", lo, probeTbw, probePsm, probeRows, t.fbp, tlo, t.fbw, t.psm, t.usedW, t.usedH);
+                    if (seen[key]++ < 0)
+                        std::fprintf(stderr, "[gs-hw-reinterp] %s | draw into fbp=%u fbw=%u psm=%u tme=%d verts=%zu\n", key, probeFbp, probeFbw, probeFpsm, probeTme, probeVerts);
+                }
                 syncTargetToVram(t);
+            }
         }
+    }
+
+    // The render target whose memory range holds the texture's first block (and was not overwritten by an upload since).
+    RenderTarget *findReinterpretSource(uint32_t tbp)
+    {
+        for (RenderTarget &t : targets)
+        {
+            if (t.usedW == 0u)
+                continue;
+            const uint32_t tlo = t.fbp * 32u, thi = tlo + spanBlocks(t.psm, t.fbw, t.usedH);
+            if (tbp < tlo || tbp >= thi)
+                continue;
+            bool overwritten = false;
+            for (const UploadRecord &u : uploadLog)
+                if (u.seq > t.lastDrawSeq && u.lo <= tbp && tbp < u.hi)
+                {
+                    overwritten = true;
+                    break;
+                }
+            if (!overwritten)
+                return &t;
+        }
+        return nullptr;
+    }
+
+    void setupReinterpret(const GSDrawState &s, RenderTarget &rt)
+    {
+        const Api &g = gl();
+        const GSContext &c = s.context;
+        const GSSwizzle::Format &tf = GSSwizzle::GetFormat(c.tex0.psm);
+        const GSSwizzle::Format &rf = GSSwizzle::GetFormat(rt.psm);
+        const auto offsetOf = [&](const uint16_t *table) { const auto it = tableOffset.find(table); return it == tableOffset.end() ? 0u : it->second; };
+        int kind = 3, texelBits = 8;
+        switch (tf.kind)
+        {
+        case GSSwizzle::Kind::Bits32: kind = 0; texelBits = 32; break;
+        case GSSwizzle::Kind::Bits24: kind = 1; texelBits = 24; break;
+        case GSSwizzle::Kind::Bits16: kind = 2; texelBits = 16; break;
+        case GSSwizzle::Kind::Bits8: kind = 3; texelBits = 8; break;
+        default: kind = 3; texelBits = 4; break;
+        }
+        if (kind == 3)
+        {
+            uint32_t palette[256];
+            cpu.BuildPalette(s, palette);
+            g.ActiveTexture(kTexture0 + 3);
+            g.BindTexture(kTexture2D, paletteTex);
+            g.PixelStorei(kUnpackAlignment, 4);
+            g.TexSubImage2D(kTexture2D, 0, 0, 0, 256, 1, kRgba, kUnsignedByte, palette);
+        }
+        g.ActiveTexture(kTexture0 + 1);
+        g.BindTexture(kTexture2D, rt.color);
+        g.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
+        g.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
+        g.ActiveTexture(kTexture0 + 2);
+        g.BindTexture(kTexture2D, tableTex);
+        g.ActiveTexture(kTexture0);
+        g.Uniform1i(locRtColor, 1);
+        g.Uniform1i(locTables, 2);
+        g.Uniform1i(locPalette, 3);
+        g.Uniform4i(locTexFmt, tf.pageShiftX, tf.pageShiftY, tf.pixelsPerPageShift, tf.unpackedShift);
+        g.Uniform4i(locTexFmt2, tf.bitOffset, texelBits, static_cast<GLint>(offsetOf(tf.table)), kind);
+        const auto inv = inverseOffset.find(rt.psm);
+        g.Uniform4i(locRtFmt, rf.pageShiftX, rf.pageShiftY, rf.pixelsPerPageShift, 1 << rf.unpackedShift);
+        g.Uniform4i(locRtFmt2, inv == inverseOffset.end() ? 0 : static_cast<GLint>(inv->second), static_cast<GLint>(rt.fbp), static_cast<GLint>(rt.fbw), 0);
+        g.Uniform4i(locTex0, static_cast<GLint>(c.tex0.tbp0), c.tex0.tbw, s.textureWidth, s.textureHeight);
+        g.Uniform2f(locRtPx, static_cast<float>(rt.pxW), static_cast<float>(rt.pxH));
     }
 
     // ---- drawing --------------------------------------------------------------------------------------------------
@@ -559,6 +791,25 @@ struct GSHwBackend::Impl
         {
             ++stats.skippedPsm;
             return;
+        }
+        // a draw through a different-format view (CT16) of memory that a CT32/CT24 target already owns writes bit fields of its
+        // pixels; it cannot be rasterised into the RGBA target at the same coordinates
+        for (const RenderTarget &t : targets)
+            if (t.fbp == s.context.frame.fbp && t.usedW != 0u && family16(t.psm) != family16(fpsm))
+            {
+                ++stats.skippedPsm;
+                return;
+            }
+        {
+            // draws that only fill a single colour plane (e.g. FBMSK=ffff00ff: G only) build an auxiliary mask that the game
+            // reads back through a differently laid out view; that readback is not reproduced yet, so keep it out of the image
+            const uint32_t m = s.context.frame.fbmsk;
+            const int open = ((m & 0xFFu) != 0xFFu) + (((m >> 8) & 0xFFu) != 0xFFu) + (((m >> 16) & 0xFFu) != 0xFFu);
+            if (open == 1 && (m >> 24) == 0xFFu && s.context.frame.fbmsk != 0xFFFFFFFFu)
+            {
+                ++stats.skippedPrim;
+                return;
+            }
         }
         if (havePending && !sameState(pendingState, s))
             flushPending();
@@ -644,9 +895,10 @@ struct GSHwBackend::Impl
         pending.clear();
     }
 
-    void blendState(const GSDrawState &s, bool &enabled, GLenum &sf, GLenum &df, float &fixScale, float &constant)
+    void blendState(const GSDrawState &s, bool &enabled, GLenum &sf, GLenum &df, float &fixScale, float &constant, GLenum &equation)
     {
         enabled = false;
+        equation = kFuncAdd;
         sf = kOne; df = kZero;
         fixScale = 1.0f / 128.0f;
         constant = 0.0f;
@@ -671,6 +923,7 @@ struct GSHwBackend::Impl
         else if (a == 2 && b == 1 && d == 1) { sf = kZero; df = cd; }    // Cd*(1-C)
         else if (a == 0 && b == 2 && d == 2) { sf = cs; df = kZero; }    // Cs*C
         else if (a == 2 && b == 0 && d == 2) { sf = kZero; df = kZero; } // 0
+        else if (a == 2 && b == 0 && d == 1) { sf = cs; df = kOne; equation = kFuncReverseSubtract; } // Cd - Cs*C
         else { ++stats.unsupportedBlend; sf = cs; df = cd; }
     }
 
@@ -693,9 +946,9 @@ struct GSHwBackend::Impl
         const double nowSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         if (dumpAtSec >= 0.0 && nowSec >= dumpAtSec && dumpedAt == 0 && frameBatch == 1)
             dumpedAt = 1;
-        if (dumpedAt == 1 && dumped < 120 && dumpPresents < 0)
+        if (dumpedAt == 1 && dumped < 800 && dumpPresents < 0)
             dumpPresents = 0, presentCount = 0;
-        if (dumpPresents >= 0 && presentCount >= dumpPresents && dumped < 120)
+        if (dumpPresents >= 0 && presentCount >= dumpPresents && presentCount < dumpPresents + 3 && dumped < 800 && (c.frame.fbp == 208 || c.frame.fbp == 320 || dumped < 40))
         {
             ++dumped;
             const HwVertex &v0 = verts[0];
@@ -710,8 +963,20 @@ struct GSHwBackend::Impl
         attachDepth(rt, c.zbuf.zbp);
         rt.psm = c.frame.psm;
         ++rt.version;
-        rt.usedW = std::max<uint32_t>(rt.usedW, std::min<uint32_t>(c.scissor.x1 + 1u, rt.pxW));
-        rt.usedH = std::max<uint32_t>(rt.usedH, std::min<uint32_t>(c.scissor.y1 + 1u, rt.pxH));
+        rt.lastDrawSeq = ++writeSeq;
+        {
+            // real extent of what was drawn (vertices clipped to the scissor), not the scissor itself
+            float maxX = 0.0f, maxY = 0.0f;
+            for (const HwVertex &v : verts)
+            {
+                maxX = std::max(maxX, v.x);
+                maxY = std::max(maxY, v.y);
+            }
+            const uint32_t bx = static_cast<uint32_t>(std::min<float>(std::max(maxX, 0.0f), static_cast<float>(c.scissor.x1 + 1u)));
+            const uint32_t by = static_cast<uint32_t>(std::min<float>(std::max(maxY, 0.0f), static_cast<float>(c.scissor.y1 + 1u)));
+            rt.usedW = std::max<uint32_t>(rt.usedW, std::min<uint32_t>(bx, rt.pxW));
+            rt.usedH = std::max<uint32_t>(rt.usedH, std::min<uint32_t>(by, rt.pxH));
+        }
         g.BindFramebuffer(kFramebuffer, rt.fbo);
         g.Viewport(0, 0, rt.glW, rt.glH);
         g.Enable(kScissorTest);
@@ -734,13 +999,13 @@ struct GSHwBackend::Impl
                         mb = (fbmsk & 0xFF0000) == 0xFF0000 ? kFalse : kTrue, ma = (fbmsk & 0xFF000000u) == 0xFF000000u ? kFalse : kTrue;
 
         bool blend = false;
-        GLenum sf, df;
+        GLenum sf, df, equation;
         float fixScale, constant;
-        blendState(s, blend, sf, df, fixScale, constant);
+        blendState(s, blend, sf, df, fixScale, constant, equation);
         if (blend)
         {
             g.Enable(kBlend);
-            g.BlendEquationSeparate(kFuncAdd, kFuncAdd);
+            g.BlendEquationSeparate(equation, kFuncAdd);
             g.BlendFuncSeparate(sf, df, kOne, kZero);
             g.BlendColor(constant, constant, constant, constant);
         }
@@ -748,6 +1013,19 @@ struct GSHwBackend::Impl
             g.Disable(kBlend);
 
         g.UseProgram(program);
+        {
+            const bool date = ((c.test >> 14) & 1u) != 0u && c.frame.psm != GS_PSM_CT24;
+            g.Uniform1i(locDate, date ? 1 : 0);
+            g.Uniform1i(locDatm, ((c.test >> 15) & 1u) != 0u ? 1 : 0);
+            if (date)
+            {
+                g.ActiveTexture(kTexture0 + 4);
+                g.BindTexture(kTexture2D, rt.color);
+                g.Uniform1i(locDest, 4);
+                g.ActiveTexture(kTexture0);
+                g.TextureBarrier();
+            }
+        }
         g.Uniform2f(locInvSize, 1.0f / rt.pxW, 1.0f / rt.pxH);
         g.Uniform1i(locTme, s.prim.tme ? 1 : 0);
         g.Uniform1i(locFst, s.prim.fst ? 1 : 0);
@@ -767,16 +1045,28 @@ struct GSHwBackend::Impl
             if (src == &rt)
                 g.TextureBarrier();
             Texture dummy;
-            if (!src)
-            {
-                const uint32_t lo = c.tex0.tbp0, hi = lo + spanBlocks(c.tex0.psm, c.tex0.tbw, std::max<uint32_t>(1u, s.textureHeight));
-                syncOverlapping(lo, hi, &rt);
-                g.BindFramebuffer(kFramebuffer, rt.fbo); // the sync may have bound another target
-            }
-            Texture &tex = src ? dummy : textureFor(s);
+            RenderTarget *zsrc = nullptr;
+            const bool zFormat = c.tex0.psm == 0x30 || c.tex0.psm == 0x31 || c.tex0.psm == 0x32 || c.tex0.psm == 0x3A;
+            if (zFormat && (c.tex0.tbp0 % 32u) == 0u)
+                for (RenderTarget &t : targets)
+                    if (t.depth && t.zbp == c.tex0.tbp0 / 32u)
+                        zsrc = &t;
+            if (zsrc)
+                src = nullptr;
+            RenderTarget *rsrc = nullptr;
+            if (!src && !zsrc)
+                rsrc = findReinterpretSource(c.tex0.tbp0);
+            if (rsrc == &rt)
+                g.TextureBarrier();
+            Texture &tex = (src || rsrc || zsrc) ? dummy : textureFor(s);
             g.ActiveTexture(kTexture0);
-            g.BindTexture(kTexture2D, src ? src->color : tex.id);
-            g.Uniform1i(locRtTex24, !src ? 0 : c.tex0.psm == GS_PSM_CT24 ? 1 : family16(c.tex0.psm) ? 2 : 0);
+            g.BindTexture(kTexture2D, zsrc ? zsrc->depth : src ? src->color : rsrc ? rsrc->color : tex.id);
+            g.Uniform1i(locZTex, !zsrc ? 0 : c.tex0.psm == 0x32 || c.tex0.psm == 0x3A ? 16 : c.tex0.psm == 0x31 ? 24 : 32);
+            g.Uniform1f(locZMax, zsrc ? zMaxFor(static_cast<uint8_t>(c.tex0.psm)) : 1.0f);
+            g.Uniform1i(locRtTex24, !(src || rsrc) ? 0 : c.tex0.psm == GS_PSM_CT24 ? 1 : family16(c.tex0.psm) ? 2 : 0);
+            g.Uniform1i(locReinterp, rsrc ? 1 : 0);
+            if (rsrc)
+                setupReinterpret(s, *rsrc);
             g.Uniform1f(locTa0, static_cast<float>(s.texa.ta0));
             g.Uniform1f(locTa1, static_cast<float>(s.texa.ta1));
             g.Uniform1i(locAem, s.texa.aem ? 1 : 0);
@@ -788,7 +1078,14 @@ struct GSHwBackend::Impl
             g.TexParameteri(kTexture2D, kTextureWrapS, wu);
             g.TexParameteri(kTexture2D, kTextureWrapT, wv);
             g.Uniform1i(locTex, 0);
-            if (src)
+            g.Uniform2f(locTexDim, static_cast<float>(std::max<uint16_t>(s.textureWidth, 1)), static_cast<float>(std::max<uint16_t>(s.textureHeight, 1)));
+            if (zsrc)
+            {
+                g.Uniform2f(locTexSize, static_cast<float>(zsrc->pxW), static_cast<float>(zsrc->pxH));
+                g.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
+                g.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
+            }
+            else if (src)
                 g.Uniform2f(locTexSize, static_cast<float>(src->pxW), static_cast<float>(src->pxH));
             else
                 g.Uniform2f(locTexSize, static_cast<float>(tex.width), static_cast<float>(tex.height));
@@ -835,14 +1132,19 @@ struct GSHwBackend::Impl
         ++stats.batches;
         g.Disable(kScissorTest);
         static const int rtDumpAt = std::getenv("GOW_GS_HW_RTDUMP") ? std::atoi(std::getenv("GOW_GS_HW_RTDUMP")) : -1;
-        if (rtDumpAt >= 0 && presentCount == rtDumpAt && rt.fbp == 0 && (frameBatch % 3) == 0 && frameBatch <= 60)
+        static const double rtDumpSec = std::getenv("GOW_GS_HW_RTDUMPAT") ? std::atof(std::getenv("GOW_GS_HW_RTDUMPAT")) : -1.0;
+        static const auto rtT0 = std::chrono::steady_clock::now();
+        static int rtDumpPresent = -1;
+        if (rtDumpSec >= 0.0 && rtDumpPresent < 0 && frameBatch == 1 && std::chrono::duration<double>(std::chrono::steady_clock::now() - rtT0).count() >= rtDumpSec)
+            rtDumpPresent = presentCount;
+        if (((rtDumpAt >= 0 && presentCount == rtDumpAt) || (rtDumpPresent >= 0 && presentCount == rtDumpPresent)) && (rt.fbp == 0 || rt.fbp == 208) && frameBatch >= 26 && frameBatch <= 46)
         {
             std::vector<uint8_t> px(static_cast<size_t>(rt.glW) * rt.glH * 4u);
             g.BindFramebuffer(kFramebuffer, rt.fbo);
             g.PixelStorei(kPackAlignment, 1);
             g.ReadPixels(0, 0, rt.glW, rt.glH, kRgba, kUnsignedByte, px.data());
             char name[64];
-            std::snprintf(name, sizeof(name), "gs_hw_rt0_b%02d.ppm", frameBatch);
+            std::snprintf(name, sizeof(name), "gs_hw_rt%u_b%03d.ppm", rt.fbp, frameBatch);
             if (FILE *f = std::fopen(name, "wb"))
             {
                 std::fprintf(f, "P6 %u %u 255 ", rt.glW, rt.glH);
@@ -870,6 +1172,10 @@ struct GSHwBackend::Impl
                      (unsigned long long)stats.draws, (unsigned long long)stats.batches, (unsigned long long)stats.texDecodes,
                      (unsigned long long)stats.texHits, (unsigned long long)stats.skippedPsm, (unsigned long long)stats.skippedPrim,
                      (unsigned long long)stats.unsupportedBlend, textures.size());
+        for (const auto &kv : syncCounts)
+            if (kv.second > 5)
+                std::fprintf(stderr, "[gs-hw-sync] x%d %s\n", kv.second, kv.first.c_str());
+        syncCounts.clear();
         stats.draws = stats.batches = stats.texDecodes = stats.texHits = stats.skippedPsm = stats.skippedPrim = stats.unsupportedBlend = 0;
     }
 
@@ -929,7 +1235,11 @@ void GSHwBackend::BeginTransfer(const GSTransferCommand &command)
     if (command.direction == 0u || command.direction == 2u)
     {
         const uint32_t rows = static_cast<uint32_t>(command.trxpos.dsay) + command.trxreg.rrh;
-        d.invalidateBlocks(command.bitbltbuf.dbp, command.bitbltbuf.dbp + spanBlocks(command.bitbltbuf.dpsm, command.bitbltbuf.dbw, rows));
+        const uint32_t lo = command.bitbltbuf.dbp, hi = lo + spanBlocks(command.bitbltbuf.dpsm, command.bitbltbuf.dbw, rows);
+        d.invalidateBlocks(lo, hi);
+        if (d.uploadLog.size() > 4096u)
+            d.uploadLog.erase(d.uploadLog.begin(), d.uploadLog.begin() + 2048);
+        d.uploadLog.push_back({lo, hi, ++d.writeSeq});
     }
 }
 

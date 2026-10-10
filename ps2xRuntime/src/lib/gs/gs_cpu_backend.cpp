@@ -1381,6 +1381,14 @@ void GSCpuBackend::DecodeTextureRgba(const GSDrawState &state, std::vector<uint3
             out[static_cast<size_t>(y) * w + x] = SampleTexture(st, 0.0f, 0.0f, 1.0f, static_cast<uint16_t>(std::min<uint32_t>(x, 4095u) * 16u), static_cast<uint16_t>(std::min<uint32_t>(y, 4095u) * 16u));
 }
 
+void GSCpuBackend::BuildPalette(const GSDrawState &state, uint32_t out[256])
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const GSTex0Reg &t = state.context.tex0;
+    for (uint32_t i = 0; i < 256u; ++i)
+        out[i] = LookupCLUT(state, static_cast<uint8_t>(i), t.cpsm, t.csm, t.csa, t.psm);
+}
+
 uint64_t GSCpuBackend::ClutHash() const
 {
     uint64_t hash = 1469598103934665603ull;

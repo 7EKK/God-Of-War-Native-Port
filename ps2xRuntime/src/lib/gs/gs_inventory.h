@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <array>
 #include <map>
 #include <string>
 #include <vector>
@@ -58,6 +59,13 @@ public:
         }
         if (fbp == tbp) ++m_feedback;
         if (c.zbuf.zbp == tbp) ++m_depthAsTex;
+        {
+            const auto up = m_uploads.find(tbp);
+            if (up == m_uploads.end())
+                ++m_hist["tex psm=" + hex(c.tex0.psm) + " no upload at tbp"];
+            else
+                ++m_hist["tex psm=" + hex(c.tex0.psm) + " tbw=" + hex(c.tex0.tbw) + " vs upload psm=" + hex(up->second[0]) + " bw=" + hex(up->second[1]) + " " + hex(up->second[2]) + "x" + hex(up->second[3]) + " tex=" + hex(b.state.textureWidth) + "x" + hex(b.state.textureHeight)];
+        }
         const Target *t = findTarget(tbp);
         if (!t)
         {
@@ -88,6 +96,8 @@ public:
         if (dir == 0u)
         {
             ++m_hostToLocal;
+            m_uploads[c.bitbltbuf.dbp] = {c.bitbltbuf.dpsm, c.bitbltbuf.dbw, c.trxreg.rrw, c.trxreg.rrh};
+            ++m_hist["upload dpsm=" + hex(c.bitbltbuf.dpsm) + " dbw=" + hex(c.bitbltbuf.dbw) + " " + hex(c.trxreg.rrw) + "x" + hex(c.trxreg.rrh)];
             if (findTarget(c.bitbltbuf.dbp)) ++m_uploadIntoRt;
             m_uploadPixels += static_cast<uint64_t>(c.trxreg.rrw) * c.trxreg.rrh;
         }
@@ -217,6 +227,7 @@ private:
     std::vector<Target> m_targets;
     std::map<uint32_t, uint64_t> m_reinterpKinds, m_texPsm;
     std::map<std::string, uint64_t> m_hist;
+    std::map<uint32_t, std::array<uint32_t, 4>> m_uploads;
     uint64_t m_prim[8]{};
     uint64_t m_draws = 0, m_untextured = 0, m_plainTex = 0, m_rtSame = 0, m_rtSameFamilyOtherPsm = 0, m_rtReinterpret = 0;
     uint64_t m_rtInsideSame = 0, m_rtInsideOther = 0, m_feedback = 0, m_depthAsTex = 0, m_clutFromRt = 0, m_clutLoads = 0;

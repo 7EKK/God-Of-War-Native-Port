@@ -39,6 +39,8 @@ public:
     // Decodes the texture selected by `state` (TEX0 + TEXA + CLUT) into texW*texH RGBA8 texels (point sampling, wrap not applied).
     void DecodeTextureRgba(const GSDrawState &state, std::vector<uint32_t> &out);
     uint64_t ClutHash() const;
+    // 256-entry RGBA palette for an indexed texture described by `state` (CLUT + TEXA applied).
+    void BuildPalette(const GSDrawState &state, uint32_t out[256]);
     bool ExportState(GSBackendState &out) override;
     bool ImportState(const GSBackendState &state) override;
 
