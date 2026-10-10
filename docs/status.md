@@ -581,10 +581,28 @@ set/weights (same 43 controllers of the player animator 0x74ED74 at identical ad
   a view round trip — proxy target in the view's format filled from the owner by the reinterpreting fetch, draw, resolve back by the
   inverse address mapping (needs texelBits > source bits support in the shader: two source pixels per word).
 
+## 2026-10-10 (night 4): GS mask passes, HUD, menu depth of field (ext 2509d00)
+- **Channel shuffles** (`tryShuffle`/`flushShuffle`): the game moves bytes between channels with 8 px sprites through a CT16 view
+  of a CT32 target (FBMSK 3FFF = high byte of each halfword), textured from a CT16/Z16 view of a CT32 target or of the Z buffer.
+  In a 16 bit view the two 8 px halves of each 16 px column group are the low/high halfwords of the same 8 owner pixels, so each
+  sprite becomes owner-block quads (exact addresses: GSSwizzle + inverse page tables) and a halfword copy in a small GL program;
+  TEXA is applied to the alpha bit. Olympus per frame: A <- Z[15:8] (fog), A <- G, G-plane shadow mask (now drawn normally with a
+  G-only colour mask), swap through the 64 px temp at fbp 320, then `Cd - Cs*As` gated by DATE. Fixed the stone blotches.
+- **Removed the colour->depth resolve** (7664544): the colour draws into the Z memory (CT24 at fbp 104 = zbp) are full-screen
+  `Cs - Cd` inversions; mirroring them into the GL depth buffer wiped the depth and hid Kratos and the torch flames.
+- **High-byte textures** (T8H/T4HL/T4HH) stored in the top byte of the Z memory are read from the uploaded bytes, not from the
+  CT24 alias (which never writes bits 24-31): HUD prompts ("R2") and the save point light shaft/glow now match PCSX2.
+- **Z buffer in a target's own colour memory** (ZBP == FBP, menu DOF strips at fbp 320): Z test/write in the shader against the
+  colour words. **GS blending in the shader** for C = Ad (0x80 = 1.0) and COLCLAMP=0 wrap. Menu background blur now matches.
+- Verified: Olympus 40 fps (scale 1), 0 skipped batches, Kratos/flames/HUD/light shaft present (port/ui5).
+- PCSX2 reference driving: docs/diagnostics.md "PCSX2 driven automatically"; the old CPU GS backend (no PS2X_GS_HW) is also a
+  correct oracle for the menu.
+- Open: main menu Kratos face darker than PCSX2/old backend (one pass still off); Kratos sometimes yellow/green tinted in gameplay
+  (also in the 19:44 baseline); fps of the zone run varied 21-40 between runs (CPU-bound EE/VU windows, re-measure).
+
 ## RESUME POINT (2026-10-10, end of session)
-State: native VU1 (done, verified) + native GS renderer (`PS2X_GS_HW=1`, opt-in, Olympus correct at 1x-3x, ~40 fps; ext 7664544).
-Open, in order: (1) GS mask passes (CT16-view draws of CT32 targets, single-plane G fills) -> proxy-target round trip, kills the stone
-blotches; (2) re-run all 4 zones with PS2X_GS_HW=1 (Cliffs was 11 fps), then make it the default and drop the bicubic upscale at
+State: native VU1 (done, verified) + native GS renderer (`PS2X_GS_HW=1`, opt-in, Olympus correct at 1x-3x incl. mask passes and HUD, ~40 fps; ext 2509d00).
+Open, in order: (1) menu Kratos face lighting (see night 4); (2) re-run all 4 zones with PS2X_GS_HW=1 (Cliffs was 11 fps), then make it the default and drop the bicubic upscale at
 internal >= window; (3) IOP / SPU2 / CDVD native replacement (no emulation rule); (4) EE speed; (5) LAST: read extracted game files
 instead of the ISO. Port KIexster's game-speed meter (ps2recomp-game-speed.patch, GOW_DELTA_DIAG=1) before quoting fps again.
 Debug env for the GS renderer: see the "night 2" section (GOW_GS_HW_STATS/_DUMP/_DUMPAT/_RTDUMPAT/_ONLY/_NODEPTH...).
