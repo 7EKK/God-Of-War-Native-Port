@@ -194,7 +194,9 @@ void main()
     float a = v.a;
     if (uTme != 0)
     {
-        vec2 uv = (uFst != 0) ? vUV : (vSTQ.xy / abs(vSTQ.z)) * uTexDim;
+        // U = S/Q with the sign of Q: a negative Q flips both coordinates (the menu Kratos has one)
+        float q = (abs(vSTQ.z) < 1e-30) ? 1e-30 : vSTQ.z;
+        vec2 uv = (uFst != 0) ? vUV : (vSTQ.xy / q) * uTexDim;
         vec4 t;
         if (uReinterp != 0)
         {
@@ -1204,7 +1206,7 @@ struct GSHwBackend::Impl
             }
             else
             {
-                const float q0 = std::max(std::fabs(a.q), 1e-20f), q1 = std::max(std::fabs(c.q), 1e-20f);
+                const float q0 = std::fabs(a.q) < 1e-20f ? 1e-20f : a.q, q1 = std::fabs(c.q) < 1e-20f ? 1e-20f : c.q;
                 u0 = a.s / q0 * texW; v0 = a.t / q0 * texH; u1 = c.s / q1 * texW; v1 = c.t / q1 * texH;
             }
             GSDrawState sp = s; // sprites carry texel UVs, never STQ
@@ -1509,9 +1511,14 @@ struct GSHwBackend::Impl
         static const double rtDumpSec = std::getenv("GOW_GS_HW_RTDUMPAT") ? std::atof(std::getenv("GOW_GS_HW_RTDUMPAT")) : -1.0;
         static const auto rtT0 = std::chrono::steady_clock::now();
         static int rtDumpPresent = -1;
+        // GOW_GS_HW_RTDUMPRANGE=a-b: batches of that frame to dump (default 26-46)
+        static const char *rtRange = std::getenv("GOW_GS_HW_RTDUMPRANGE");
+        static const int rtDumpLo = rtRange ? std::atoi(rtRange) : 26;
+        static const int rtDumpHi = rtRange && std::strchr(rtRange, '-') ? std::atoi(std::strchr(rtRange, '-') + 1) : 46;
+        static std::vector<bool> rtDumped(1024, false); // with the GOW_GS_HW_DUMP window: the first frame that reaches a batch wins
         if (rtDumpSec >= 0.0 && rtDumpPresent < 0 && frameBatch == 1 && std::chrono::duration<double>(std::chrono::steady_clock::now() - rtT0).count() >= rtDumpSec)
             rtDumpPresent = presentCount;
-        if (((rtDumpAt >= 0 && presentCount == rtDumpAt) || (rtDumpPresent >= 0 && presentCount == rtDumpPresent)) && (rt.fbp == 0 || rt.fbp == 208) && frameBatch >= 26 && frameBatch <= 46)
+        if (((rtDumpAt >= 0 && presentCount == rtDumpAt) || (rtDumpPresent >= 0 && presentCount == rtDumpPresent) || (rtRange && dumpPresents >= 0 && presentCount >= dumpPresents && presentCount < dumpPresents + 3 && !rtDumped[frameBatch & 1023])) && (rt.fbp == 0 || rt.fbp == 208) && frameBatch >= rtDumpLo && frameBatch <= rtDumpHi)
         {
             std::vector<uint8_t> px(static_cast<size_t>(rt.glW) * rt.glH * 4u);
             g.BindFramebuffer(kFramebuffer, rt.fbo);
@@ -1519,6 +1526,7 @@ struct GSHwBackend::Impl
             g.ReadPixels(0, 0, rt.glW, rt.glH, kRgba, kUnsignedByte, px.data());
             char name[64];
             std::snprintf(name, sizeof(name), "gs_hw_rt%u_b%03d.ppm", rt.fbp, frameBatch);
+            rtDumped[frameBatch & 1023] = true;
             if (FILE *f = std::fopen(name, "wb"))
             {
                 std::fprintf(f, "P6 %u %u 255 ", rt.glW, rt.glH);
@@ -1719,23 +1727,20 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
                          (unsigned long long)request.pmode, (unsigned long long)request.smode2, (unsigned long long)request.dispfb1,
                          (unsigned long long)request.display1, (unsigned long long)request.dispfb2, (unsigned long long)request.display2);
     }
-    uint32_t fbp, fbw, dbx, dby, w, h;
-    bool ok = enable1 && decode(true, request.dispfb1, request.display1, fbp, fbw, dbx, dby, w, h);
-    if (!ok)
-        ok = enable2 && decode(true, request.dispfb2, request.display2, fbp, fbw, dbx, dby, w, h);
-    if (!ok)
+    // the two read circuits; circuit 1 is shown over circuit 2 (or BGCOLOR), blended by ALP (MMOD) or its own alpha x2
+    uint32_t fbp1, fbw1, dbx1, dby1, w1, h1, fbp2, fbw2, dbx2, dby2, w2, h2;
+    const bool ok1 = enable1 && decode(true, request.dispfb1, request.display1, fbp1, fbw1, dbx1, dby1, w1, h1);
+    const bool ok2 = enable2 && decode(true, request.dispfb2, request.display2, fbp2, fbw2, dbx2, dby2, w2, h2);
+    if (!ok1 && !ok2)
         return frame;
-    RenderTarget *rt = d.findTarget(fbp);
+    const uint32_t fbp = ok1 ? fbp1 : fbp2, w = ok1 ? w1 : w2, h = ok1 ? h1 : h2;
     frame.displayFbp = fbp;
     frame.sourceFbp = fbp;
     const uint32_t outW = static_cast<uint32_t>(std::ceil(w * d.scale)), outH = static_cast<uint32_t>(std::ceil(h * d.scale));
     frame.width = outW;
     frame.height = outH;
     frame.pixels.assign(static_cast<size_t>(outW) * outH * 4u, 0u);
-    if (!rt)
-        return frame;
     const Api &g = d.gl();
-    g.BindFramebuffer(kFramebuffer, rt->fbo);
     g.PixelStorei(kPackAlignment, 1);
     static const int depthDumpAt = std::getenv("GOW_GS_HW_DEPTHDUMP") ? std::atoi(std::getenv("GOW_GS_HW_DEPTHDUMP")) : -1;
     if (depthDumpAt >= 0 && d.presentCount == depthDumpAt)
@@ -1756,16 +1761,55 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
                 }
                 std::fclose(f);
             }
-            g.BindFramebuffer(kFramebuffer, rt->fbo);
         }
     }
 
-    const uint32_t sx = static_cast<uint32_t>(dbx * d.scale), sy = static_cast<uint32_t>(dby * d.scale);
-    const uint32_t cw = std::min(outW, rt->glW > sx ? rt->glW - sx : 0u), ch = std::min(outH, rt->glH > sy ? rt->glH - sy : 0u);
-    std::vector<uint8_t> tmp(static_cast<size_t>(cw) * ch * 4u);
-    g.ReadPixels(sx, sy, cw, ch, kRgba, kUnsignedByte, tmp.data());
-    for (uint32_t y = 0; y < ch; ++y)
-        std::memcpy(frame.pixels.data() + static_cast<size_t>(y) * outW * 4u, tmp.data() + static_cast<size_t>(y) * cw * 4u, static_cast<size_t>(cw) * 4u);
+    // one circuit's pixels at output size (RGBA, alpha as the GS stores it; CT24 reads as 0x80)
+    const auto readCircuit = [&](uint32_t cfbp, uint64_t dispfb, uint32_t cdbx, uint32_t cdby, std::vector<uint8_t> &out)
+    {
+        out.assign(static_cast<size_t>(outW) * outH * 4u, 0u);
+        RenderTarget *rt = d.findTarget(cfbp);
+        if (!rt)
+            return false;
+        g.BindFramebuffer(kFramebuffer, rt->fbo);
+        const uint32_t sx = static_cast<uint32_t>(cdbx * d.scale), sy = static_cast<uint32_t>(cdby * d.scale);
+        const uint32_t cw = std::min(outW, rt->glW > sx ? rt->glW - sx : 0u), ch = std::min(outH, rt->glH > sy ? rt->glH - sy : 0u);
+        std::vector<uint8_t> tmp(static_cast<size_t>(cw) * ch * 4u);
+        g.ReadPixels(sx, sy, cw, ch, kRgba, kUnsignedByte, tmp.data());
+        for (uint32_t y = 0; y < ch; ++y)
+            std::memcpy(out.data() + static_cast<size_t>(y) * outW * 4u, tmp.data() + static_cast<size_t>(y) * cw * 4u, static_cast<size_t>(cw) * 4u);
+        if (((dispfb >> 15) & 0x1Fu) == GS_PSM_CT24)
+            for (size_t i = 3; i < out.size(); i += 4)
+                out[i] = 0x80;
+        return true;
+    };
+    const bool mmod = ((request.pmode >> 5) & 1u) != 0u, slbg = ((request.pmode >> 7) & 1u) != 0u;
+    const uint32_t alp = static_cast<uint32_t>((request.pmode >> 8) & 0xFFu);
+    if (ok1 && ok2)
+    {
+        std::vector<uint8_t> top, bottom;
+        readCircuit(fbp1, request.dispfb1, dbx1, dby1, top);
+        if (slbg)
+        {
+            bottom.assign(top.size(), 0u);
+            for (size_t i = 0; i < bottom.size(); i += 4)
+                for (int c = 0; c < 3; ++c)
+                    bottom[i + c] = static_cast<uint8_t>((request.bgcolor >> (8 * c)) & 0xFFu);
+        }
+        else
+            readCircuit(fbp2, request.dispfb2, dbx2, dby2, bottom);
+        for (size_t i = 0; i < top.size(); i += 4)
+        {
+            const int factor = static_cast<int>(mmod ? alp : std::min<uint32_t>(255u, top[i + 3] * 2u));
+            for (int c = 0; c < 3; ++c)
+            {
+                const int dst = bottom[i + c];
+                frame.pixels[i + c] = static_cast<uint8_t>(std::clamp(dst + ((static_cast<int>(top[i + c]) - dst) * factor) / 255, 0, 255));
+            }
+        }
+    }
+    else
+        readCircuit(fbp, ok1 ? request.dispfb1 : request.dispfb2, ok1 ? dbx1 : dbx2, ok1 ? dby1 : dby2, frame.pixels);
     for (size_t i = 3; i < frame.pixels.size(); i += 4)
         frame.pixels[i] = 255;
     // the frontend packs presentation rows with a fixed 640 pixel stride
