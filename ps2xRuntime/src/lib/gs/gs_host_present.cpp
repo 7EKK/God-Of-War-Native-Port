@@ -1,5 +1,6 @@
 // GOW-Port: contexto host, selección de frames y dibujo raylib usados por el port.
 #include "runtime/gs/gs_host_present.h"
+#include "rlgl.h"
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/ps2_perf.h"
 #include "ps2_log.h"
@@ -15,6 +16,93 @@ namespace
     constexpr uint32_t kWidth = 640u;
     constexpr uint32_t kHeight = 512u;
     constexpr uint32_t kDisplayHeight = 448u;
+}
+
+
+namespace
+{
+    // GOW-Port: output scaler. The GS renders at its native resolution (512x448); this pass maps that image onto the window
+    // at the window's resolution with a 5-tap Catmull-Rom bicubic (GOW_SCALER=sharp, default) instead of the plain
+    // bilinear stretch (GOW_SCALER=bilinear), then applies a light contrast-adaptive sharpen. It does not add detail
+    // (that needs a scaled GS render target); it removes the blur of the stretch.
+    const char *kScalerFragment = R"GLSL(
+#version 330
+in vec2 fragTexCoord;
+in vec4 fragColor;
+uniform sampler2D texture0;
+uniform vec2 srcSize;
+uniform float sharpen;
+out vec4 finalColor;
+
+vec4 tex(vec2 uv) { return texture(texture0, uv); }
+
+void main()
+{
+    vec2 pos = fragTexCoord * srcSize;
+    vec2 center = floor(pos - 0.5) + 0.5;
+    vec2 f = pos - center;
+    vec2 f2 = f * f, f3 = f2 * f;
+    vec2 w0 = -0.5 * f3 + f2 - 0.5 * f;
+    vec2 w1 = 1.5 * f3 - 2.5 * f2 + 1.0;
+    vec2 w2 = -1.5 * f3 + 2.0 * f2 + 0.5 * f;
+    vec2 w3 = 0.5 * f3 - 0.5 * f2;
+    vec2 w12 = w1 + w2;
+    vec2 offset12 = w2 / w12;
+    vec2 tc0 = (center - 1.0) / srcSize;
+    vec2 tc3 = (center + 2.0) / srcSize;
+    vec2 tc12 = (center + offset12) / srcSize;
+    vec4 c = tex(vec2(tc12.x, tc0.y)) * (w12.x * w0.y)
+           + tex(vec2(tc0.x, tc12.y)) * (w0.x * w12.y)
+           + tex(vec2(tc12.x, tc12.y)) * (w12.x * w12.y)
+           + tex(vec2(tc3.x, tc12.y)) * (w3.x * w12.y)
+           + tex(vec2(tc12.x, tc3.y)) * (w12.x * w3.y);
+    float norm = (w12.x * w0.y) + (w0.x * w12.y) + (w12.x * w12.y) + (w3.x * w12.y) + (w12.x * w3.y);
+    c /= norm;
+    // contrast-adaptive sharpen from the four direct neighbours of the nearest source texel
+    vec2 px = 1.0 / srcSize;
+    vec3 n = tex(fragTexCoord + vec2(0.0, -px.y)).rgb, s = tex(fragTexCoord + vec2(0.0, px.y)).rgb;
+    vec3 e = tex(fragTexCoord + vec2(px.x, 0.0)).rgb, w = tex(fragTexCoord + vec2(-px.x, 0.0)).rgb;
+    vec3 lo = min(min(n, s), min(e, w)), hi = max(max(n, s), max(e, w));
+    vec3 amp = clamp(min(lo, 1.0 - hi) / max(hi, vec3(0.0001)), 0.0, 1.0);
+    float peak = -1.0 / mix(8.0, 5.0, sharpen);
+    vec3 wgt = sqrt(amp) * peak;
+    vec3 sharp = (c.rgb + (n + s + e + w) * wgt) / (1.0 + 4.0 * wgt);
+    finalColor = vec4(clamp(sharp, 0.0, 1.0), 1.0);
+}
+)GLSL";
+
+    Shader g_scaler{};
+    int g_scalerSrcSize = -1, g_scalerSharpen = -1;
+    bool g_scalerTried = false;
+
+    bool scalerEnabled()
+    {
+        static const bool on = [] { const char *v = std::getenv("GOW_SCALER"); return !(v && std::strcmp(v, "bilinear") == 0); }();
+        return on;
+    }
+
+    Shader *scalerShader()
+    {
+        if (!g_scalerTried)
+        {
+            g_scalerTried = true;
+            if (scalerEnabled())
+            {
+                g_scaler = LoadShaderFromMemory(nullptr, kScalerFragment);
+                if (g_scaler.id != 0u && g_scaler.id != rlGetShaderIdDefault())
+                {
+                    g_scalerSrcSize = GetShaderLocation(g_scaler, "srcSize");
+                    g_scalerSharpen = GetShaderLocation(g_scaler, "sharpen");
+                }
+                else
+                {
+                    std::fprintf(stderr, "[gs-present] scaler shader failed, using bilinear\n");
+                    g_scaler = {};
+                }
+            }
+        }
+        return g_scaler.id != 0u ? &g_scaler : nullptr;
+    }
 }
 
 void GSHostPresentation::captureHostContext()
@@ -194,7 +282,19 @@ GSHostPresentation::View GSHostPresentation::renderFrame(GS &gs, uint64_t vsyncT
                                 (screenHeight - destinationHeight) * 0.5f,
                                 destinationWidth, destinationHeight};
     // GOW-Port: textura del PBO con filas en orden; no invertir source.height.
+    Shader *scaler = scalerShader();
+    if (scaler)
+    {
+        const float size[2] = {sourceWidth, sourceHeight};
+        static const float sharpen = [] { const char *v = std::getenv("GOW_SHARPEN"); return v ? static_cast<float>(std::atof(v)) : 0.5f; }();
+        SetShaderValue(*scaler, g_scalerSrcSize, size, SHADER_UNIFORM_VEC2);
+        SetShaderValue(*scaler, g_scalerSharpen, &sharpen, SHADER_UNIFORM_FLOAT);
+        SetTextureFilter(selected.texture, TEXTURE_FILTER_BILINEAR);
+        BeginShaderMode(*scaler);
+    }
     DrawTexturePro(selected.texture, source, destination, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
+    if (scaler)
+        EndShaderMode();
     if (overlay)
         overlay();
     {

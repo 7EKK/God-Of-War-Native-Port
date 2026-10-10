@@ -325,7 +325,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         else if (opcode == VIF_STCYCL)
         {
             vif1_regs.cycle = imm;
-            if (std::getenv("GOW_VIF_CYCLE_DIAG"))
+            static const bool cycleDiag = std::getenv("GOW_VIF_CYCLE_DIAG") != nullptr;
+            if (cycleDiag)
             {
                 static std::map<uint32_t, unsigned> cycles;
                 static unsigned total = 0;
