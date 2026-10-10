@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <set>
 #include <filesystem>
 #include <array>
 #include <chrono>
@@ -434,6 +435,41 @@ namespace
         std::memcpy(rdram + ((reent + 0x58u) & 0x01FFFFFFu), &seed, sizeof(seed));
         setReturnU32(ctx, seed & 0x7FFFFFFFu);
         ctx->pc = GPR_U32(ctx, 31);
+    }
+
+    // GOW-Port: GOW_SKEL_DIAG=1 logs each animated object passed to CalcWorldMatrix 0x1303D0 once (KIexster's
+    // layout: object+0x104 skeleton, skeleton+0x60 definition with the joint count at +0x10, skeleton+0x8C joint
+    // matrices, object world matrix at +0x70). GOW_SKEL_OBJECT=<hex> then logs that object's first joints'
+    // local yaw (atan2 of the matrix X row) every call.
+    void gowDiagCalcWorldMatrix(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t object = GPR_U32(ctx, 4);
+        sub_001303D0_0x1303d0(rdram, ctx, runtime);
+        static const uint32_t watched = [] { const char *v = std::getenv("GOW_SKEL_OBJECT"); return v ? uint32_t(std::strtoul(v, nullptr, 16)) : 0u; }();
+        auto f32 = [&](uint32_t a) { float v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFCu), 4); return v; };
+        const uint32_t skeleton = readGuest32(rdram, object + 0x104u) & 0x01FFFFFFu;
+        if (!skeleton)
+            return;
+        const uint32_t definition = readGuest32(rdram, skeleton + 0x60u) & 0x01FFFFFFu;
+        const uint32_t joints = readGuest32(rdram, skeleton + 0x8Cu) & 0x01FFFFFFu;
+        const uint32_t count = definition ? readGuest32(rdram, definition + 0x10u) : 0u;
+        static std::set<uint32_t> seen;
+        if (!watched && seen.size() < 64u && seen.insert(object).second)
+            std::fprintf(stderr, "[gow-skel] object=%x skeleton=%x joints=%x count=%u pos=%.1f,%.1f,%.1f\n",
+                         object, skeleton, joints, count, f32(object + 0xA0u), f32(object + 0xA4u), f32(object + 0xA8u));
+        if (watched && (object & 0x01FFFFFFu) == watched && joints && count > 0u && count < 256u)
+        {
+            static unsigned calls = 0;
+            if (++calls % 6u != 0u)
+                return;
+            std::fprintf(stderr, "[gow-skel] t=%u yaw", calls);
+            for (uint32_t j = 0; j < count && j < 24u; ++j)
+            {
+                const uint32_t m = joints + j * 64u;
+                std::fprintf(stderr, " %.0f", std::atan2(f32(m + 8u), f32(m)) * 57.29578f);
+            }
+            std::fprintf(stderr, "\n");
+        }
     }
 
     void gowIpuInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -1029,6 +1065,8 @@ namespace
         runtime.setPrivateGuestHeap(0x000A0000u, 0x000FF000u);
         runtime.replaceFunction(0x00279600u, gowIpuInit);
         runtime.replaceFunction(0x0028C0C8u, gowRand);
+        if (std::getenv("GOW_SKEL_DIAG") || std::getenv("GOW_SKEL_OBJECT"))
+            runtime.replaceFunction(0x001303D0u, gowDiagCalcWorldMatrix);
         if (std::getenv("GOW_PATH_DIAG") || std::getenv("GOW_ANM_DIAG") || std::getenv("GOW_FAST_BOOT"))
         {
             runtime.replaceFunction(0x001B2390u, gowDiagFlashReady);

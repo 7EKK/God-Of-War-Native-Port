@@ -351,3 +351,8 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
   ±π wrap). Next: locate Kratos' object/skeleton (KIexster probe: hook 0x159878, object+0x104 skeleton) and log the
   spine joint's local yaw per frame in ours vs PCSX2 (PINE reads while walking), then find the variable that feeds
   it and compare that variable between both.
+- GOW_SKEL_DIAG=1 / GOW_SKEL_OBJECT=<hex> (gow_overrides, wraps CalcWorldMatrix 0x1303D0): port/sk1 lists only 6
+  objects and KIexster's offsets (object+0x104 skeleton, +0x60 definition count) give garbage counts for this a0 →
+  the CalcWorldMatrix argument is not his "object" struct. Candidate near the player: 0x739FC0 (skeleton 0x73BB50,
+  joints 0x7910F0, pos 2414.7,514,6744.9). Next: confirm the struct (read his gow_model_probe callers / hook
+  0x159878 model context) before logging per-joint yaw.
