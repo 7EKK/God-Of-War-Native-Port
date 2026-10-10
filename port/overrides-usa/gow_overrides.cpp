@@ -443,8 +443,11 @@ namespace
     // local yaw (atan2 of the matrix X row) every call.
     void gowDiagCalcWorldMatrix(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        const uint32_t object = GPR_U32(ctx, 4);
-        sub_001303D0_0x1303d0(rdram, ctx, runtime);
+        const uint32_t model = GPR_U32(ctx, 5);
+        sub_00157A60_0x157a60(rdram, ctx, runtime);
+        const uint32_t object = readGuest32(rdram, model + 0x18u) & 0x01FFFFFFu;
+        if (!object)
+            return;
         static const uint32_t watched = [] { const char *v = std::getenv("GOW_SKEL_OBJECT"); return v ? uint32_t(std::strtoul(v, nullptr, 16)) : 0u; }();
         auto f32 = [&](uint32_t a) { float v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFCu), 4); return v; };
         const uint32_t skeleton = readGuest32(rdram, object + 0x104u) & 0x01FFFFFFu;
@@ -1066,7 +1069,7 @@ namespace
         runtime.replaceFunction(0x00279600u, gowIpuInit);
         runtime.replaceFunction(0x0028C0C8u, gowRand);
         if (std::getenv("GOW_SKEL_DIAG") || std::getenv("GOW_SKEL_OBJECT"))
-            runtime.replaceFunction(0x001303D0u, gowDiagCalcWorldMatrix);
+            runtime.replaceFunction(0x00157A60u, gowDiagCalcWorldMatrix);
         if (std::getenv("GOW_PATH_DIAG") || std::getenv("GOW_ANM_DIAG") || std::getenv("GOW_FAST_BOOT"))
         {
             runtime.replaceFunction(0x001B2390u, gowDiagFlashReady);

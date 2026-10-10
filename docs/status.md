@@ -356,3 +356,8 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
   the CalcWorldMatrix argument is not his "object" struct. Candidate near the player: 0x739FC0 (skeleton 0x73BB50,
   joints 0x7910F0, pos 2414.7,514,6744.9). Next: confirm the struct (read his gow_model_probe callers / hook
   0x159878 model context) before logging per-joint yaw.
+- Skeleton diag now hooks ProcessModel 0x157A60 (object = *(a1+0x18), as in KIexster's probe). port/sk2: object
+  0x1112470 has 125 joints (skeleton 0x11143B0, joints 0x11297E0) — likely Kratos. port/sk3 (GOW_SKEL_OBJECT=
+  1112470, walking): the matrices at skeleton+0x8C never change → bind pose, not the animated pose. Next: find the
+  per-frame animated joint matrices (output of CalcWorldMatrix 0x1303D0 / CalcSkinHierarchy 0x137558, or the
+  matrices DMA'd to VU1 for skinning) and log the spine yaw there; then read the same in PCSX2 via PINE.
