@@ -341,3 +341,13 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
   A183E323→019A3090), after which data is shifted by +0x1480 (up to ~0x1EF0000); 0x1200000-0x13A0000 is per-frame
   data. Next: check whether the shifted/extra allocations are timing-only (dump both at the same frame) or a real
   difference; then compare Kratos' skeleton/animation data (object+0x104 → skeleton, +0x8C joint matrices).
+- PCSX2 visual ground truth (port/pcsx2_walk1.png): running toward the camera Kratos faces it, arms swing, blades on
+  his back. Ours (port/tw1/gow_pad_test_1.png): torso turned 180°, blades raised behind → confirmed port bug.
+- div.s/sqrt.s ULP gaps explained: our runtime divides/sqrts with round-to-nearest (ps2FpuDivideNearest) while other
+  FPU ops run with the EE's chop mode = PCSX2 2.x defaults (separate division rounding). eeref lacks that split →
+  its 1-ULP "differences" are reference artifacts, not port bugs.
+- SPR normal-mode DMA advances MADR/SADR and zeroes QWC (checked), pad bytes centered (128) — fine.
+- Hypothesis for next session: 180° twist that "loops around" = yaw interpolation taking the long way (angle at the
+  ±π wrap). Next: locate Kratos' object/skeleton (KIexster probe: hook 0x159878, object+0x104 skeleton) and log the
+  spine joint's local yaw per frame in ours vs PCSX2 (PINE reads while walking), then find the variable that feeds
+  it and compare that variable between both.
