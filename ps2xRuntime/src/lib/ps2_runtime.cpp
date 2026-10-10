@@ -1,4 +1,6 @@
 #include "ps2_runtime.h"
+#include "vu_pcsx2/pcsx2_vu1_bridge.h"
+static bool gowUsePcsx2Vu1(); // GOW_VU1_PCSX2=1, defined before PS2Runtime::initialize
 #include "runtime/gs/gs_host_present.h" // GOW-Port: consumidor privado del host.
 #include "ps2_log.h"
 #include "runtime/ps2_perf.h"
@@ -702,6 +704,18 @@ bool PS2Runtime::syncCoreSubsystems()
                                  {
                                      R5900Context *cpuContext = eeContextForVu1();
                                      setVu1StopEnables(cpuContext);
+                                     // GOW-Port: GOW_VU1_PCSX2=1 runs VU1 on PCSX2's interpreter (vu_pcsx2, A/B test).
+                                     if (gowUsePcsx2Vu1())
+                                     {
+                                         const auto result = pcsx2vu1::run(
+                                             m_memory.getVU1Code(), m_memory.getVU1Data(), startPC, top, itop,
+                                             m_vu1.state().dBitEnabled, m_vu1.state().tBitEnabled, 65536,
+                                             [this](const uint8_t *packet, uint32_t size)
+                                             { m_memory.submitGifPacket(GifPathId::Path1, packet, size); });
+                                         m_vu1.state().stoppedByD = result.stoppedByD;
+                                         m_vu1.state().stoppedByT = result.stoppedByT;
+                                     }
+                                     else
                                      m_vu1.execute(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                    m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
                                                    m_gs, &m_memory, startPC, top, itop, 65536);
@@ -711,6 +725,17 @@ bool PS2Runtime::syncCoreSubsystems()
                                  {
                                      R5900Context *cpuContext = eeContextForVu1();
                                      setVu1StopEnables(cpuContext);
+                                     if (gowUsePcsx2Vu1())
+                                     {
+                                         const auto result = pcsx2vu1::run(
+                                             m_memory.getVU1Code(), m_memory.getVU1Data(), -1, top, itop,
+                                             m_vu1.state().dBitEnabled, m_vu1.state().tBitEnabled, 65536,
+                                             [this](const uint8_t *packet, uint32_t size)
+                                             { m_memory.submitGifPacket(GifPathId::Path1, packet, size); });
+                                         m_vu1.state().stoppedByD = result.stoppedByD;
+                                         m_vu1.state().stoppedByT = result.stoppedByT;
+                                     }
+                                     else
                                      m_vu1.resume(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                   m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
                                                   m_gs, &m_memory, top, itop, 65536);
@@ -723,6 +748,12 @@ bool PS2Runtime::syncCoreSubsystems()
     m_boundRdram = rdram;
     m_boundGSVram = gsVram;
     return true;
+}
+
+static bool gowUsePcsx2Vu1()
+{
+    static const bool enabled = [] { const char *v = std::getenv("GOW_VU1_PCSX2"); return v && v[0] == '1'; }();
+    return enabled;
 }
 
 bool PS2Runtime::initialize(const char *title)
