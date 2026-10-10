@@ -440,3 +440,5 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
   (controller type 0x2C2D20 via layer parent 0x2BF1A0 +0x18/+0x1C; parent for owner 0x8629C0 at 0x6FC4F0 in ours rdump)
   to see whether layer 1 (flag 0x81, upper body) advances and what weight the blend uses; compare with PCSX2 states over a
   few frames (PINE reads). If time advances and weight is ok, the sampled clip data (disc-loaded) is the suspect.
+- **GPU translation cleared (2026-10-10)**: PS2X_GS_GPU=0 (CPU software GS, port/cg2, gameplay at 207 s) shows the SAME
+  frozen raised-blade pose as the OpenGL backend → the bug is upstream of the GS (GIF data), not in the GPU translation.
