@@ -469,3 +469,23 @@ set/weights (same 43 controllers of the player animator 0x74ED74 at identical ad
   reads are NOT coherent (mixed frames). PCSX2 slot-1 save = Olympus (walk with stick keys W/A/S/D; ~3 s holds).
 - Next: sample the chain clip (type 0x3221 clips edd800..ee3d40 at 0xED....) offline with the game's own decoder and compare
   with the palette in both; or diff the blend (0x10A530/0x10B0C8 callers of the sampler) with PS2X_EE_DIFF_EVERY over a long walk.
+
+## ★ Kratos twist FIXED (2026-10-10) — miscompiled PMULTH (MMI)
+- **Root cause**: the recompiler's `translatePMULTH` (ps2xRecomp/src/lib/mmi_translation_helpers.cpp) was a wrong template
+  (`_mm_madd_epi16` + sum of all products into one scalar). PMULTH (parallel multiply halfword) stores EIGHT separate 32-bit
+  products: LO={p0,p1,p4,p5}, HI={p2,p3,p6,p7}, Rd={LO0,HI0,LO2,HI2} (PCSX2 MMI.cpp). The animation clip decoders
+  0x115978 / 0x115D00 / 0x116280 (called from the sampler 0x10FC88 via 0x10B0C8) use it to unpack the compressed joint
+  angles → wrong local joint matrices for ~46 joints (arms, blade chains, spine incl. joint 9) → torso twist / raised blades.
+- **How it was found**: PCSX2-ground-truth palette comparison (same desert scene, coherent PCSX2 save-state snapshots via PINE
+  save + 7z) showed PCSX2 keeps joint 9 constant while ours animates it; then the EE differential tester with
+  `PS2X_EE_DIFF_LINES=3000` (the old 24-line cap had hidden the real, large mem diffs in the local-matrix array 0xD4FE40)
+  showed the recompiled 0x10FC88 produced different local matrices than the interpreter; bisecting callees led to
+  0x115978 and its `pmulth`. (Earlier "ULP only" verdicts were wrong because of that cap and my significance filter.)
+- **Fix**: `ps2PmulthExec(ctx, rs, rt, rd)` in ps2xRuntime/src/lib/ps2_runtime.cpp (exact PCSX2 semantics); generator
+  template now emits the call; the 4 generated PMULTH sites (port/output-usa + runner copies of sub_00115978, sub_00115D00 x2,
+  sub_00116280) were patched in place (no full regeneration needed). After the fix the 0x10FC88 diff vs PCSX2's interpreter
+  is ULP-only and the walk is visually correct (port/fix1_sheet.png, fix1_crop.png).
+- Other approximated MMI templates exist (PMADDH/PHMADH/PMSUBH/PHMSBH/PMULTW/PMADDW/…) but the game does not use them
+  (pmulth is the only MMI multiply in the ELF: 4 sites, 3 functions). Verify any other MMI op the same way if new symptoms appear.
+- Tools added this session (all env-gated): GOW_SKEL_DUMP/GOW_SKEL_OBJECT, GOW_DMA_BLOCKDUMP, GOW_VIF_MATDUMP, GOW_CTRL_DIAG,
+  GOW_BLEND_DIAG, GOW_HEAP_ZERO, PS2X_EE_DIFF_EVERY, PS2X_EE_DIFF_LINES, PS2X_EE_WATCH_FROM, VU0 control-state compare in eediff.
