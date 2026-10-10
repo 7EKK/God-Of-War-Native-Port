@@ -567,7 +567,12 @@ if(PS2X_VU1_MICROCODE_DIR AND PS2X_VU1_GENERATOR_SOURCE AND NOT PS2X_IS_ANDROID 
         endif()
         # GOW-Port: native lean backend (tools/vu1/vu1n_gen.py): straight-line blocks with immediate semantics.
         find_package(Python3 COMPONENTS Interpreter)
-        get_filename_component(PS2X_VU1N_GEN "${CMAKE_CURRENT_SOURCE_DIR}/../../../tools/vu1/vu1n_gen.py" ABSOLUTE)
+        set(PS2X_VU1N_GEN_OVERRIDE "" CACHE FILEPATH "Alternative vu1n_gen.py (empty: tools/vu1/vu1n_gen.py of the root repo)")
+        if(PS2X_VU1N_GEN_OVERRIDE)
+            set(PS2X_VU1N_GEN "${PS2X_VU1N_GEN_OVERRIDE}")
+        else()
+            get_filename_component(PS2X_VU1N_GEN "${CMAKE_CURRENT_SOURCE_DIR}/../../../tools/vu1/vu1n_gen.py" ABSOLUTE)
+        endif()
         if(Python3_FOUND AND EXISTS "${PS2X_VU1N_GEN}")
             set(PS2X_VU1N_DIR "${CMAKE_CURRENT_BINARY_DIR}/vu1n_generado")
             set(PS2X_VU1N_PARTS)

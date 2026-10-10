@@ -1,6 +1,7 @@
 // GOW-Port: native VU1 backend runtime (included at the end of ps2_vu1_core.cpp). See include/runtime/ps2_vu1_native.h.
 #include "runtime/ps2_vu1_native.h"
 
+#include <memory>
 #include <unordered_map>
 
 namespace
@@ -269,4 +270,145 @@ bool VU1Interpreter::runNative(StepContext &context)
         }
     }
     return handled;
+}
+
+// GOW_VU1N_RECORD=<file> [GOW_VU1N_RECORD_N=4000, GOW_VU1N_RECORD_STRIDE=7]: every STRIDE-th VU1 program run, the input
+// (VU1State, micro memory, data memory) and a bit-exact hash of the native result (state, data memory, GIF packets) are
+// appended to <file>. GOW_VU1N_REPLAY=<file>: on the first VU1 run, every record is executed by this build's native
+// blocks and its hash compared with the recorded one -> "[vu1n-replay] N records, M differ". Proves that a change of the
+// generator / runtime keeps the output bit-identical.
+namespace
+{
+    struct Vu1nRecord
+    {
+        uint32_t magic;
+        uint32_t maxCycles;
+        uint64_t hash;
+        VU1State state;
+        uint8_t code[PS2_VU1_CODE_SIZE];
+        uint8_t data[16384];
+    };
+    inline uint64_t fnvBytes(uint64_t h, const void *p, size_t n)
+    {
+        const uint8_t *b = static_cast<const uint8_t *>(p);
+        for (size_t i = 0; i < n; ++i)
+            h = (h ^ b[i]) * 1099511628211ull;
+        return h;
+    }
+}
+
+uint64_t VU1NativeAccess::silentNativeHash(VU1Interpreter &vu, void *contextPtr)
+{
+    auto &context = *static_cast<VU1Interpreter::StepContext *>(contextPtr);
+    const bool silentBefore = vu.m_verifySilent;
+    vu.m_verifySilent = true;
+    g_vuVerifyCapture = true;
+    g_vuVerifyPackets.clear();
+    VU1Interpreter::StepContext c = context;
+    for (;;)
+    {
+        if (vu.runNative(c))
+            break;
+        if (!vu.stepInterpreted(c))
+            break;
+    }
+    vu.flushPipelines();
+    g_vuVerifyCapture = false;
+    vu.m_verifySilent = silentBefore;
+    const VU1State &s = vu.m_state;
+    uint64_t h = 1469598103934665603ull;
+    h = fnvBytes(h, s.vf, sizeof(s.vf));
+    h = fnvBytes(h, s.vi, sizeof(s.vi));
+    h = fnvBytes(h, s.acc, sizeof(s.acc));
+    h = fnvBytes(h, &s.q, 4);
+    h = fnvBytes(h, &s.p, 4);
+    h = fnvBytes(h, &s.i, 4);
+    h = fnvBytes(h, &s.mac, 4);
+    h = fnvBytes(h, &s.clip, 4);
+    h = fnvBytes(h, &s.pc, sizeof(s.pc));
+    const uint8_t ended = c.programEnded ? 1u : 0u;
+    h = fnvBytes(h, &ended, 1);
+    h = fnvBytes(h, c.vuData, c.dataSize);
+    h = fnvBytes(h, g_vuVerifyPackets.data(), g_vuVerifyPackets.size());
+    return h;
+}
+
+void VU1NativeAccess::recordReplay(VU1Interpreter &vu, void *contextPtr, uint32_t maxCycles)
+{
+    auto &context = *static_cast<VU1Interpreter::StepContext *>(contextPtr);
+    static const char *recPath = std::getenv("GOW_VU1N_RECORD");
+    static const char *repPath = std::getenv("GOW_VU1N_REPLAY");
+    if ((!recPath && !repPath) || context.dataSize != 16384u || context.codeSize != PS2_VU1_CODE_SIZE)
+        return;
+    if (repPath)
+    {
+        static bool done = false;
+        if (done)
+            return;
+        done = true;
+        FILE *f = std::fopen(repPath, "rb");
+        if (!f)
+        {
+            std::fprintf(stderr, "[vu1n-replay] cannot open %s\n", repPath);
+            return;
+        }
+        auto rec = std::make_unique<Vu1nRecord>();
+        VU1Interpreter saved(vu);
+        unsigned total = 0, differ = 0;
+        while (std::fread(rec.get(), sizeof(Vu1nRecord), 1, f) == 1)
+        {
+            ++total;
+            vu = saved;
+            vu.m_state = rec->state;
+            vu.m_native->generation = ~0ull - 1u; // micro memory is not the game's: forget the block cache
+            VU1Interpreter::StepContext c = context;
+            c.vuCode = rec->code;
+            c.vuData = rec->data;
+            c.budgetEnd = vu.m_cycle + rec->maxCycles;
+            c.programEnded = false;
+            vu.m_activeVuData = rec->data;
+            vu.m_activeVuDataSize = 16384u;
+            const uint64_t h = silentNativeHash(vu, &c);
+            if (h != rec->hash && differ++ < 20u)
+                std::fprintf(stderr, "[vu1n-replay] record %u startPc=%x differs\n", total, rec->state.pc);
+        }
+        std::fclose(f);
+        vu = saved;
+        vu.m_native->generation = ~0ull - 1u;
+        std::fprintf(stderr, "[vu1n-replay] %u records, %u differ\n", total, differ);
+        return;
+    }
+    static const unsigned limit = std::getenv("GOW_VU1N_RECORD_N") ? static_cast<unsigned>(std::atoi(std::getenv("GOW_VU1N_RECORD_N"))) : 4000u;
+    static const unsigned stride = std::getenv("GOW_VU1N_RECORD_STRIDE") ? static_cast<unsigned>(std::atoi(std::getenv("GOW_VU1N_RECORD_STRIDE"))) : 7u;
+    static unsigned seen = 0, written = 0;
+    if (written >= limit || (seen++ % stride) != 0u)
+        return;
+    static FILE *f = std::fopen(recPath, "wb");
+    if (!f)
+        return;
+    auto rec = std::make_unique<Vu1nRecord>();
+    rec->magic = 0x4E315556u;
+    rec->maxCycles = maxCycles;
+    rec->state = vu.m_state;
+    std::memcpy(rec->code, context.vuCode, PS2_VU1_CODE_SIZE);
+    std::memcpy(rec->data, context.vuData, 16384u);
+    VU1Interpreter saved(vu);
+    // same input as the replay: copies of code/data
+    VU1Interpreter::StepContext c = context;
+    auto code = std::make_unique<Vu1nRecord>();
+    std::memcpy(code->code, rec->code, PS2_VU1_CODE_SIZE);
+    std::memcpy(code->data, rec->data, 16384u);
+    c.vuCode = code->code;
+    c.vuData = code->data;
+    c.budgetEnd = vu.m_cycle + maxCycles;
+    vu.m_native->generation = ~0ull - 1u;
+    vu.m_activeVuData = code->data;
+    rec->hash = silentNativeHash(vu, &c);
+    vu = saved;
+    vu.m_native->generation = ~0ull - 1u;
+    std::fwrite(rec.get(), sizeof(Vu1nRecord), 1, f);
+    if (++written == limit)
+        std::fclose(f), std::fprintf(stderr, "[vu1n-record] %u records written\n", written);
+    else if (written % 500u == 0u)
+        std::fflush(f);
 }

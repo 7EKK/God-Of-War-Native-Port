@@ -1903,6 +1903,8 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     };
     if (m_unit == Unit::VU1 && !m_native)
         m_native = new NativeState();
+    if (m_unit == Unit::VU1 && m_native && m_native->enabled && vuData && codeSize == PS2_VU1_CODE_SIZE)
+        VU1NativeAccess::recordReplay(*this, &context, maxCycles);
     if (m_unit == Unit::VU1 && m_native && m_native->enabled && m_native->verifyLeft != 0u && vuData && codeSize == PS2_VU1_CODE_SIZE)
     {
         --m_native->verifyLeft;
