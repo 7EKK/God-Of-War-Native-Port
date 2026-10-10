@@ -235,6 +235,29 @@ void main()
 }
 )";
 
+    // Colour -> depth: the game draws "colour" into the memory its Z buffer uses (a CT24 target at the Z buffer's base) to write
+    // depth values; the written colour words are the Z words. Resolved into the depth attachment of the target that uses them.
+    const char *kResolveVs = R"(#version 430 core
+out vec2 vUv;
+void main()
+{
+    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+    vUv = p;
+    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+)";
+    const char *kResolveFs = R"(#version 430 core
+in vec2 vUv;
+uniform sampler2D uSrc;
+uniform float uDiv;
+void main()
+{
+    vec4 c = floor(texture(uSrc, vUv) * 255.0 + 0.5);
+    float z = c.r + c.g * 256.0 + c.b * 65536.0;
+    gl_FragDepth = clamp(z / uDiv, 0.0, 1.0);
+}
+)";
+
     // GS vertex as sent to the GPU.
     struct HwVertex
     {
@@ -262,7 +285,7 @@ void main()
         uint32_t pxW = 0, pxH = 0; // size in PS2 pixels
         uint32_t glW = 0, glH = 0;
         bool depthCleared = false;
-        uint64_t version = 1, syncedVersion = 0, lastDrawSeq = 0;
+        uint64_t version = 1, syncedVersion = 0, lastDrawSeq = 0, depthResolvedVersion = 0;
         uint32_t usedW = 0, usedH = 0; // PS2 pixels touched by draws (scissor extents)
     };
 
@@ -299,7 +322,8 @@ struct GSHwBackend::Impl
           locAte = -1, locAtst = -1, locAref = -1, locPass = -1, locBlendScale = -1, locRtTex24 = -1, locTa0 = -1, locTa1 = -1, locReinterp = -1, locDate = -1, locDatm = -1, locDest = -1, locZTex = -1, locZMax = -1, locTables = -1, locRtColor = -1, locPalette = -1, locTexFmt = -1, locTexFmt2 = -1,
           locRtFmt = -1, locRtFmt2 = -1, locTex0 = -1, locRtPx = -1, locAem = -1;
 
-    GLuint tableTex = 0, paletteTex = 0;
+    GLuint tableTex = 0, paletteTex = 0, resolveProgram = 0, resolveVao = 0;
+    GLint locResolveSrc = -1, locResolveDiv = -1;
     std::unordered_map<const uint16_t *, uint32_t> tableOffset;
     std::unordered_map<uint32_t, uint32_t> inverseOffset; // psm -> offset of the inverse page table
     std::vector<HwVertex> pending;
@@ -400,6 +424,19 @@ struct GSHwBackend::Impl
         for (GLuint i = 0; i < 5; ++i)
             g.EnableVertexAttribArray(i);
         buildTables();
+        {
+            const GLuint rv = compile(GSGL::kVertexShader, kResolveVs), rf = compile(GSGL::kFragmentShader, kResolveFs);
+            if (rv && rf)
+            {
+                resolveProgram = g.CreateProgram();
+                g.AttachShader(resolveProgram, rv);
+                g.AttachShader(resolveProgram, rf);
+                g.LinkProgram(resolveProgram);
+                locResolveSrc = g.GetUniformLocation(resolveProgram, "uSrc");
+                locResolveDiv = g.GetUniformLocation(resolveProgram, "uDiv");
+                g.GenVertexArrays(1, &resolveVao);
+            }
+        }
         if (const char *s = std::getenv("PS2X_GS_HW_SCALE"))
             scale = std::max(1.0f, static_cast<float>(std::atof(s)));
         std::fprintf(stderr, "[gs-hw] render-target renderer ready, scale %.2f (%s)\n", scale,
@@ -738,6 +775,37 @@ struct GSHwBackend::Impl
         g.Uniform2f(locRtPx, static_cast<float>(rt.pxW), static_cast<float>(rt.pxH));
     }
 
+    void resolveColorToDepth(RenderTarget &src, RenderTarget &dst)
+    {
+        if (!resolveProgram || !dst.depth || src.usedW == 0u)
+            return;
+        const Api &g = gl();
+        g.BindFramebuffer(kFramebuffer, dst.fbo);
+        g.Viewport(0, 0, dst.glW, dst.glH);
+        g.Enable(kScissorTest);
+        g.Scissor(0, 0, static_cast<GLsizei>(std::ceil(src.usedW * scale)), static_cast<GLsizei>(std::ceil(src.usedH * scale)));
+        g.Disable(kBlend);
+        g.ColorMask(kFalse, kFalse, kFalse, kFalse);
+        g.Enable(kDepthTest);
+        g.DepthFunc(kAlways);
+        g.DepthMask(kTrue);
+        g.UseProgram(resolveProgram);
+        g.ActiveTexture(kTexture0);
+        g.BindTexture(kTexture2D, src.color);
+        g.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
+        g.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
+        g.Uniform1i(locResolveSrc, 0);
+        g.Uniform1f(locResolveDiv, 16777215.0f);
+        g.BindVertexArray(resolveVao);
+        g.DrawArrays(kTriangles, 0, 3);
+        g.TexParameteri(kTexture2D, kTextureMinFilter, kLinear);
+        g.TexParameteri(kTexture2D, kTextureMagFilter, kLinear);
+        g.Disable(kScissorTest);
+        g.ColorMask(kTrue, kTrue, kTrue, kTrue);
+        g.BindVertexArray(vao);
+        src.depthResolvedVersion = src.version;
+    }
+
     // ---- drawing --------------------------------------------------------------------------------------------------
     static bool sameState(const GSDrawState &a, const GSDrawState &b)
     {
@@ -961,6 +1029,9 @@ struct GSHwBackend::Impl
         }
         RenderTarget &rt = target(c.frame.fbp, c.frame.fbw);
         attachDepth(rt, c.zbuf.zbp);
+        for (RenderTarget &z : targets)
+            if (&z != &rt && z.fbp == c.zbuf.zbp && z.version != z.depthResolvedVersion && (z.psm == GS_PSM_CT24 || z.psm == GS_PSM_CT32))
+                resolveColorToDepth(z, rt);
         rt.psm = c.frame.psm;
         ++rt.version;
         rt.lastDrawSeq = ++writeSeq;
