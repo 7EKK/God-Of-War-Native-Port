@@ -111,7 +111,8 @@ void GSHostPresentation::captureHostContext()
         return;
     started = true;
     const char *setting = std::getenv("PS2X_GS_DIRECT_PRESENT");
-    captureRequested = setting && *setting == '1';
+    // GOW-Port: shared GL textures (no readback/upload) by default; PS2X_GS_DIRECT_PRESENT=0 forces RAM frames.
+    captureRequested = !(setting && *setting == '0');
     if (captureRequested)
         GSSharedPresent::CaptureHostContext();
 }
@@ -161,7 +162,7 @@ GSHostPresentation::View GSHostPresentation::prepare(GS &gs, uint64_t vsyncTick)
     const bool shared = gs.usesSharedPresentation() && GSSharedPresent::Active();
     if (!modeKnown || shared != sharedMode)
     {
-        std::fprintf(stderr, "[gs-present] host mode: %s\n", shared ? "shared texture (opt-in)" : "RAM frames");
+        std::fprintf(stderr, "[gs-present] host mode: %s\n", shared ? "shared texture" : "RAM frames");
         std::fflush(stderr);
         modeKnown = true;
         sharedMode = shared;
@@ -305,7 +306,12 @@ GSHostPresentation::View GSHostPresentation::renderFrame(GS &gs, uint64_t vsyncT
                                 (screenHeight - destinationHeight) * 0.5f,
                                 destinationWidth, destinationHeight};
     // GOW-Port: textura del PBO con filas en orden; no invertir source.height.
-    Shader *scaler = scalerShader();
+    // The bicubic + sharpen pass only helps when the frame is magnified; a frame at least as large as its window
+    // rectangle (PS2X_GS_HW_SCALE high enough) is drawn with plain linear sampling.
+    const bool magnified = sourceWidth < destinationWidth || sourceHeight < destinationHeight;
+    Shader *scaler = magnified ? scalerShader() : nullptr;
+    if (!scaler)
+        SetTextureFilter(selected.texture, TEXTURE_FILTER_BILINEAR);
     if (scaler)
     {
         const float size[2] = {sourceWidth, sourceHeight};
