@@ -541,3 +541,23 @@ set/weights (same 43 controllers of the player animator 0x74ED74 at identical ad
   Remaining VU cost ~7 ns/pair (XGKICK/GIF handling + dispatch, to profile). Olympus/Cliffs still < 25 fps: EE (~25 ms) and IOP now dominate.
 - **Next** (docs/native-port.md order): profile VU leftovers, IOP (R3000 interpreter → native sound/CDVD), EE codegen, true 1080p
   renderer; extracted-files loading stays last.
+
+## 2026-10-10 (late): native GS renderer started (`PS2X_GS_HW=1`, opt-in; default backends unchanged)
+- **New backend** `GSHwBackend` (ext: `gs_hw_backend.{h,cpp}`): draws are rasterised by the GPU into scaled RGBA render targets
+  (one per frame-buffer base, depth per target), textures are decoded once from a shadow VRAM (`GSCpuBackend` still models VRAM,
+  transfers, CLUT; `DecodeTextureRgba`) and cached with block-range invalidation, a render target used as a texture of the same
+  format is sampled directly, alpha test (incl. AFAIL via a second pass), FBMSK as colour mask, ZTST/ZMSK as GL depth state, the
+  dominant ABE modes via dual-source blending. CRTC output is read from the target at `PS2X_GS_HW_SCALE` (default 2) x PS2 size.
+- **Verified**: main scene geometry/textures/lighting render correctly (see `GOW_GS_HW_ONLY` bisect frames, depth off); gameplay
+  runs ~40 fps at scale 1 (old backend 39-42). Debug env: GOW_GS_HW_STATS, _DUMP/_DUMPAT (per-batch state), _TEXDUMP, _DEPTHDUMP,
+  _DEPTHTRACE, _RTDUMP, _ONLY=a-b, _NODEPTH, _NOATEST, _NOFAIL.
+- **Not working yet (why the final image is still wrong)**: the game builds the picture in several passes into RT 0 (clear → world →
+  clear → ...) and then post-processes through *layout reinterpretation*: 16-bit views (tpsm=2) of narrow targets (fbp 320, fbw 1),
+  1024x1024 reads with tbw=1, 32-px column sprites. A plain render-target cache cannot express those; the fallback (write the target
+  back to shadow VRAM, `syncTargetToVram`) is implemented but slow (12 fps) and still produces striped output. Z-clear value of the
+  game is not 0 (0x900000 seen), so world draws only pass because the game's own clear sequence is replayed faithfully — do not
+  add a "clear depth per frame".
+- **Next**: (1) resolve those reinterpretation passes explicitly (identify each pass in the inventory: which RT, which psm/tbw view,
+  which op — column shuffle / channel merge — and implement it as a dedicated shader on the RT instead of the generic readback),
+  (2) GPU-side RT→texture conversion instead of CPU WriteVram, (3) then raise scale and drop the bicubic upscale, (4) host
+  presentation currently assumes 640-wide rows (frontend `kHostFrameWidth`) — needs to carry the scaled frame.
