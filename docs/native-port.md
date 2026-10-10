@@ -46,3 +46,15 @@ game's own data. For each layer:
 
 Steps 2-4 are each a project of weeks, not a session. Nothing here is hypothetical: every layer has a measured cost
 and a defined native replacement; none can be skipped to reach "no emulation".
+
+## GS inventory (2026-10-10, `GOW_GS_INVENTORY=1`, Olympus walk, per 5 s)
+~1.5 M draws/5 s (≈ 5 k/frame, almost all triangle strips with ABE+ATEST+ZTE), 98 % sample plain uploaded textures (PSMT8/PSMT4 with CLUT);
+~860 host→local uploads (8.4 M px); **zero** CPU VRAM reads/writes/snapshots, zero local→host / local→local transfers, no uploads into render
+targets, no fog/DATE/dither/PABE/SCANMSK/depth-as-texture. Special cases are rare: RT used as texture (same format) ≈ 6.9 k, feedback
+(FBP==TBP) ≈ 4.6 k, CLUT loaded from an RT ≈ 2.8 k of 8.9 k loads, FBMSK≠0 ≈ 18 k, RT reinterpretation (CT16/CT32 → CT24) ≈ 2.3 k (may
+include false positives of the span heuristic). => A render-target renderer is feasible with: scaled RT + depth per (FBP,FBW,PSM), texture
+cache decoded from a shadow VRAM, CLUT-aware palettised textures, shader alpha test + blend, FBMSK via write mask, and a conservative
+downscale-readback for the rare RT-as-CLUT/reinterpret cases.
+Plan (seam = new `GSRasterBackend`, old backend stays default/oracle): (a) scale-1 RT renderer vs old backend frames, (b) RT-as-texture,
+(c) conservative readback, (d) raise scale to window size (non-uniform 3.75 x 2.41 per axis is fine: vertex scale only), then drop the
+bicubic upscale.
