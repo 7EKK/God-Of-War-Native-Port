@@ -7,6 +7,7 @@
 #include "gow_pad2_packet.h"
 #include "gow_gs_replay.h" // GOW-Port: captura opcional y acotada para comparar backends.
 #include <ps2_recompiled_functions.h>
+void sub_00116EF0_0x116ef0(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime); // GOW-Port: anim controller time update, for GOW_CTRL_DIAG
 void sub_0013DC78_0x13dc78(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime); // GOW-Port: game heap alloc, for GOW_HEAP_ZERO
 #include <map>
 #include <cmath>
@@ -549,6 +550,29 @@ namespace
                 std::fprintf(stderr, " %.0f", std::atan2(f32(m + 8u), f32(m)) * 57.29578f);
             }
             std::fprintf(stderr, "\n");
+        }
+    }
+
+    // GOW-Port: GOW_CTRL_DIAG=1 wraps the animation controller update 0x116EF0 (this=a0: +8 time, +0xC rate) and every
+    // ~3 s prints, per controller in the animator heap area, calls/time/rate/delta since the last print.
+    void gowDiagController(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t self = GPR_U32(ctx, 4) & 0x01FFFFFFu;
+        auto f32 = [&](uint32_t a) { float v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFCu), 4); return v; };
+        sub_00116EF0_0x116ef0(rdram, ctx, runtime);
+        struct Info { unsigned calls = 0, lastCalls = 0; float last = 0, rate = 0, prev = 0; };
+        static std::map<uint32_t, Info> info;
+        static unsigned total = 0;
+        Info &i = info[self];
+        ++i.calls; i.last = f32(self + 8u); i.rate = f32(self + 0xCu);
+        if (++total % 4000u == 0u)
+        {
+            for (auto &kv : info)
+            {
+                if (kv.first < 0x600000u || kv.first > 0x900000u) continue;
+                std::fprintf(stderr, "[gow-ctrl] %x calls=%u time=%.3f (was %.3f) rate=%.3f\n", kv.first, kv.second.calls - kv.second.lastCalls, kv.second.last, kv.second.prev, kv.second.rate);
+                kv.second.lastCalls = kv.second.calls; kv.second.prev = kv.second.last;
+            }
         }
     }
 
@@ -1145,6 +1169,8 @@ namespace
         runtime.setPrivateGuestHeap(0x000A0000u, 0x000FF000u);
         runtime.replaceFunction(0x00279600u, gowIpuInit);
         runtime.replaceFunction(0x0028C0C8u, gowRand);
+        if (std::getenv("GOW_CTRL_DIAG"))
+            runtime.replaceFunction(0x00116EF0u, gowDiagController);
         if (std::getenv("GOW_HEAP_ZERO"))
             runtime.replaceFunction(0x0013DC78u, gowHeapZeroAlloc);
         if (std::getenv("GOW_SKEL_DIAG") || std::getenv("GOW_SKEL_OBJECT") || std::getenv("GOW_SKEL_ANIM"))

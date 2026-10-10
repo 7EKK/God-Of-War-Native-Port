@@ -442,3 +442,11 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
   few frames (PINE reads). If time advances and weight is ok, the sampled clip data (disc-loaded) is the suspect.
 - **GPU translation cleared (2026-10-10)**: PS2X_GS_GPU=0 (CPU software GS, port/cg2, gameplay at 207 s) shows the SAME
   frozen raised-blade pose as the OpenGL backend → the bug is upstream of the GS (GIF data), not in the GPU translation.
+- `GOW_CTRL_DIAG=1` (gow_overrides.cpp, wraps controller update 0x116EF0): every ~4000 calls prints per controller
+  (heap 0x600000-0x900000) calls/time/rate. port/ct1: Kratos-area controllers in the static pool (0x6FAF64, 0x6FAFD4,
+  0x6FB834/8A4/914/984, 0x7481E8) advance normally (rate 1.0); the same pool addresses exist in PCSX2 with identical layout,
+  clip pointers (0x600680, 0x607E00, 0x608200 … static region, equal in both) and advancing times → controllers/clips
+  match PCSX2. No "No exact recompiled function" errors in the run. So: inputs (controllers, clips, EE code, VU1, VIF,
+  DMA, both GS backends) all match; the frozen pose must come from something not yet compared — candidates: VU0
+  state across thread switches/interrupts (vf regs, Q/flags are not saved by our thread switch?), or blend weights
+  computed from a game-state variable (speed/stick) that differs between runs.
