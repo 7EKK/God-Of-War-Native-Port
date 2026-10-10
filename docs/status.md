@@ -508,3 +508,18 @@ set/weights (same 43 controllers of the player animator 0x74ED74 at identical ad
   upscaling needs a PCSX2-style HW renderer (render targets + texture cache, because the GS emulation is VRAM-faithful,
   incl. framebuffer feedback/channel-shuffle passes); not a flag. Cheap interim option: sharper present filter
   (sharp-bilinear/Lanczos/CAS) in gs_host_present.cpp.
+
+## 2026-10-10 (evening): release build, output scaler, zone checker
+- **Overhead removed**: runner rebuilt with `-DPS2X_ENABLE_DEBUG_UI=OFF` (no ImGui "Runtime Debugger" panel, no per-frame UI work;
+  previous cache saved as out/CMakeCache.dbg.bak), per-STCYCL `getenv` (my diag) made static. Same desert walk: guest 42.6 →
+  **47.8 fps** (GS worker + FINISH async + widescreen). `play.cmd` = release launcher (no diagnostics; `play.cmd 43` for 4:3;
+  makes disc-usa/play.mcd from the user's card on first run).
+- **Output scaler** (gs_host_present.cpp, GOW_SCALER=sharp default | bilinear, GOW_SHARPEN=0..1): Catmull-Rom bicubic + CAS
+  sharpen at the window resolution instead of the bilinear stretch; costs ~0.7 fps. NOT internal resolution: the GS still
+  renders 512x448 (VRAM-faithful compute/hardware raster in gs_gpu_backend.cpp). Real scaling = scaled render targets +
+  texture cache + readback/downscale for feedback passes (PCSX2 GSRendererHW style) — separate multi-week project, not started.
+- **tools/zones.py** (zone regression check): per save slot loads the game, walks 4 directions, captures frames, and judges
+  gameplay reached / fps floor / runtime errors / blank captures / change vs `--baseline`; `--diff` adds the EE differential
+  tester; `--card` takes any memory card (more saves = more zones). First run (port/zones/20261010_123435/report.md):
+  slot 1 Olympus 21.8 fps FAIL, slot 2 Desert 28 ok, slot 3 Cliffs 21.2 FAIL, slot 4 Final battle 25.2 ok. All zones render
+  correctly (Kratos pose fine). Open per the fps floor order: Olympus and Cliffs sit below 25 fps → profile those zones next.

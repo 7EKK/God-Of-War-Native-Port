@@ -1,0 +1,22 @@
+@echo off
+rem God of War (USA) native port - play launcher. No diagnostics, release settings.
+rem   play.cmd            16:9, 1920x1080 window
+rem   play.cmd 43         original 4:3
+rem Needs: iso-usa\God of War (USA).iso, disc-usa\SCUS_973.99 and the built runner.
+setlocal
+set "ROOT=%~dp0"
+set "EXE_DIR=%ROOT%ext\PS2Recomp-kl\out\build-kl\ps2xRuntime\Release"
+if not exist "%EXE_DIR%\ps2EntryRunner.exe" (echo Runner not built: %EXE_DIR% & exit /b 1)
+if not exist "%ROOT%disc-usa\play.mcd" (
+  if exist "%ROOT%ref\saves\Mcd002.ps2" (copy /y "%ROOT%ref\saves\Mcd002.ps2" "%ROOT%disc-usa\play.mcd" >nul) else (echo No memory card found; the game will create one.)
+)
+set PS2X_GS_GPU=1
+set PS2X_GS_WORKER=1
+set GOW_GS_FINISH_ASINCRONO=1
+set GOW_SKIP_FMV=1
+if /i "%1"=="43" (set GOW_WIDESCREEN=0) else (set GOW_WIDESCREEN=1)
+set "GOW_ISO=%ROOT%iso-usa\God of War (USA).iso"
+set "GOW_MC0=%ROOT%disc-usa\play.mcd"
+cd /d "%EXE_DIR%"
+ps2EntryRunner.exe "%ROOT%disc-usa\SCUS_973.99"
+endlocal
