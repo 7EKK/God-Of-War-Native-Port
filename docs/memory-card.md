@@ -43,6 +43,17 @@ the same image file (`GOW_MC0`, PCSX2 `.ps2` format).
 - Still to find: the reply layout of each command (receive buffer after completion: data + spare, status words) and the
   meaning of cmds 3/4/6/0xC/0xD (MC2_D dispatch), plus the write/erase commands (only seen when saving).
 
+## Native card I/O (2026-10-11, ext 6ef7583)
+- MC2_D (cmd dispatch 0x1f74; status block 0x4418 / status word 0x4420 / data buffer 0x4498, sent to the EE by DBCMAN
+  signal-data) stays the game's own compiled code. Its six routines that talked to the card over SIO2 are replaced by
+  native C++ on the card image (ps2xIOP/src/native/iop_native_overrides.cpp, tools/iop/native_overrides.txt):
+  read_page 0x0c8c (port, slot, page, size, stack+0x10 = IOP dst) -> 1/0; write_page 0x0fdc (port, slot, page, IOP src,
+  stack+0x10 = size); erase_block 0x0a98 (port, slot, first page); get_specs 0x13a8 (port, slot, u32 out[2] =
+  0x00100200, 0x4000); init_card 0x0650 and probe 0x164c (port, slot) -> 1 when a card is present (a real card echoes
+  the 0x55 terminator the driver sets, which gives 1). Ports 2/3 = card slots 1/2.
+- Verified with tools/savetest.py (load slot 1, R2 at the save point, Yes / slot / overwrite Yes): "Save Complete",
+  129 pages written, root directory intact, the saved card loads into gameplay (port/savetest3, port/saveload1).
+
 ## Still to find (next)
-- DBCMAN RPC protocol for the card and pad as this game uses it (function numbers, argument/result layout), from
-  DBCMAN.IRX / MC2_D.IRX dispatch and the EE libmc2 / libdbc client code.
+- Pad side: SIO2D still probes the ports over the SIO2 model and DS2U_D polls the DualShock every vblank although the
+  EE reads the host pad natively (gow_overrides.cpp scePad2*) and opens no pad socket on the IOP.
