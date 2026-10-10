@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <cctype>
 #include <map>
+#include <unordered_map>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -148,6 +149,7 @@ namespace ps2x::iop::detail
             kernel.reset();
             modules.clear();
             nativeRanges.clear();
+            nativeOverrides.clear();
             imports.reset();
             rpc.reset();
             cdvd.reset();
@@ -486,6 +488,19 @@ namespace ps2x::iop::detail
                 cpu.branchPending = false;
                 return !cpu.stopped;
             }
+
+            // GOW-Port: IRX functions replaced by native C++ run instead of the function (then return to $ra).
+            if (!nativeOverrides.empty())
+                if (const auto found = nativeOverrides.find(physicalAddress(cpu.pc)); found != nativeOverrides.end())
+                {
+                    found->second->handler(cpu, memory, host);
+                    cpu.gpr[0] = 0u;
+                    cpu.pc = cpu.gpr[31];
+                    cpu.branchPending = false;
+                    ++totalInstructions;
+                    ++totalCycles;
+                    return !cpu.stopped;
+                }
 
             // GOW-Port: compiled IRX code runs natively until it reaches an import stub, leaves the module, raises an
             // exception or uses its budget; the interpreter below only runs code that has no compiled form.
@@ -949,6 +964,14 @@ namespace ps2x::iop::detail
                 list << ident << ' ' << std::hex << lo << ' ' << module.textSize << ' ' << hash << '\n';
             }
             static const bool disabled = [] { const char *v = std::getenv("PS2X_IOP_NATIVE"); return v && v[0] == '0'; }();
+            if (!disabled)
+            {
+                size_t overrideCount = 0;
+                const IopNativeOverride *overrides = iopNativeOverrides(overrideCount);
+                for (size_t i = 0; i < overrideCount; ++i)
+                    if (ident == overrides[i].module && overrides[i].offset < module.textSize)
+                        nativeOverrides[lo + overrides[i].offset] = &overrides[i];
+            }
             size_t count = 0;
             const IopNativeModule *table = iopNativeModules(count);
             std::ostringstream out;
@@ -995,6 +1018,7 @@ namespace ps2x::iop::detail
             kernel.terminateThreadsInRange(it->second.base, it->second.size);
             const uint32_t lo = physicalAddress(it->second.base);
             std::erase_if(nativeRanges, [&](const NativeRange &r) { return r.lo == lo; });
+            std::erase_if(nativeOverrides, [&](const auto &kv) { return kv.first >= lo && kv.first < lo + it->second.size; });
             rpc.removeServersInRange(it->second.base, it->second.size);
             imports.eraseRange(it->second.base, it->second.size);
             modules.erase(it);
@@ -1022,6 +1046,7 @@ namespace ps2x::iop::detail
         IopLoadcore loadcore;
         std::map<int, Module> modules;
         std::vector<NativeRange> nativeRanges;
+        std::unordered_map<uint32_t, const IopNativeOverride *> nativeOverrides; // physical address -> handler
         uint32_t nativeBudget = kDefaultSlice;
         uint64_t nativeInstructions = 0, interpretedInstructions = 0;
         uint64_t pendingIopCycles = 0;

@@ -93,6 +93,11 @@ namespace ps2x::iop::detail
         [[nodiscard]] bool takeTransferStarted() noexcept;
 
         [[nodiscard]] MemoryCard &card(uint32_t port) { return m_cards[port & 1u]; }
+        // inserts the card file of `port` (GOW_MC0 / GOW_MC1 / Mcd001.ps2) on first use; also used by the native
+        // memory-card routines (src/native/iop_native_overrides.cpp)
+        void prepareCard(uint32_t port);
+        // inserts the card file of `port` (GOW_MC0 / GOW_MC1 / Mcd001.ps2) on first use; also used by the native
+        // memory-card routines (src/native/iop_native_overrides.cpp)
         // Se consulta la primera vez que se accede a cada puerto, para no tocar el disco si el juego no usa la tarjeta.
         void setCardPathProvider(std::function<std::string(uint32_t port)> provider);
 
@@ -105,7 +110,6 @@ namespace ps2x::iop::detail
         void process();
         void absentDevice(bool memcard);
         void memcard();
-        void prepareCard(uint32_t port);
 
         std::array<uint32_t, 16> m_cmdQueue{};
         std::array<uint32_t, 8> m_portCtrl{};

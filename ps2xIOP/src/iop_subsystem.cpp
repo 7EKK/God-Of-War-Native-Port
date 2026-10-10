@@ -226,6 +226,23 @@ namespace ps2x::iop
         detail::IopService *hle = route != m_impl->routes.end() ? route->second : nullptr;
 
         RpcResult emulated = m_impl->emulator.handleRpc(request);
+        if (traceRpc && emulated.handled && request.receive.address && request.receive.size >= 48u)
+        {
+            std::ostringstream id;
+            id << std::hex << request.sid;
+            if (id.str().rfind(traceRpc, 0) == 0)
+            {
+                uint32_t words[12]{};
+                if (m_impl->host.readGuest(request.receive.address, words, sizeof(words)))
+                {
+                    std::ostringstream out;
+                    out << "[rpc-reply] sid=0x" << std::hex << request.sid << " |";
+                    for (uint32_t w : words)
+                        out << ' ' << w;
+                    m_impl->host.log(LogLevel::Info, out.str());
+                }
+            }
+        }
         if (emulated.handled || !hle)
         {
             return emulated;

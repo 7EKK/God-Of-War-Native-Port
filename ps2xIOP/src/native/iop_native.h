@@ -7,10 +7,29 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace ps2x::iop
+{
+    class IopHost;
+}
+
 namespace ps2x::iop::detail
 {
     struct IopCpuState;
     class IopMemory;
+
+    // An IRX function replaced by native C++ (tools/iop/native_overrides.txt lists the same addresses for the code
+    // generator). Called like the function: arguments in $a0-$a3 (stack args at $sp+16), result in $v0; the caller
+    // then returns to $ra.
+    struct IopNativeOverride
+    {
+        const char *module; // module identifier as in the dumps (e.g. "mc2_d_irx")
+        uint32_t offset;    // from the module base
+        const char *name;
+        void (*handler)(IopCpuState &cpu, IopMemory &memory, IopHost &host);
+    };
+
+    // src/native/iop_native_overrides.cpp
+    const IopNativeOverride *iopNativeOverrides(size_t &count);
 
     struct IopNativeModule
     {
