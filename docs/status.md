@@ -523,3 +523,21 @@ set/weights (same 43 controllers of the player animator 0x74ED74 at identical ad
   tester; `--card` takes any memory card (more saves = more zones). First run (port/zones/20261010_123435/report.md):
   slot 1 Olympus 21.8 fps FAIL, slot 2 Desert 28 ok, slot 3 Cliffs 21.2 FAIL, slot 4 Final battle 25.2 ok. All zones render
   correctly (Kratos pose fine). Open per the fps floor order: Olympus and Cliffs sit below 25 fps → profile those zones next.
+
+## 2026-10-10 (night): native VU1 backend (no VU emulation left on the hot path)
+- **What it is**: `tools/vu1/vu1n_gen.py` turns the 3400 captured micro-memories (+ `port/vu1n_heads.txt`, learned entry pcs) into
+  1704 straight-line SSE basic blocks (`vu1n_generado/vu1n_part*.cpp`, built by CMake, keyed FNV(pc, words)); runtime in
+  `ps2_vu1_native.{h,inl}` (hooked in `VU1Interpreter::run`). No cycle model, no pipeline queues: immediate semantics, MXCSR
+  RZ|FTZ|DAZ. The exact engine only steps a pair when no block matches (now: never, `missBlocks=0`) and is the A/B oracle.
+- **What had to be modelled to match the exact engine bit for bit** (found by `GOW_VU1N_VERIFY=N` A/B + bisection to the first bad
+  block): MAC/CLIP visibility latency (writer at pair j visible from pair j+4, shifted by the *stall model* of the exact engine:
+  `nativeTiming()` replays decode/readiness per block with all pipelines idle at entry → `n.cyc[]`); Inf/NaN operands act as ±FLT_MAX
+  (`nrm`, registers keep raw bits because integer data travels through VF); MADD/MSUB overflow evaluated wide (RZ saturates the
+  product to FLT_MAX); `big` result = overflow flag; header compiled with strict FP (runtime is /fp:fast).
+- **Verification**: 40,000 VU1 program runs (Olympus + slot 1) compared with the cycle-exact interpreter (state, VU memory, GIF
+  packets): 0 mismatches. Debug env: GOW_VU1N_VERIFY=N, GOW_VU1N_DIAG=1 (hot misses → add to port/vu1n_heads.txt),
+  GOW_VU1N_DUMP=1, GOW_VU1_NATIVE_OFF=1 (back to the old path).
+- **Perf** (perf_run, Olympus, same build): guest 13.8 → 17.6 fps with native on; VU bucket 1870 → 1070 ms per 5 s. Other zone: 28 fps.
+  Remaining VU cost ~7 ns/pair (XGKICK/GIF handling + dispatch, to profile). Olympus/Cliffs still < 25 fps: EE (~25 ms) and IOP now dominate.
+- **Next** (docs/native-port.md order): profile VU leftovers, IOP (R3000 interpreter → native sound/CDVD), EE codegen, true 1080p
+  renderer; extracted-files loading stays last.
