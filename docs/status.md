@@ -374,3 +374,9 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
     raised-blades upper-body overlay). Heap layouts differ per session, match objects by type pointer, not address.
   - Next: find what makes 0x100EA8 create the extra layers (its loop/table input; watch the creation path and
     compare the table entries / owner objects with PCSX2).
+  - Refinement: the extra layer owners in ours (0x11BE09C, 0x11BE168, header word 0x00020024 = small 2-joint
+    animators, probably props) are not Kratos. The winding time at 0x11BF5F4 belongs to 0x11BE168 → not the
+    twist. Kratos' animator = header 0x001E0024 (ours 0x7AE808, PCSX2 0x7A69A0): same layers (0, 1*) in both.
+    Next: compare Kratos' animator layers' state (time/rate/weight fields of its two controllers, type 0x2C2D20,
+    reached via owner → layer parent (type 0x2BF1A0, +0x10 = owner) → controller (+0x18/+0x1C pointers)) between
+    PCSX2 walking states and ours.
