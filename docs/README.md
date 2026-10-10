@@ -5,6 +5,11 @@ ends by updating them. Do not rely on chat history: if something was discovered,
 
 Goal: static recompilation of God of War (PS2, PAL, SCES-53133) with PS2Recomp into a native executable, made playable
 on PC first (debuggable), then built for Nintendo Switch homebrew (the user's Switch runs Atmosphère).
+**Main achievement (user, 2026-10-11): after the PC port, the game must run on the Nintendo Switch.** Everything built
+for PC has to stay portable to it: AArch64 (no x86-only intrinsics without a portable/sse2neon path), no Windows-only
+APIs outside platform code, GPU features available in switch-mesa (the native GS uses GL 4.3 core shaders, dual-source
+blending and texture barriers: to verify there), ~3 GB memory, and a CPU ~5-8x slower than the dev PC, so CPU-side speed
+(EE, VU1, IOP) is a requirement. See [switch.md](switch.md).
 The user wants the game **totally playable**; work continues until then. Game data is read from **extracted files**
 (`disc/`), never from the ISO.
 

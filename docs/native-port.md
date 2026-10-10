@@ -1,6 +1,8 @@
 # Native port plan: replacing every emulated layer
 
 Goal (user, 2026-10-10): no emulation. 1920x1080 internal, 60 fps minimum, in every zone.
+End target (user, 2026-10-11): the same native port running on the Nintendo Switch: every native layer must stay portable
+(AArch64, switch-mesa GL, Tegra X1 CPU ~5-8x slower than the dev PC; see README.md and switch.md).
 This file is the inventory and the order of work. Status per layer is measured, not hoped.
 
 ## What is "emulated" today
