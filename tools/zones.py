@@ -243,6 +243,7 @@ def summarize_diff(text):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--slots', default='1,2,3,4')
+    ap.add_argument('--exe', help='runner to test (default: the main build); captures are written next to it')
     ap.add_argument('--card', default=DEFAULT_CARD)
     ap.add_argument('--secs', type=float, default=200)
     ap.add_argument('--min-fps', type=float, default=25.0)
@@ -252,6 +253,10 @@ def main():
     ap.add_argument('--image-tol', type=float, default=40.0)
     ap.add_argument('--out', default=os.path.join(ROOT, 'port', 'zones'))
     args = ap.parse_args()
+    if args.exe:
+        global EXE, EXE_DIR
+        EXE = os.path.abspath(args.exe)
+        EXE_DIR = os.path.dirname(EXE)
     if args.diff:
         args.secs = max(args.secs, 420)
     stamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
