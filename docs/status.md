@@ -561,3 +561,14 @@ set/weights (same 43 controllers of the player animator 0x74ED74 at identical ad
   which op — column shuffle / channel merge — and implement it as a dedicated shader on the RT instead of the generic readback),
   (2) GPU-side RT→texture conversion instead of CPU WriteVram, (3) then raise scale and drop the bicubic upscale, (4) host
   presentation currently assumes 640-wide rows (frontend `kHostFrameWidth`) — needs to carry the scaled frame.
+
+## 2026-10-10 (night 2): native GS renderer renders Olympus correctly (`PS2X_GS_HW=1`)
+- Full world, lighting, reflective floor, characters verified (port/zones_hw32 sheet) at ~40 fps (scale 1; old backend 39-42).
+- Needed beyond the first version: STQ scaled by TEX0 size not by target size; real drawn extents per target; Z wrapped to Z24;
+  DATE/DATM destination-alpha test (reads the target); reverse-subtract blend (Cd - Cs*C, fog darkening); depth buffer sampled as
+  Z16/Z24 texture; CT16 targets; **reinterpreting texel fetch** (GPU address math with the GS page tables in a texture: texture
+  format address -> owning render-target pixel -> bits re-extracted, incl. T8H = alpha plane, CT16 view of CT32) and the same for
+  CLUT/palette; draws through a different-format view of an existing target and single-plane FBMSK mask builders are skipped (their
+  readback pass is not reproduced yet).
+- No VRAM image anywhere in the draw path; the CPU backend is only the payload store for uploaded texture bytes / CLUT.
+- Still open: the mask passes (G-plane / CT16-view effects: shadows/fog masks), scale > 1 in the host presenter, slot 3 (Cliffs) 11 fps.
