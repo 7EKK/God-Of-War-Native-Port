@@ -335,3 +335,9 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
   the desert room 5 s after load). Needed: PCSX2 save state (ref/pcsx2, USA ISO, card ref/saves/Mcd002.ps2, slot 2)
   standing in the same room → extract eeMemory.bin (7-Zip) → compare level/animation data regions (static data
   loaded from disc must be identical; differences = IOP/disc path bug).
+- **PCSX2 ground truth obtained (automated, see diagnostics.md)**: port/pcsx2state_desert/eeMemory.bin (desert room,
+  ~5 s after load) vs ours port/ram_desert_g5.bin. Code/static data identical; level heap identical except an
+  allocation-order drift: ours has two extra 16-byte heap entries at 0x19A78C4 (hashes A757E542→01EEFF00,
+  A183E323→019A3090), after which data is shifted by +0x1480 (up to ~0x1EF0000); 0x1200000-0x13A0000 is per-frame
+  data. Next: check whether the shifted/extra allocations are timing-only (dump both at the same frame) or a real
+  difference; then compare Kratos' skeleton/animation data (object+0x104 → skeleton, +0x8C joint matrices).

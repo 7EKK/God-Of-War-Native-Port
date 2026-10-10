@@ -74,3 +74,15 @@ Always-on logs we added: `[SIF module] load-failed/load-unhandled` (RPC.cpp), `f
   compare GPRs (128-bit), FPRs, VF regs and every word the reference wrote. `PS2X_EE_DIFF_STEPS` limits steps.
 - Expected mismatches: functions replaced by runtime stubs (gow.toml `stubs`: rand, printf/fs/sif/mpeg …) and
   their callers; upper 64 bits of GPRs in a few places. Anything else is a recompiler bug.
+
+## PCSX2 driven automatically (2026-10-10) — ground truth for the USA build
+- ref/pcsx2/inis/PCSX2.ini now has `[MemoryCards]` (slot 1 = memcards/Mcd001.ps2 = copy of ref/saves/Mcd002.ps2;
+  old card kept as Mcd001.ps2.bak; ini backup PCSX2.ini.bak) and `[Pad1]` keyboard bindings: Cross=K, Circle=L,
+  Square=J, Triangle=I, Start=Return, Select=Backspace, left stick W/A/S/D, D-pad = arrows (arrows do NOT work with
+  posted messages — extended keys; use the stick keys in menus).
+- Boot from PowerShell (bash paths fail): `Start-Process ref\pcsx2\pcsx2-qt.exe -ArgumentList '-portable','-batch',
+  '--','"<...>\iso-usa\God of War (USA).iso"'`. Drive it with `tools/key.ps1 pcsx2-qt 0 <holdMs> <vk> <scan>`
+  (K = 75 37, I = 73 23, S = 83 31, Return = 13 28), screenshots with `tools/shot.ps1 pcsx2-qt <png>`, game state via
+  `tools/pine.py 29E560 4` (11 = gameplay). Load desert save: Return, I (back if New Game), S, K, then K until state 11.
+- Save state via PINE: send `struct.pack('<IBB', 6, 9, <slot>)` to 127.0.0.1:28011 → ref/pcsx2/sstates/
+  SCUS-97399 (D6385328).0<slot>.p2s; extract with `7z e -o<dir> <p2s> eeMemory.bin Scratchpad.bin`.
