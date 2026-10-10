@@ -1,6 +1,8 @@
 #include "ps2_runtime.h"
 
 void ps2InstallEeDiff(PS2Runtime &runtime); // src/lib/ee_ref/ee_diff.cpp
+void ps2InstallEeWatch(PS2Runtime &runtime);
+void ps2InstallEePageWatch(PS2Runtime &runtime);
 #include "games_database.h"
 #if defined(PS2X_ENABLE_DEBUG_UI) && !defined(PLATFORM_VITA)
 #include "ps2_debug_panel.h"
@@ -229,6 +231,8 @@ int main(int argc, char *argv[])
         }
 
         ps2InstallEeDiff(runtime);
+        ps2InstallEeWatch(runtime);
+        ps2InstallEePageWatch(runtime);
         runtime.run();
 
 #ifdef _DEBUG

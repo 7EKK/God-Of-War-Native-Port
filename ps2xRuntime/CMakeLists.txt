@@ -400,6 +400,7 @@ add_library(ps2_runtime STATIC
     src/lib/vu/ps2_vu1_core.cpp
     # GOW-Port: EE differential tester (PS2X_EE_DIFF) with PCSX2's EE interpreter and VU0 ops (GPL-3.0+).
     src/lib/ee_ref/ee_diff.cpp
+    src/lib/ee_watch.cpp
     src/lib/ee_ref/eeref.cpp
     src/lib/ee_ref/R5900OpcodeImpl.cpp
     src/lib/ee_ref/R5900OpcodeTables.cpp

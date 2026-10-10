@@ -151,3 +151,69 @@ void ps2InstallEeDiff(PS2Runtime &runtime)
         }
     std::fprintf(stderr, "[eediff] hooked %u functions (start after %.1f s)\n", hooked, g_startDelay);
 }
+
+// GOW-Port: PS2X_EE_WATCH_WORD=<hex addr>: every recompiled function is wrapped; after a call returns, if the
+// watched 32-bit word changed, "[eewatch] <func> (ra) old -> new" is printed (first 40 changes). Nested calls
+// report first, so the first line of a change names the innermost function that wrote it.
+namespace
+{
+    uint32_t g_watchAddress = 0;
+    std::unordered_map<uint32_t, PS2Runtime::RecompiledFunction> g_watchOriginals;
+    void watchWrapper(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t address = ctx->pc, ra = getRegU32(ctx, 31);
+        uint32_t before;
+        std::memcpy(&before, rdram + g_watchAddress, 4);
+        g_watchOriginals.at(address)(rdram, ctx, runtime);
+        uint32_t after;
+        std::memcpy(&after, rdram + g_watchAddress, 4);
+        static unsigned reports = 0;
+        if (after != before && reports < 40u)
+        {
+            ++reports;
+            float fb, fa;
+            std::memcpy(&fb, &before, 4);
+            std::memcpy(&fa, &after, 4);
+            std::fprintf(stderr, "[eewatch] %08X (ra %08X) %08X (%g) -> %08X (%g)\n", address, ra, before, fb, after, fa);
+        }
+    }
+}
+
+void ps2InstallEeWatch(PS2Runtime &runtime)
+{
+    const char *value = std::getenv("PS2X_EE_WATCH_WORD");
+    if (!value || !*value)
+        return;
+    g_watchAddress = static_cast<uint32_t>(std::strtoul(value, nullptr, 16)) & 0x01FFFFFCu;
+    unsigned hooked = 0;
+    for (uint32_t address = 0x00100000u; address < 0x002C0000u; address += 4u)
+        if (const PS2Runtime::RecompiledFunction original = runtime.lookupFunction(address))
+        {
+            g_watchOriginals[address] = original;
+            runtime.replaceFunction(address, watchWrapper);
+            ++hooked;
+        }
+    std::fprintf(stderr, "[eewatch] watching %08X in %u functions\n", g_watchAddress, hooked);
+}
+
+#include "../ee_watch.h"
+#include "runtime/ee_scheduler.h"
+
+// GOW-Port: PS2X_EE_WATCH=<hex addr>[:<hex len>]: page-guard write watchpoint (ported from the PAL stack); logs the
+// guest pc/ra of every store into the range, also from code that never returns (thread main loops).
+void ps2InstallEePageWatch(PS2Runtime &runtime)
+{
+    const char *spec = std::getenv("PS2X_EE_WATCH");
+    if (!spec)
+        return;
+    char *end = nullptr;
+    const uint32_t guest = static_cast<uint32_t>(std::strtoul(spec, &end, 16)) & 0x1FFFFFFu;
+    uint32_t length = 16;
+    if (end && *end == ':')
+        length = static_cast<uint32_t>(std::strtoul(end + 1, nullptr, 16));
+    eewatch::install(runtime.memory().getRDRAM(), guest, length, [&runtime](uint32_t &pc, uint32_t &ra)
+                     {
+                         R5900Context *ctx = runtime.eeScheduler().currentContext();
+                         pc = ctx ? ctx->pc : 0u;
+                         ra = ctx ? getRegU32(ctx, 31) : 0u; });
+}

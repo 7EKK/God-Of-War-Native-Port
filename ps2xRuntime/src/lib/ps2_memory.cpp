@@ -1340,8 +1340,26 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
             const uint32_t qwc = m_ioRegisters[channelBase + 0x20];
             m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
 
+            // GOW-Port: PS2X_EE_WATCH_WORD also reports scratchpad DMAs that change the watched RAM word.
+            static const uint32_t watchWord = [] {
+                const char *v = std::getenv("PS2X_EE_WATCH_WORD");
+                return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 16)) & 0x01FFFFFCu : 0u;
+            }();
+            uint32_t watchBefore = 0u;
+            if (watchWord)
+                std::memcpy(&watchBefore, m_rdram + watchWord, 4);
+            const uint32_t sprSadr = m_ioRegisters[channelBase + 0x80u];
             if (tryProcessScratchpadDma(channelBase, value))
             {
+                if (watchWord)
+                {
+                    uint32_t watchAfter;
+                    std::memcpy(&watchAfter, m_rdram + watchWord, 4);
+                    static unsigned reports = 0u;
+                    if (watchAfter != watchBefore && ++reports <= 40u)
+                        std::fprintf(stderr, "[eewatch] SPR DMA %08x chcr=%08x madr=%08x qwc=%u sadr=%04x: %08x -> %08x\n",
+                                     channelBase, value, madr, qwc & 0xFFFFu, sprSadr & 0x3FF0u, watchBefore, watchAfter);
+                }
                 return true;
             }
 
