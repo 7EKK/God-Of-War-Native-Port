@@ -602,10 +602,18 @@ set/weights (same 43 controllers of the player animator 0x74ED74 at identical ad
 - Open: Kratos sometimes yellow/green tinted in gameplay
   (also in the 19:44 baseline); fps of the zone run varied 21-40 between runs (CPU-bound EE/VU windows, re-measure).
 
+## 2026-10-10 (night 5): IOP code native, IOP cost removed (ext 98bc59f)
+- The 8 game IRX modules run as ahead-of-time compiled C++ (details: docs/native-port.md "IOP: ahead-of-time compiled IRX
+  modules"); 0 interpreted IOP instructions in Olympus.
+- IOP time was the EE's per-call accounting (3.4 M runCycles/s), now batched: IOP 2.8 s -> 0.2 s per 5 s, boot to gameplay
+  95 s -> 20 s. Olympus renders correctly (port/iopn4).
+- Native GS on all zones (port/zones_hw5): Olympus 39, slot 2 55, slot 4 37, **Cliffs 10 fps** (blocks GS_HW default).
+- fps measurements: close other emulators/the game first (a forgotten PCSX2 instance halved several runs).
+
 ## RESUME POINT (2026-10-10, end of session)
 State: native VU1 (done, verified) + native GS renderer (`PS2X_GS_HW=1`, opt-in, Olympus correct at 1x-3x incl. mask passes and HUD, ~40 fps; ext 99afa2d).
-Open, in order: (1) re-run all 4 zones with PS2X_GS_HW=1 (Cliffs was 11 fps), then make it the default and drop the bicubic upscale at
-internal >= window; (3) IOP / SPU2 / CDVD native replacement (no emulation rule); (4) EE speed; (5) LAST: read extracted game files
+Open, in order: (1) Cliffs 10 fps on the native GS, then make it the default and drop the bicubic upscale at
+internal >= window; (3) SPU2 / SIO2 / CDVD hardware models -> native services (IRX code is already native); (4) EE speed; (5) LAST: read extracted game files
 instead of the ISO. Port KIexster's game-speed meter (ps2recomp-game-speed.patch, GOW_DELTA_DIAG=1) before quoting fps again.
 Debug env for the GS renderer: see the "night 2" section (GOW_GS_HW_STATS/_DUMP/_DUMPAT/_RTDUMPAT/_ONLY/_NODEPTH...).
 Run: `set PS2X_GS_HW=1 & set PS2X_GS_HW_SCALE=3 & python -I tools/zones.py --slots 1`.

@@ -10,10 +10,10 @@ This file is the inventory and the order of work. Status per layer is measured, 
 | EE CPU (MIPS R5900 game code) | **static recompilation** to x86 (6.4k functions) — already native code, no interpreter | generated | keep; optimise codegen (drop per-insn `ctx->pc`, fast memory paths) | native |
 | Kernel/syscalls/threads | HLE in the runtime (Kernel/, ~23k lines) | HLE | keep | native (HLE) |
 | VU0 macro mode | recompiled inline COP2 ops | inline | keep | native |
-| VU1 microcode | compiled per instruction pair (+ interpreter fallback for pairs not captured) | ~3.4k lines + generated | **100 % ahead-of-time coverage, no interpreter fallback**, then lower the compiled program to GPU compute (see below) | partial: captured 3400 micro-memories, regeneration in progress |
+| VU1 microcode | native per-instruction-pair code generated ahead of time (tools/vu1/vu1n_gen.py), A/B verified | generated | later: lower to GPU compute | native |
 | VIF1 / GIF / DMA plumbing | software model of the DMA chain, UNPACK into a 16 KB VU memory, GIF packet parser | ~1.5k lines | needed as long as the game feeds VU1/GS in PS2 formats; becomes a thin loader once VU1 outputs vertices directly | emulated plumbing |
-| GS (graphics synthesizer) | VRAM-faithful rasteriser on the GPU (compute + hardware raster), 512x448, 4 MB VRAM model | ~11k lines | **native renderer**: real textures, real render targets, scaled to 1080p, no VRAM model | emulated |
-| IOP (I/O CPU + IRX modules: CDVD, SIO2, 989snd) | R3000 interpreter running the game's own IRX modules | ~12.5k lines | HLE: native CDVD (file reads from `disc-usa/`), native pad, native sound engine replacing 989snd | emulated |
+| GS (graphics synthesizer) | **native render-target renderer** `GSHwBackend` (`PS2X_GS_HW=1`): real textures/targets, scaled; reinterpretation passes (channel shuffles, aliased Z, CRTC merge) done natively; VRAM-faithful backend still the default | ~2k lines | make it the default once every zone is >= 25 fps (Cliffs: 10 fps) | native, opt-in |
+| IOP (I/O CPU + IRX modules: CDVD, SIO2, 989snd) | the game's 8 IRX modules (sio2man, dbcman, sio2d, mc2_d, ds2u_d, libsd, 989nomid, smpd_iop; 52k instructions) **compiled ahead of time** to C++ (tools/iop/iopn_gen.py -> ps2xIOP/src/native); HLE kernel imports; the R3000 interpreter only runs code without a compiled form | generated | replace the hardware models below (SPU2, SIO2, CDVD) with native services | native code, in progress |
 | SPU2 | software mixer driven by IOP register writes | in IOP | native mixer fed directly by a native sound engine | emulated |
 
 ## What a no-emulation port really requires
@@ -58,3 +58,27 @@ downscale-readback for the rare RT-as-CLUT/reinterpret cases.
 Plan (seam = new `GSRasterBackend`, old backend stays default/oracle): (a) scale-1 RT renderer vs old backend frames, (b) RT-as-texture,
 (c) conservative readback, (d) raise scale to window size (non-uniform 3.75 x 2.41 per axis is fine: vertex scale only), then drop the
 bicubic upscale.
+
+## IOP: ahead-of-time compiled IRX modules (2026-10-10)
+- Same idea as the EE: the game's own IOP code runs as native code, not interpreted.
+- `core/iop_cpu_exec.h`: the R3000A instruction semantics (`iopExecute`), shared by the interpreter and the generated code.
+  The generated code calls it with the instruction word and address as constants, so the compiler removes the decoding and the
+  behaviour (load and branch delay slots, exceptions) is identical to the interpreter's.
+- Capture: `PS2X_IOP_DUMP_MODULES=<dir>` writes each module's relocated code (`<name>.bin`) and `modules.txt` (name, base,
+  text size, FNV-1a hash). The 8 modules load at stable addresses (sio2man 0x10000 ... smpd_iop 0x4C900).
+- `tools/iop/iopn_gen.py <dump> ps2xIOP/src/native`: one function per module with a label per instruction; straight-line code
+  falls through, after a delay slot it jumps to the static target / fall-through, dynamic jumps go through a switch. It returns
+  to the IOP dispatcher at import stubs (`jr ra; addiu $0,$0,n`, served by the HLE kernel), on exceptions, outside the module
+  and when the budget (scheduler slice, <= 256 instructions) is used. Threads, interrupts and DMA keep working at those points.
+- Runtime (`iop_emulator.cpp`): a module loaded at the generated base with the same hash runs natively, before its start();
+  otherwise the log says "no native code for ..." (`PS2X_IOP_NATIVE=0` disables for A/B comparison).
+- Generated files are not in git (compiled from the game): regenerate after a module or loader change with
+  `PS2X_IOP_DUMP_MODULES=port/iop_mods` + one run to the menu, then `python -I tools/iop/iopn_gen.py port/iop_mods
+  ext/PS2Recomp-kl/ps2xIOP/src/native` and a CMake re-configure. Without them the empty registry is linked.
+- Specialised C++ per instruction, 512 instructions per function (one function per module, or force-inlining the generic
+  semantics, takes MSVC > 30 min and > 12 GB); full build of the 8 modules ~4 min.
+- Measured (Olympus, `PS2X_IOP_NATIVE_STATS=1`): 100 % of IOP instructions native, 0 interpreted; the IRX code itself costs
+  ~30-70 ms per 5 s.
+- The IOP's real cost was the EE calling `runEeCycles` ~3.4 M times/s for ~10 IOP cycles each (full SPU2/timer/scheduler
+  service per call): now batched (512 IOP cycles). IOP total 2.8 s -> ~0.2 s per 5 s; boot to Olympus gameplay 95 s -> 20 s.
+- Next: SPU2 / SIO2 / CDVD hardware models -> native services (audio output, pad, file reads); then GS default (Cliffs 10 fps).
