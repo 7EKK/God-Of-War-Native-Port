@@ -361,3 +361,16 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
   1112470, walking): the matrices at skeleton+0x8C never change → bind pose, not the animated pose. Next: find the
   per-frame animated joint matrices (output of CalcWorldMatrix 0x1303D0 / CalcSkinHierarchy 0x137558, or the
   matrices DMA'd to VU1 for skinning) and log the spine yaw there; then read the same in PCSX2 via PINE.
+- **Kratos twist — strongest lead so far (2026-10-10)**:
+  - Write watchpoint ported: `PS2X_EE_WATCH=<hex>[:len]` (page guard, logs guest pc/ra; src/lib/ee_watch.cpp) and
+    `PS2X_EE_WATCH_WORD=<hex>` (function-level). `GOW_RAM_DUMP=<t>;<t>...:<file>` (multiple dumps, folder must
+    exist), `GOW_PAD_LOG=1` (pad packet: clean, no buttons while walking).
+  - RAM dumps while walking (port/rdump/ram.0-6): float at 0x11BF5F4 runs 0→4.3 and loops = an animation
+    PLAYBACK TIME (writer 0x116EF0: time = min(time + dt*rate, length)), in an anim controller (type ptr
+    0x2C2D20, struct base 0x11BF5A4) created by 0x2520C8 with parameters copied from its parent (type 0x2BF1A0,
+    built by 0x106328 from 0x100EA8: +0x1C = layer index s5, +0x24 = data byte (lookup 0x239228)+2).
+  - PCSX2 ground truth (walking save states port/pcsx2walk2/3): objects of type 0x2BF1A0: PCSX2 43, ours 45;
+    (index 1, flag 0x81): PCSX2 1, ours 3 → **our game creates two extra animation layers** (likely the
+    raised-blades upper-body overlay). Heap layouts differ per session, match objects by type pointer, not address.
+  - Next: find what makes 0x100EA8 create the extra layers (its loop/table input; watch the creation path and
+    compare the table entries / owner objects with PCSX2).

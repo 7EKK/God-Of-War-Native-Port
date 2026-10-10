@@ -150,20 +150,32 @@ namespace
             };
             // GOW-Port: GOW_RAM_DUMP=<time>:<file> writes the 32 MB EE RAM once (time as in GOW_PAD_CAPTURAS,
             // e.g. g5:ram.bin), to compare with eeMemory.bin from a PCSX2 save state at the same point.
+            // GOW_RAM_DUMP=<t>[;<t>...]:<file>: one dump per time; with several times the files are <file>.<n>.
             static const char *ramDump = std::getenv("GOW_RAM_DUMP");
-            static bool ramDumped = false;
-            if (ramDump && !ramDumped)
+            static size_t ramDumpIndex = 0;
+            if (ramDump)
             {
                 const char *colon = std::strchr(ramDump, ':');
-                if (colon && reached(parseTime(std::string(ramDump, colon))))
+                std::vector<std::string> times;
+                for (const char *c = ramDump; colon && c < colon;)
                 {
-                    ramDumped = true;
-                    if (std::FILE *file = std::fopen(colon + 1, "wb"))
+                    const char *e = c;
+                    while (e < colon && *e != ';') ++e;
+                    times.emplace_back(c, e);
+                    c = e < colon ? e + 1 : colon;
+                }
+                if (colon && ramDumpIndex < times.size() && reached(parseTime(times[ramDumpIndex])))
+                {
+                    std::string path = colon + 1;
+                    if (times.size() > 1)
+                        path += "." + std::to_string(ramDumpIndex);
+                    ++ramDumpIndex;
+                    if (std::FILE *file = std::fopen(path.c_str(), "wb"))
                     {
                         std::fwrite(rdram, 1, 0x02000000u, file);
                         std::fclose(file);
                     }
-                    std::fprintf(stderr, "[gow-pad2:test] RAM dumped to %s at %.2f s\n", colon + 1, seconds);
+                    std::fprintf(stderr, "[gow-pad2:test] RAM dumped to %s at %.2f s\n", path.c_str(), seconds);
                 }
             }
             // GOW-Port: comprobar el estado durante el perfil sin escribir capturas ni volcados.
@@ -352,6 +364,16 @@ namespace
             }
         }
         const auto packet = gow_pad2::makePacket(state);
+        // GOW-Port: GOW_PAD_LOG=1 prints the libpad2 packet every 120 reads (buttons are active-low).
+        static const bool padLog = std::getenv("GOW_PAD_LOG") != nullptr;
+        static unsigned padReads = 0;
+        if (padLog && ++padReads % 120u == 0u)
+        {
+            std::fprintf(stderr, "[gow-pad2:packet]");
+            for (uint8_t byte : packet)
+                std::fprintf(stderr, " %02x", byte);
+            std::fprintf(stderr, "\n");
+        }
         std::memcpy(buffer, packet.data(), packet.size());
         const uint16_t buttons = static_cast<uint16_t>(state[2] | (state[3] << 8));
         static unsigned reads = 0;
