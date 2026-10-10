@@ -618,6 +618,13 @@ set/weights (same 43 controllers of the player animator 0x74ED74 at identical ad
 - Present: the two read circuits are composed on the GPU (was 2 full readbacks + CPU blend per frame).
 - Zones at scale 2 (port/native2): Olympus 37 fps, Cliffs 30-39 fps.
 
+## 2026-10-11: 16:9 only
+- User: 16:9 is the standard, never 4:3 again. `GOW_WIDESCREEN` is removed: the game's widescreen data patch is always
+  applied (gow_overrides.cpp), the host fits the image at 16:9, the window defaults to 1920x1080; `play.cmd 43` is gone.
+  Zone captures (tools/zones.py) are the anamorphic 16:9 frames as the GS draws them (ext 026045a).
+- Main achievement set by the user: after the PC port the game must run on the Nintendo Switch (docs/README.md). Citron
+  (Switch emulator, nightly 0237a9b88, MSVC build) is unpacked in ref/citron (citron-cmd.exe) for testing the Switch build.
+
 ## RESUME POINT (2026-10-11)
 State: native EE (recompiled), VU1 (compiled), IOP IRX code (compiled), GS (native renderer, only one; ext c122cad).
 Open, in order: (1) GS: native texture store instead of the GSCpuBackend byte store, drop the bicubic upscale at internal >= window; (2) SPU2 / SIO2 / CDVD hardware models -> native services (IRX code is already native); (4) EE speed; (5) LAST: read extracted game files

@@ -7,10 +7,14 @@
 #include "gow_pad2_packet.h"
 #include "gow_gs_replay.h" // GOW-Port: captura opcional y acotada para comparar backends.
 #include <ps2_recompiled_functions.h>
+void sub_00110E40_0x110e40(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime); // GOW-Port: pose blend entry, for GOW_BLEND_DIAG
 void sub_00116EF0_0x116ef0(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime); // GOW-Port: anim controller time update, for GOW_CTRL_DIAG
 void sub_0013DC78_0x13dc78(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime); // GOW-Port: game heap alloc, for GOW_HEAP_ZERO
 #include <map>
 #include <cmath>
+#include <xmmintrin.h>
+#include <thread>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -99,10 +103,10 @@ namespace
 
     void gowPad2Read(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        // GOW-Port: GOW_WIDESCREEN=1 — the data part of PCSX2's SCUS-97399_D6385328.pnach "Widescreen 16:9":
-        // the game's own widescreen flag and three 16:9 aspect floats, re-applied every frame like PCSX2 does.
-        // (The pnach's "enhanced" code rewrite of 0x169250-0x16944C is not applied: it needs a recompile.)
-        static const bool widescreen = [] { const char *v = std::getenv("GOW_WIDESCREEN"); return v && v[0] == '1'; }();
+        // GOW-Port: always 16:9 (4:3 is not supported any more) — the data part of PCSX2's SCUS-97399_D6385328.pnach
+        // "Widescreen 16:9": the game's own widescreen flag and three 16:9 aspect floats, re-applied every frame like
+        // PCSX2 does. (The pnach's "enhanced" code rewrite of 0x169250-0x16944C is not applied: it needs a recompile.)
+        constexpr bool widescreen = true;
         if (widescreen)
         {
             auto put32 = [rdram](uint32_t addr, uint32_t value) { std::memcpy(rdram + addr, &value, sizeof(value)); };
@@ -559,12 +563,31 @@ namespace
     {
         const uint32_t self = GPR_U32(ctx, 4) & 0x01FFFFFFu;
         auto f32 = [&](uint32_t a) { float v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFCu), 4); return v; };
+        {
+            static thread_local bool reported = false;
+            if (!reported)
+            {
+                reported = true;
+                std::fprintf(stderr, "[gow-ctrl] host thread %u MXCSR=%08x (rounding mode bits %u)\n", static_cast<unsigned>(std::hash<std::thread::id>()(std::this_thread::get_id()) & 0xFFFFu), _mm_getcsr(), (_mm_getcsr() >> 13) & 3u);
+            }
+        }
         sub_00116EF0_0x116ef0(rdram, ctx, runtime);
         struct Info { unsigned calls = 0, lastCalls = 0; float last = 0, rate = 0, prev = 0; };
         static std::map<uint32_t, Info> info;
         static unsigned total = 0;
         Info &i = info[self];
         ++i.calls; i.last = f32(self + 8u); i.rate = f32(self + 0xCu);
+        {
+            // frame delta (guest 0x29C64C): running stats per print window
+            static float dmin = 1e9f, dmax = 0.f; static double dsum = 0; static unsigned dn = 0;
+            const float d = f32(0x29C64Cu);
+            if (d > 0.f && d < 10.f) { dmin = std::min(dmin, d); dmax = std::max(dmax, d); dsum += d; ++dn; }
+            if (total % 4000u == 3999u && dn)
+            {
+                std::fprintf(stderr, "[gow-delta] min=%.4f max=%.4f mean=%.4f samples=%u\n", dmin, dmax, dsum / dn, dn);
+                dmin = 1e9f; dmax = 0.f; dsum = 0; dn = 0;
+            }
+        }
         if (++total % 4000u == 0u)
         {
             for (auto &kv : info)
@@ -574,6 +597,26 @@ namespace
                 kv.second.lastCalls = kv.second.calls; kv.second.prev = kv.second.last;
             }
         }
+    }
+
+    // GOW-Port: GOW_BLEND_DIAG=1 wraps the pose blend entry 0x110E40 (a0 = blend object): logs each distinct object once
+    // with its mode (+0x58), flags word (*(+0x68)), source pointers (+0x78/+0x7C), joint masks (+0x84/+0x104 halfwords) and count (+0x204).
+    void gowDiagBlend(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t self = GPR_U32(ctx, 4) & 0x01FFFFFFu;
+        static std::set<uint32_t> seen;
+        if (seen.size() < 64u && seen.insert(self).second)
+        {
+            auto u16 = [&](uint32_t a) { uint16_t v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFEu), 2); return v; };
+            const uint32_t flagsPtr = readGuest32(rdram, self + 0x68u) & 0x01FFFFFFu;
+            std::fprintf(stderr, "[gow-blend] %x mode=%u flags=%x src78=%x src7c=%x p60=%x p80=%x cnt204=%x w218=%x masks84:", self, readGuest32(rdram, self + 0x58u), flagsPtr ? readGuest32(rdram, flagsPtr) : 0u,
+                         readGuest32(rdram, self + 0x78u), readGuest32(rdram, self + 0x7Cu), readGuest32(rdram, self + 0x60u), readGuest32(rdram, self + 0x80u), readGuest32(rdram, self + 0x204u), readGuest32(rdram, self + 0x218u));
+            for (uint32_t i = 0; i < 12; ++i) std::fprintf(stderr, " %04x", u16(self + 0x84u + i * 2u));
+            std::fprintf(stderr, " | m104:");
+            for (uint32_t i = 0; i < 12; ++i) std::fprintf(stderr, " %04x", u16(self + 0x104u + i * 2u));
+            std::fprintf(stderr, "\n");
+        }
+        sub_00110E40_0x110e40(rdram, ctx, runtime);
     }
 
     void gowIpuInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -1171,6 +1214,8 @@ namespace
         runtime.replaceFunction(0x0028C0C8u, gowRand);
         if (std::getenv("GOW_CTRL_DIAG"))
             runtime.replaceFunction(0x00116EF0u, gowDiagController);
+        if (std::getenv("GOW_BLEND_DIAG"))
+            runtime.replaceFunction(0x00110E40u, gowDiagBlend);
         if (std::getenv("GOW_HEAP_ZERO"))
             runtime.replaceFunction(0x0013DC78u, gowHeapZeroAlloc);
         if (std::getenv("GOW_SKEL_DIAG") || std::getenv("GOW_SKEL_OBJECT") || std::getenv("GOW_SKEL_ANIM"))
