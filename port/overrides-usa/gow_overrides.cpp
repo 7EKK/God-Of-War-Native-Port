@@ -8,6 +8,8 @@
 #include "gow_gs_replay.h" // GOW-Port: captura opcional y acotada para comparar backends.
 #include <ps2_recompiled_functions.h>
 void sub_0013DC78_0x13dc78(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime); // GOW-Port: game heap alloc, for GOW_HEAP_ZERO
+#include <map>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -505,12 +507,38 @@ namespace
         const uint32_t definition = readGuest32(rdram, skeleton + 0x60u) & 0x01FFFFFFu;
         const uint32_t joints = readGuest32(rdram, skeleton + 0x8Cu) & 0x01FFFFFFu;
         const uint32_t count = definition ? readGuest32(rdram, definition + 0x10u) : 0u;
+        // GOW_SKEL_ANIM=1: per object with a joint palette, report every 90 calls how many joints moved since the previous report.
+        if (std::getenv("GOW_SKEL_ANIM") && joints)
+        {
+            static std::map<uint32_t, std::pair<unsigned, std::vector<float>>> track;
+            auto &t = track[object];
+            if (++t.first % 90u == 1u)
+            {
+                const uint32_t n = (count > 0u && count < 256u) ? count : 125u;
+                std::vector<float> cur(n * 16u);
+                std::memcpy(cur.data(), rdram + (joints & 0x01FFFFFFu), n * 64u);
+                unsigned moved = 0, bad = 0;
+                for (uint32_t i = 0; i < n * 16u; ++i) if (!std::isfinite(cur[i])) { ++bad; break; }
+                if (t.second.size() == cur.size())
+                    for (uint32_t j = 0; j < n; ++j)
+                        for (uint32_t k = 0; k < 16u; ++k)
+                            if (std::fabs(cur[j * 16u + k] - t.second[j * 16u + k]) > 1e-4f) { ++moved; break; }
+                std::fprintf(stderr, "[gow-skelanim] object=%x joints=%x n=%u moved=%u nonfinite=%u j1=%.1f,%.1f,%.1f call=%u\n", object, joints, n, moved, bad,
+                             cur[16 + 12], cur[16 + 13], cur[16 + 14], t.first);
+                t.second = cur;
+            }
+        }
         static std::set<uint32_t> seen;
-        if (!watched && seen.size() < 64u && seen.insert(object).second)
+        if (!watched && seen.size() < 600u && seen.insert(object).second)
             std::fprintf(stderr, "[gow-skel] object=%x skeleton=%x joints=%x count=%u pos=%.1f,%.1f,%.1f\n",
                          object, skeleton, joints, count, f32(object + 0xA0u), f32(object + 0xA4u), f32(object + 0xA8u));
-        if (watched && (object & 0x01FFFFFFu) == watched && joints && count > 0u && count < 256u)
+        if (watched && (object & 0x01FFFFFFu) == watched && joints)
         {
+            // GOW_SKEL_DUMP=<file>: append 125 joint matrices (64 bytes each) of the watched object per call.
+            static const char *dumpPath = std::getenv("GOW_SKEL_DUMP");
+            if (dumpPath)
+                if (FILE *df = std::fopen(dumpPath, "ab")) { std::fwrite(rdram + joints, 64, 125, df); std::fclose(df); }
+            if (!(count > 0u && count < 256u)) return;
             static unsigned calls = 0;
             if (++calls % 6u != 0u)
                 return;
@@ -1119,7 +1147,7 @@ namespace
         runtime.replaceFunction(0x0028C0C8u, gowRand);
         if (std::getenv("GOW_HEAP_ZERO"))
             runtime.replaceFunction(0x0013DC78u, gowHeapZeroAlloc);
-        if (std::getenv("GOW_SKEL_DIAG") || std::getenv("GOW_SKEL_OBJECT"))
+        if (std::getenv("GOW_SKEL_DIAG") || std::getenv("GOW_SKEL_OBJECT") || std::getenv("GOW_SKEL_ANIM"))
             runtime.replaceFunction(0x00157A60u, gowDiagCalcWorldMatrix);
         if (std::getenv("GOW_PATH_DIAG") || std::getenv("GOW_ANM_DIAG") || std::getenv("GOW_FAST_BOOT"))
         {

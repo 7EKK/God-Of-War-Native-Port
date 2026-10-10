@@ -420,3 +420,13 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
 - Next invasive step: dump the joint palette Kratos sends to VU1 (VIF1 UNPACK V4-32 blocks) and compare with the
   bind-pose/hierarchy; or bisect by forcing individual animation layers/controllers off to see which one carries the
   twisted torso.
+- New diagnostics (all env-gated, off by default): `GOW_VIF_MATDUMP=<file>:<start>:<len>` (+[vifhist] histogram of UNPACK
+  shapes), `GOW_SKEL_ANIM=1` (per model-palette object: joints moved/nonfinite every 90 calls), `GOW_SKEL_DUMP=<file>`
+  with `GOW_SKEL_OBJECT=<hex>` (raw 125x64-byte palette per call). Heap addresses are stable between identical scripted
+  runs. In the desert Kratos candidate = object 0x1AC38B0 (125 joints, pos 2433,512,6738) but skeleton+0x8C is not a flat
+  matrix array for it (only joints 0-5 look like matrices) → the pointer layout differs per object; palette dump unfinished.
+- VIF1 UNPACK reviewed against PCSX2 Vif_Unpack.cpp (mask/row/col, STMOD 1/2/3, V2/V4-5, cycle/fill): equivalent except
+  V3 W lane (PCSX2 = next source word; ours = stale VU memory, harmless) and CL/WL==0 remap. Histogram shows the walk's
+  UNPACKs are V4-16/V4-8 (vertex data) and V4-32 num=1 (headers); no big V4-32 matrix blocks.
+- DMA chain walker reviewed: tag ids 0-7 match hardware. No tag with the SPR flag (bit 63) occurs on any channel
+  (`[dma] chain tag with SPR flag` diag, port/spr1) → ruled out.
