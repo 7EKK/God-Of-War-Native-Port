@@ -44,6 +44,9 @@ struct VU1NativeAccess
     static void callLower(VU1NativeCtx &n, uint32_t pc, uint32_t lower, uint32_t upper);
     static void callUpper(VU1NativeCtx &n, uint32_t pc, uint32_t upper);
     static void xgkick(VU1NativeCtx &n, uint32_t qwordAddress);
+    // GOW_VU1N_RECORD / GOW_VU1N_REPLAY (bit-exact A/B of generator changes, see ps2_vu1_native.inl)
+    static void recordReplay(VU1Interpreter &vu, void *context, uint32_t maxCycles);
+    static uint64_t silentNativeHash(VU1Interpreter &vu, void *context);
 };
 
 struct VU1Interpreter::NativeState
@@ -296,6 +299,95 @@ namespace vu1n
         else
             r = std::signbit(num) ? -FLT_MAX : FLT_MAX;
         s.q = qfinish(r);
+    }
+
+    // --- register-file-in-locals variants (generated blocks keep VF/VI/ACC/Q/I in C++ locals; same semantics as above) ---
+    inline uint32_t qa(uint32_t mask, int32_t qw) { return (static_cast<uint32_t>(qw) * 16u) & mask; }
+    inline __m128 ldm(const uint8_t *mem, uint32_t addr) { return _mm_loadu_ps(reinterpret_cast<const float *>(mem + addr)); }
+    template <int M>
+    inline void stm(uint8_t *mem, uint32_t addr, __m128 v) { stf<M>(reinterpret_cast<float *>(mem + addr), v); }
+    inline int32_t ldWordm(const uint8_t *mem, uint32_t addr, int comp)
+    {
+        uint32_t v;
+        std::memcpy(&v, mem + addr + comp * 4, 4);
+        return static_cast<int16_t>(v & 0xFFFFu);
+    }
+    inline void stWordsm(uint8_t *mem, uint32_t addr, int32_t value, int destMask)
+    {
+        const uint32_t w = static_cast<uint16_t>(value & 0xFFFF);
+        for (int c = 0; c < 4; ++c)
+            if (destMask & (8 >> c))
+                std::memcpy(mem + addr + c * 4, &w, 4);
+    }
+    template <int C> // raw lane (bits preserved)
+    inline float lane(__m128 v)
+    {
+        uint32_t b = static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_castps_si128(_mm_shuffle_ps(v, v, _MM_SHUFFLE(C, C, C, C)))));
+        float f;
+        std::memcpy(&f, &b, 4);
+        return f;
+    }
+    template <int C>
+    inline int32_t laneBits16(__m128 v)
+    {
+        const uint32_t b = static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_castps_si128(_mm_shuffle_ps(v, v, _MM_SHUFFLE(C, C, C, C)))));
+        return static_cast<int16_t>(b & 0xFFFFu);
+    }
+    template <int Shift>
+    inline __m128 itofv(__m128 raw)
+    {
+        const __m128 v = _mm_cvtepi32_ps(_mm_castps_si128(raw));
+        if constexpr (Shift == 4) return _mm_mul_ps(v, _mm_set1_ps(1.0f / 16.0f));
+        if constexpr (Shift == 12) return _mm_mul_ps(v, _mm_set1_ps(1.0f / 4096.0f));
+        if constexpr (Shift == 15) return _mm_mul_ps(v, _mm_set1_ps(1.0f / 32768.0f));
+        return v;
+    }
+    template <int Shift>
+    inline __m128 ftoiv(__m128 normalized)
+    {
+        constexpr float scale = Shift == 0 ? 1.0f : Shift == 4 ? 16.0f : Shift == 12 ? 4096.0f : 32768.0f;
+        const __m128 v = _mm_mul_ps(clampv(normalized), _mm_set1_ps(scale));
+        const __m128 big = _mm_cmpge_ps(v, _mm_set1_ps(2147483648.0f));
+        const __m128i i = _mm_cvttps_epi32(v);
+        return _mm_blendv_ps(_mm_castsi128_ps(i), _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF)), big);
+    }
+    inline __m128 absv(__m128 normalized) { return _mm_and_ps(normalized, _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF))); }
+    inline uint32_t clipValv(__m128 vn, __m128 tn, uint32_t prev)
+    {
+        alignas(16) float v[4], t[4];
+        _mm_store_ps(v, vn);
+        _mm_store_ps(t, tn);
+        const float w = std::fabs(t[3]);
+        uint32_t f = 0;
+        if (v[0] > w) f |= 0x01u;
+        if (v[0] < -w) f |= 0x02u;
+        if (v[1] > w) f |= 0x04u;
+        if (v[1] < -w) f |= 0x08u;
+        if (v[2] > w) f |= 0x10u;
+        if (v[2] < -w) f |= 0x20u;
+        return ((prev << 6) | f) & 0xFFFFFFu;
+    }
+    inline float divv(float fsRaw, float ftRaw)
+    {
+        const float num = qnorm(fsRaw), den = qnorm(ftRaw);
+        float r;
+        if (den == 0.0f)
+            r = (std::signbit(num) != std::signbit(den)) ? -FLT_MAX : FLT_MAX;
+        else
+            r = num / den;
+        return qfinish(r);
+    }
+    inline float sqrtv(float ftRaw) { return qfinish(std::sqrt(std::fabs(qnorm(ftRaw)))); }
+    inline float rsqrtv(float fsRaw, float ftRaw)
+    {
+        const float num = qnorm(fsRaw);
+        const float den = std::sqrt(std::fabs(qnorm(ftRaw)));
+        float r;
+        if (den != 0.0f)
+            r = num / den;
+        else
+            r = std::signbit(num) ? -FLT_MAX : FLT_MAX;
+        return qfinish(r);
     }
 }
 
