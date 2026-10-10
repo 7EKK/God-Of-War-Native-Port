@@ -231,6 +231,29 @@ GSHostPresentation::View GSHostPresentation::prepare(GS &gs, uint64_t vsyncTick)
     lastPreferred = preferred;
     lastWidth = width;
     lastHeight = height;
+    if (width > kWidth || height > kHeight)
+    {
+        // GOW-Port: render-target renderer frames (internal resolution) are uploaded as they are, in a texture of their size.
+        if (width > fallbackWidth || height > fallbackHeight)
+        {
+            UnloadTexture(fallback);
+            fallbackWidth = std::max(fallbackWidth, width);
+            fallbackHeight = std::max(fallbackHeight, height);
+            Image bigBlank = GenImageColor(static_cast<int>(fallbackWidth), static_cast<int>(fallbackHeight), BLANK);
+            fallback = LoadTextureFromImage(bigBlank);
+            UnloadImage(bigBlank);
+            SetTextureFilter(fallback, TEXTURE_FILTER_POINT);
+        }
+        UpdateTextureRec(fallback, Rectangle{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height)}, scratch.data());
+        uploaded = true;
+        uploadedBlank = false;
+        current.texture = fallback;
+        current.width = width;
+        current.height = height;
+        current.borrowed = current.blank = false;
+        current.frame = {};
+        return current;
+    }
     std::fill(upload.begin(), upload.end(), 0u);
     const uint32_t copyWidth = std::min(width, kWidth);
     const uint32_t copyHeight = std::min(height, kHeight);

@@ -35,6 +35,7 @@ private:
     void createFallback();
     void blankFallback();
     View prepare(GS &gs, uint64_t vsyncTick);
+    uint32_t fallbackWidth = 640u, fallbackHeight = 512u; // grows for high resolution frames
     Texture2D fallback{}; // Propia; las texturas de View compartidas son prestadas.
     std::vector<uint8_t> scratch;
     std::vector<uint8_t> upload;

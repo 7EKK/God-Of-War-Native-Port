@@ -190,9 +190,10 @@ namespace
         if (outDisplayFbp) *outDisplayFbp = 0u;
         if (outSourceFbp) *outSourceFbp = 0u;
         if (outUsedPreferred) *outUsedPreferred = false;
-        const size_t sourceRowBytes = static_cast<size_t>(kHostFrameWidth) * 4u;
+        // GOW-Port: 640-pixel rows, or the frame's own width for the render-target renderer's high resolution frames
+        const size_t sourceRowBytes = static_cast<size_t>(std::max(width, kHostFrameWidth)) * 4u;
         const size_t packedRowBytes = static_cast<size_t>(width) * 4u;
-        if (width == 0u || height == 0u || width > kHostFrameWidth ||
+        if (width == 0u || height == 0u || width > 8192u ||
             static_cast<size_t>(height) > pixels.size() / sourceRowBytes)
             return false;
         outPixels.resize(packedRowBytes * static_cast<size_t>(height));
