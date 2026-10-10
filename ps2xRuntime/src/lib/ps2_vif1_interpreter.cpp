@@ -1,3 +1,6 @@
+#include <map>
+#include <chrono>
+#include <string>
 // Based on Blackline Interactive implementation
 #include "runtime/ps2_memory.h"
 #include <cstring>
@@ -322,6 +325,15 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         else if (opcode == VIF_STCYCL)
         {
             vif1_regs.cycle = imm;
+            if (std::getenv("GOW_VIF_CYCLE_DIAG"))
+            {
+                static std::map<uint32_t, unsigned> cycles;
+                static unsigned total = 0;
+                ++cycles[imm & 0xFFFFu];
+                if (++total % 50000u == 0u)
+                    for (auto &kv : cycles)
+                        std::fprintf(stderr, "[vifcycle] cl=%u wl=%u x%u\n", kv.first & 0xFFu, (kv.first >> 8) & 0xFFu, kv.second);
+            }
             continue;
         }
         else if (opcode == VIF_OFFSET)
@@ -423,7 +435,10 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         else if (opcode == VIF_STMASK)
         {
             if (pos + 4 > sizeBytes)
+            {
+                std::fprintf(stderr, "[vif1] STMASK cut\n");
                 break;
+            }
             uint32_t maskValue = 0;
             std::memcpy(&maskValue, data + pos, sizeof(maskValue));
             vif1_regs.mask = maskValue;
@@ -433,7 +448,10 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         else if (opcode == VIF_STROW)
         {
             if (pos + 16 > sizeBytes)
+            {
+                std::fprintf(stderr, "[vif1] STROW cut\n");
                 break;
+            }
             std::memcpy(vif1_regs.row, data + pos, 16);
             pos += 16;
             continue;
@@ -441,7 +459,10 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         else if (opcode == VIF_STCOL)
         {
             if (pos + 16 > sizeBytes)
+            {
+                std::fprintf(stderr, "[vif1] STCOL cut\n");
                 break;
+            }
             std::memcpy(vif1_regs.col, data + pos, 16);
             pos += 16;
             continue;
@@ -461,10 +482,15 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                     std::memcpy(m_vu1Code + destAddr, data + pos, copyBytes);
                     markVU1CodeModified();
                 }
+                else
+                    std::fprintf(stderr, "[vif1] MPG cut: dest=%x bytes=%u have=%u\n", destAddr, copyBytes, sizeBytes - pos);
             }
             pos += mpgBytes;
             if (pos > sizeBytes)
+            {
+                std::fprintf(stderr, "[vif1] MPG overruns buffer by %u\n", pos - sizeBytes);
                 break;
+            }
             continue;
         }
         else if (opcode == VIF_DIRECT || opcode == VIF_DIRECTHL)
@@ -562,6 +588,45 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                                  static_cast<unsigned>(vn), static_cast<unsigned>(vl), static_cast<unsigned>(num),
                                  static_cast<unsigned>(imm & 0x3FFu), static_cast<unsigned>(totalBytes),
                                  static_cast<unsigned>(sizeBytes - pos));
+            }
+            // GOW-Port: GOW_VIF_MATDUMP=<file>[:<start s>[:<len s>]] appends every big V4-32 UNPACK (>= 32 vectors) seen in
+            // the window as [u32 vuAddr][u32 vectors][data] to look at the skinning matrix palette Kratos sends to VU1.
+            {
+                static const char *dumpSpec = std::getenv("GOW_VIF_MATDUMP");
+                if (dumpSpec && totalBytes > 0)
+                {
+                    static std::map<uint32_t, unsigned> hist; static unsigned n = 0;
+                    ++hist[(vn << 24) | (vl << 16) | writeVectorCount];
+                    if ((++n % 20000u) == 0u)
+                        for (auto &kv : hist) if (kv.second > 200u) std::fprintf(stderr, "[vifhist] vn=%u vl=%u num=%u x%u\n", kv.first >> 24, (kv.first >> 16) & 255, kv.first & 0xFFFF, kv.second);
+                }
+                if (dumpSpec && vn == 3u && vl == 0u && writeVectorCount >= 32u && totalBytes > 0 && pos + totalBytes <= sizeBytes)
+                {
+                    static const auto t0 = std::chrono::steady_clock::now();
+                    static std::string path = dumpSpec;
+                    static double startS = 0.0, lenS = 1.0;
+                    static bool parsed = [] {
+                        const size_t c1 = path.find(':');
+                        if (c1 != std::string::npos)
+                        {
+                            startS = std::atof(path.c_str() + c1 + 1);
+                            const size_t c2 = path.find(':', c1 + 1);
+                            if (c2 != std::string::npos) lenS = std::atof(path.c_str() + c2 + 1);
+                            path.resize(c1);
+                        }
+                        return true;
+                    }();
+                    (void)parsed;
+                    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+                    if (now >= startS && now < startS + lenS)
+                        if (FILE *f = std::fopen(path.c_str(), "ab"))
+                        {
+                            const uint32_t hdr[2] = {vuAddr, writeVectorCount};
+                            std::fwrite(hdr, 4, 2, f);
+                            std::fwrite(data + pos, 1, totalBytes, f);
+                            std::fclose(f);
+                        }
+                }
             }
             if (m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
             {
@@ -788,6 +853,9 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         }
         else
         {
+            static unsigned unknownCmds = 0;
+            if (++unknownCmds <= 20u)
+                std::fprintf(stderr, "[vif1] unhandled VIFcode opcode=%02x imm=%04x num=%u\n", opcode, imm, num);
             continue;
         }
     }

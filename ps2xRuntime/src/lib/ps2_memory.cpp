@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+static const auto g_gowProcStart = std::chrono::steady_clock::now(); // GOW-Port: process start for diagnostics
 
 namespace
 {
@@ -1493,6 +1494,12 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         uint32_t id = static_cast<uint32_t>((tag >> 28) & 0x7);
                         const bool irq = ((tag >> 31) & 0x1ull) != 0ull;
                         uint32_t addr = static_cast<uint32_t>((tag >> 32) & 0x7FFFFFFF);
+                        if ((tag >> 63) != 0ull)
+                        {
+                            static unsigned sprTags = 0;
+                            if (++sprTags <= 20u || sprTags % 100000u == 0u)
+                                std::fprintf(stderr, "[dma] chain tag with SPR flag #%u ch=%08x id=%u addr=%08x qwc=%u\n", sprTags, channelBase, id, addr, tagQwc);
+                        }
                         lastTagUpper = static_cast<uint32_t>((tag >> 16) & 0xFFFFu);
                         ++tagsProcessed;
 
@@ -1564,6 +1571,32 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                             break;
                         }
 
+                        {
+                            static const double bigFrom = std::getenv("GOW_DMA_BIGTAGS") ? std::atof(std::getenv("GOW_DMA_BIGTAGS")) : -1.0;
+                            static const auto bigT0 = std::chrono::steady_clock::now();
+                            const bool bigTags = bigFrom >= 0.0 && std::chrono::duration<double>(std::chrono::steady_clock::now() - bigT0).count() >= bigFrom;
+                            static unsigned bigCount = 0;
+                            if (bigTags && isVifChannel && hasPayload && tagQwc >= 200u && ++bigCount <= 400u)
+                                std::fprintf(stderr, "[dma-big] ch=%08x id=%u data=%08x qwc=%u\n", channelBase, id, dataAddr, tagQwc);
+                        }
+                        {
+                            // GOW_DMA_BLOCKDUMP=<file>:<from s>:<len s>: append [u32 addr][u32 qwc][data] of every VIF1 chain block.
+                            static const char *spec = std::getenv("GOW_DMA_BLOCKDUMP");
+                            if (spec && isVifChannel && hasPayload && tagQwc >= 4u && tagQwc <= 2000u)
+                            {
+                                static std::string path; static double from = 0, len = 1;
+                                static const auto t0 = g_gowProcStart;
+                                static bool init = [&] { path = spec; size_t c2 = path.rfind(':'); size_t c1 = (c2 == std::string::npos || c2 == 0) ? std::string::npos : path.rfind(':', c2 - 1); if (c1 != std::string::npos && c1 > 1) { from = std::atof(path.c_str() + c1 + 1); len = std::atof(path.c_str() + c2 + 1); path.resize(c1); } return true; }();
+                                (void)init;
+                                const double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+                                if (now >= from && now < from + len && !isScratchpad(dataAddr) && (dataAddr & 0x01FFFFFFu) + tagQwc * 16u <= PS2_RAM_SIZE)
+                                    if (FILE *df = std::fopen(path.c_str(), "ab"))
+                                    {
+                                        const uint32_t hdr[2] = {dataAddr, tagQwc};
+                                        std::fwrite(hdr, 4, 2, df); std::fwrite(m_rdram + (dataAddr & 0x01FFFFFFu), 16, tagQwc, df); std::fclose(df);
+                                    }
+                            }
+                        }
                         if (transferTagData)
                             appendVifTagData(currentTagAddr);
 

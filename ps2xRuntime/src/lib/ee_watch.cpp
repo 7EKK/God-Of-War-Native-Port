@@ -1,3 +1,5 @@
+#include <chrono>
+#include <cstdlib>
 #include "ee_watch.h"
 
 #include <cstdio>
@@ -17,6 +19,13 @@ namespace
     uintptr_t s_begin = 0, s_end = 0;
     uint32_t s_guest = 0, s_hits = 0;
 
+    // GOW-Port: PS2X_EE_WATCH_FROM=<s>: report writes only after <s> seconds of process time (skips load-time writes).
+    bool watchGateOpen()
+    {
+        static const auto t0 = std::chrono::steady_clock::now();
+        static const double from = std::getenv("PS2X_EE_WATCH_FROM") ? std::atof(std::getenv("PS2X_EE_WATCH_FROM")) : 0.0;
+        return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() >= from;
+    }
     LONG CALLBACK handler(EXCEPTION_POINTERS *info)
     {
         const DWORD code = info->ExceptionRecord->ExceptionCode;
@@ -27,7 +36,7 @@ namespace
             const uintptr_t page = reinterpret_cast<uintptr_t>(s_page);
             if (address >= page && address < page + 4096)
             {
-                if (address + 16 > s_begin && address < s_end && s_hits < 400)
+                if (address + 16 > s_begin && address < s_end && s_hits < 400 && watchGateOpen())
                 {
                     ++s_hits;
                     uint32_t pc = 0, ra = 0;

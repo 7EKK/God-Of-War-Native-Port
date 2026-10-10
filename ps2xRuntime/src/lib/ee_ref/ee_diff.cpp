@@ -6,6 +6,7 @@
 #include "ps2_runtime.h"
 #include "eeref.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -43,6 +44,12 @@ namespace
             s.vi[i] = ctx->vi[i];
         std::memcpy(s.acc, &ctx->vu0_acc, 16);
         std::memcpy(&s.q, &ctx->vu0_q, 4);
+        std::memcpy(&s.p, &ctx->vu0_p, 4);
+        std::memcpy(&s.i, &ctx->vu0_i, 4);
+        std::memcpy(&s.r, &ctx->vu0_r, 4);
+        s.status = ctx->vu0_status;
+        s.mac = ctx->vu0_mac_flags;
+        s.clip = ctx->vu0_clip_flags;
         return s;
     }
 
@@ -56,7 +63,15 @@ namespace
         const double elapsed =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - g_startTime).count();
         std::unique_lock<std::mutex> lock(g_mutex, std::try_to_lock);
-        if (elapsed < g_startDelay || !lock.owns_lock() || calls[address]++ >= maxCalls)
+        // GOW-Port: PS2X_EE_DIFF_EVERY=<n>: compare only every n-th call of a function (spreads the checked calls over
+        // many frames / animation phases instead of the first few calls); PS2X_EE_DIFF_MAX then bounds the checked ones.
+        static const int every = std::getenv("PS2X_EE_DIFF_EVERY") ? std::max(1, std::atoi(std::getenv("PS2X_EE_DIFF_EVERY"))) : 1;
+        static std::unordered_map<uint32_t, int> seenCalls;
+        static std::unordered_map<uint32_t, int> checked;
+        const int seq = seenCalls[address]++;
+        const bool skipThis = elapsed < g_startDelay || !lock.owns_lock() || ((seq + static_cast<int>(address >> 2)) % every) != 0 || checked[address] >= maxCalls;
+        if (!skipThis) { ++checked[address]; ++calls[address]; }
+        if (skipThis)
         {
             if (lock.owns_lock())
                 lock.unlock();

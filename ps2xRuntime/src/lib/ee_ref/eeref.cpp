@@ -193,6 +193,12 @@ namespace eeref
             pcsx2vu0::vi(i) = before.vi[i];
         std::memcpy(pcsx2vu0::acc(), before.acc, 16);
         pcsx2vu0::vi(22) = before.q;
+        pcsx2vu0::vi(23) = before.p;
+        pcsx2vu0::vi(21) = before.i;
+        pcsx2vu0::vi(20) = before.r;
+        pcsx2vu0::vi(16) = before.status;
+        pcsx2vu0::vi(17) = before.mac;
+        pcsx2vu0::vi(18) = before.clip;
         pcsx2vu0::vf(0)[0] = pcsx2vu0::vf(0)[1] = pcsx2vu0::vf(0)[2] = 0;
         pcsx2vu0::vf(0)[3] = 0x3F800000u;
 
@@ -250,6 +256,20 @@ namespace eeref
                               std::bit_cast<float>(after.vf[i][3]));
                 note(line);
             }
+        {
+            struct Ctl { const char *name; int idx; u32 ours; u32 mask; };
+            const Ctl ctls[] = {{"vuQ", 22, after.q, 0xFFFFFFFFu}, {"vuP", 23, after.p, 0xFFFFFFFFu}, {"vuI", 21, after.i, 0xFFFFFFFFu},
+                                {"vuStatus", 16, after.status, 0xFFFu}, {"vuMAC", 17, after.mac, 0xFFFFu}, {"vuClip", 18, after.clip, 0xFFFFFFu}};
+            for (const Ctl &c : ctls)
+            {
+                const u32 ref = pcsx2vu0::vi(c.idx);
+                if ((ref & c.mask) != (c.ours & c.mask))
+                {
+                    std::snprintf(line, sizeof(line), "%s ref %08X ours %08X", c.name, ref & c.mask, c.ours & c.mask);
+                    note(line);
+                }
+            }
+        }
         for (const u32 word : s_written)
         {
             u32 ref, ours;

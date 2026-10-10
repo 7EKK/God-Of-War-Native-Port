@@ -19,6 +19,7 @@ namespace eeref
         uint16_t vi[16];
         uint32_t acc[4];
         uint32_t q;
+        uint32_t p, i, r, status, mac, clip; // GOW-Port: VU0 control state (compared after each call)
     };
 
     struct Result
