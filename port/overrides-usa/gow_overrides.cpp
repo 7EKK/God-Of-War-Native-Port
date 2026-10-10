@@ -7,6 +7,7 @@
 #include "gow_pad2_packet.h"
 #include "gow_gs_replay.h" // GOW-Port: captura opcional y acotada para comparar backends.
 #include <ps2_recompiled_functions.h>
+void sub_0013DC78_0x13dc78(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime); // GOW-Port: game heap alloc, for GOW_HEAP_ZERO
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -463,6 +464,18 @@ namespace
     // 15-bit rand(). The game's newlib rand (checked against the ELF code and PCSX2's interpreter with
     // PS2X_EE_DIFF) keeps its seed at _impure_ptr(0x2A4294)+0x58 and returns 31 bits:
     // seed = seed * 0x41C64E6D + 0x3039; return seed & 0x7FFFFFFF.
+    // GOW-Port: GOW_HEAP_ZERO=1 zero-fills every block returned by the game heap allocator 0x13DC78 (a0 heap, a1 bytes),
+    // to test whether uninitialised (stale) heap data, which differs from PCSX2 after the allocation-order drift,
+    // reaches the animation code.
+    void gowHeapZeroAlloc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t bytes = GPR_U32(ctx, 5);
+        sub_0013DC78_0x13dc78(rdram, ctx, runtime);
+        const uint32_t block = GPR_U32(ctx, 2) & 0x01FFFFFFu;
+        if (block && bytes && bytes < 0x01000000u && block + bytes <= 0x02000000u)
+            std::memset(rdram + block, 0, bytes);
+    }
+
     void gowRand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         (void)runtime;
@@ -1104,6 +1117,8 @@ namespace
         runtime.setPrivateGuestHeap(0x000A0000u, 0x000FF000u);
         runtime.replaceFunction(0x00279600u, gowIpuInit);
         runtime.replaceFunction(0x0028C0C8u, gowRand);
+        if (std::getenv("GOW_HEAP_ZERO"))
+            runtime.replaceFunction(0x0013DC78u, gowHeapZeroAlloc);
         if (std::getenv("GOW_SKEL_DIAG") || std::getenv("GOW_SKEL_OBJECT"))
             runtime.replaceFunction(0x00157A60u, gowDiagCalcWorldMatrix);
         if (std::getenv("GOW_PATH_DIAG") || std::getenv("GOW_ANM_DIAG") || std::getenv("GOW_FAST_BOOT"))

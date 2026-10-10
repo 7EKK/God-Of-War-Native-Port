@@ -406,3 +406,17 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
   was not obtained (Gemini run stopped). **Next: read his palette/joint findings first**, then compare Kratos'
   joint palette (skinning buffer) with PCSX2 at the same animation frame.
 - Remaining stage not yet verified against PCSX2: the per-frame joint palette itself (EE output just before VIF1).
+
+## Session 2026-10-10 (midday) — invasive tests of the Kratos twist
+- KIexster's ESTADO.md (cbb58c3) read: he has NOT found the cause either (only input palettes at ProcessModel, matches
+  PCSX2 within ULP-level noise; skinning output/VIF still unverified). Nothing to borrow for the twist.
+- Animation-state object (ours 0x8629C0 / PCSX2 0x862900, referenced from Kratos' animator) carries stale heap garbage
+  in ours ('Mark' string at +8, a float rotation at +0xA4) where PCSX2 has zeros → hypothesis "uninitialised heap data".
+- **Test: `GOW_HEAP_ZERO=1`** (gow_overrides.cpp, wraps USA heap alloc 0x13DC78, zero-fills every returned block;
+  note tools/dis.py reads the PAL port/output, use port/output-usa for USA addresses). port/hz1: pose IDENTICAL to
+  port/tw1 (torso twisted, blades raised) → **stale/uninitialised heap data ruled out**.
+- Repro command used: `tools/perf_run.sh hz1 230 GOW_HEAP_ZERO=1 GOW_PAD_GUION='5:start,16:abajo,24:x,85:derecha*0.3,92:x,g8:ldown*16' GOW_PAD_CAPTURAS='g12,g16,g20'`
+  (gameplay starts ~110 s; captures hz1/gow_pad_test_1.png).
+- Next invasive step: dump the joint palette Kratos sends to VU1 (VIF1 UNPACK V4-32 blocks) and compare with the
+  bind-pose/hierarchy; or bisect by forcing individual animation layers/controllers off to see which one carries the
+  twisted torso.
