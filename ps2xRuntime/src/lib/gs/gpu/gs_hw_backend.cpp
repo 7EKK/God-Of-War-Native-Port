@@ -3,6 +3,7 @@
 #include "runtime/gs/gs_cpu_backend.h"
 #include "runtime/gs/gs_swizzle.h"
 #include "gs_gl.h"
+#include "../gs_gpu_helpers.h"
 
 #include <algorithm>
 #include <chrono>
@@ -733,7 +734,7 @@ struct GSHwBackend::Impl
         ++stats.texDecodes;
         const Api &g = gl();
         std::vector<uint32_t> pixels;
-        cpu.DecodeTextureRgba(s, pixels);
+        decodeDirect(s, pixels);
         static const int texDumpLimit = std::getenv("GOW_GS_HW_TEXDUMP") ? std::atoi(std::getenv("GOW_GS_HW_TEXDUMP")) : 0;
         static int texDumped = 0;
         if (texDumped < texDumpLimit && s.textureWidth > 16)
@@ -764,6 +765,33 @@ struct GSHwBackend::Impl
         if (textures.size() > 6000u)
             evictOld();
         return tex;
+    }
+
+    // Texels of a direct-colour texture read from GS memory with the swizzle tables, alpha expanded by TEXA like the GS
+    // texture unit (CT24: TA0 / AEM, CT16: TA0/TA1 by the alpha bit).
+    void decodeDirect(const GSDrawState &s, std::vector<uint32_t> &out)
+    {
+        const GSTex0Reg &t = s.context.tex0;
+        const GSSwizzle::Format &f = GSSwizzle::GetFormat(t.psm);
+        const uint32_t w = std::max<uint32_t>(1u, s.textureWidth), h = std::max<uint32_t>(1u, s.textureHeight);
+        const bool sixteen = f.kind == GSSwizzle::Kind::Bits16;
+        if (!vram || !f.table || !(sixteen || f.kind == GSSwizzle::Kind::Bits32 || f.kind == GSSwizzle::Kind::Bits24))
+        {
+            cpu.DecodeTextureRgba(s, out); // formats without a direct layout (none seen in this game)
+            return;
+        }
+        out.resize(static_cast<size_t>(w) * h);
+        for (uint32_t y = 0; y < h; ++y)
+        {
+            const GSSwizzle::AxisPart row = GSSwizzle::RowPart(f, t.tbp0, t.tbw, y);
+            uint32_t *line = out.data() + static_cast<size_t>(y) * w;
+            for (uint32_t x = 0; x < w; ++x)
+            {
+                const GSSwizzle::Location at = GSSwizzle::Combine(f, row, GSSwizzle::ColumnPart(f, x));
+                const uint32_t raw = GSSwizzle::LoadAt(f, vram + at.byte, at.shift);
+                line[x] = GSCpuInternal::applyTexa(s.texa, t.psm, sixteen ? GSCpuInternal::Rgba5551ToRgba8888(static_cast<uint16_t>(raw)) : raw);
+            }
+        }
     }
 
     // Index texture of a paletted format: the raw indices, read from GS memory with the swizzle tables. Independent of
