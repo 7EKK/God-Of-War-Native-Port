@@ -79,8 +79,10 @@ namespace
 // ============================================================================
 // Lower instructions
 // ============================================================================
+unsigned long long g_vuLowerHist[128]; // GOW-Port: GOW_VU1_STATS op histogram of the generic path
 void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSize, GS &gs, PS2Memory *memory, uint32_t upperInstr)
 {
+    ++g_vuLowerHist[(instr >> 25) & 0x7Fu];
     (void)upperInstr;
     if (instr == 0x00000000 || instr == 0x8000033C) // NOP
         return;

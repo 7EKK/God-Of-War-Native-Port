@@ -9,6 +9,7 @@
 #include "ps2_vu1_step.inl"
 
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #if defined(_MSC_VER) || defined(__SSE4_1__)
 #include <immintrin.h>

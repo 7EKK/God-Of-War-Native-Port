@@ -1,4 +1,6 @@
+#include <chrono>
 #include "runtime/ps2_vu1.h"
+#include "runtime/ps2_vu1_native.h"
 #include "runtime/gs/ps2_gif_arbiter.h"
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/ps2_memory.h"
@@ -1135,12 +1137,21 @@ void VU1Interpreter::progressXgkick()
     }
 }
 
+namespace
+{
+    // GOW_VU1N_VERIFY: GIF packets produced by a silent (A/B) run, for comparison.
+    bool g_vuVerifyCapture = false;
+    std::vector<uint8_t> g_vuVerifyPackets;
+}
+
 void VU1Interpreter::finishXgkick()
 {
     if (!m_xgkick.active)
         return;
     if (m_verifySilent)
     {
+        if (g_vuVerifyCapture)
+            g_vuVerifyPackets.insert(g_vuVerifyPackets.end(), m_xgkick.packet.data(), m_xgkick.packet.data() + m_xgkick.totalBytes);
         m_xgkick.active = false;
         return;
     }
@@ -1859,12 +1870,281 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     const bool useVuRounding = std::fesetround(FE_TOWARDZERO) == 0;
     StepContext context{vuCode, codeSize, vuData, dataSize, &gs, memory, m_cycle + maxCycles, false};
     m_lastRunHitBudget = false; // GOW-Port: funciona también con un despachador compilado.
-    if (CompiledProgramFn program = compiledProgramFor(vuCode, codeSize, memory))
-        program(*this, context);
-    else
-        while (stepInterpreted(context))
+    // GOW-Port: GOW_VU1_STATS=1 prints, every 5 s, MSCAL runs, VU1 cycles, interpreted steps and host time in run().
+    static const bool vuStats = std::getenv("GOW_VU1_STATS") != nullptr;
+    const uint64_t statCycle0 = vuStats ? m_cycle : 0u;
+    const auto statT0 = vuStats ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    uint64_t interpretedSteps = 0u;
+    // GOW-Port: native backend first (translated blocks, immediate semantics); the exact engine steps one pair whenever the
+    // current pc has no native block and is the fallback for everything else.
+    const auto runExact = [&](StepContext &ctx)
+    {
+        if (CompiledProgramFn program = compiledProgramFor(vuCode, codeSize, memory))
+            program(*this, ctx);
+        else
+            while (stepInterpreted(ctx))
+            {
+                ++interpretedSteps;
+            }
+    };
+    const auto runNativeLoop = [&](StepContext &ctx) -> bool
+    {
+        bool usedNative = false;
+        for (;;)
+        {
+            if (runNative(ctx))
+                return true;
+            if (!m_native || !m_native->enabled)
+                return usedNative;
+            usedNative = true;
+            if (!stepInterpreted(ctx))
+                return true;
+        }
+    };
+    if (m_unit == Unit::VU1 && !m_native)
+        m_native = new NativeState();
+    if (m_unit == Unit::VU1 && m_native && m_native->enabled && m_native->verifyLeft != 0u && vuData && codeSize == PS2_VU1_CODE_SIZE)
+    {
+        --m_native->verifyLeft;
+        const uint32_t startPc = m_state.pc;
+        std::vector<uint8_t> dataSave(vuData, vuData + dataSize);
+        VU1Interpreter saved(*this);
+        const bool silentBefore = m_verifySilent;
+        m_verifySilent = true;
+        g_vuVerifyCapture = true;
+        g_vuVerifyPackets.clear();
+        StepContext ctxA = context;
+        runNativeLoop(ctxA);
+        VU1State stateA = m_state;
+        std::vector<uint8_t> dataA(vuData, vuData + dataSize);
+        flushPipelines(); // finish the asynchronous XGKICK so its packet is captured
+        std::vector<uint8_t> packetsA = g_vuVerifyPackets;
+        const bool endedA = ctxA.programEnded;
+        *this = saved;
+        std::memcpy(vuData, dataSave.data(), dataSize);
+        m_verifySilent = true;
+        g_vuVerifyPackets.clear();
+        StepContext ctxB = context;
+        m_native->enabled = false;
+        // oracle: the cycle-exact interpreter (the generated "compiled" programs are not used as ground truth here)
+        while (stepInterpreted(ctxB))
         {
         }
+        m_native->enabled = true;
+        VU1State stateB = m_state;
+        std::vector<uint8_t> dataB(vuData, vuData + dataSize);
+        flushPipelines(); // finish the asynchronous XGKICK so its packet is captured
+        std::vector<uint8_t> packetsB = g_vuVerifyPackets;
+        const bool endedB = ctxB.programEnded;
+        g_vuVerifyCapture = false;
+        *this = saved;
+        std::memcpy(vuData, dataSave.data(), dataSize);
+        m_verifySilent = silentBefore;
+        const auto close = [](uint32_t a, uint32_t b)
+        {
+            if (a == b)
+                return true;
+            float fa, fb;
+            std::memcpy(&fa, &a, 4);
+            std::memcpy(&fb, &b, 4);
+            if (!std::isfinite(fa) || !std::isfinite(fb))
+                return false;
+            return std::fabs(fa - fb) <= 2e-4f * std::max(1.0f, std::max(std::fabs(fa), std::fabs(fb)));
+        };
+        static unsigned reports = 0, checked = 0, bad = 0;
+        ++checked;
+        std::string why;
+        char buf[160];
+        if (endedA != endedB)
+            why += " ended";
+        if (stateA.pc != stateB.pc)
+        {
+            std::snprintf(buf, sizeof(buf), " pc %x/%x", stateA.pc, stateB.pc);
+            why += buf;
+        }
+        for (int r = 0; r < 32 && why.size() < 300; ++r)
+            for (int c = 0; c < 4; ++c)
+            {
+                uint32_t a, b;
+                std::memcpy(&a, &stateA.vf[r][c], 4);
+                std::memcpy(&b, &stateB.vf[r][c], 4);
+                if (!close(a, b))
+                {
+                    std::snprintf(buf, sizeof(buf), " vf%d.%d %08x/%08x", r, c, a, b);
+                    why += buf;
+                }
+            }
+        for (int r = 1; r < 16; ++r)
+            if (stateA.vi[r] != stateB.vi[r])
+            {
+                std::snprintf(buf, sizeof(buf), " vi%d %x/%x", r, stateA.vi[r], stateB.vi[r]);
+                why += buf;
+            }
+        if ((stateA.mac & 0xF0FFu) != (stateB.mac & 0xF0FFu))
+        {
+            std::snprintf(buf, sizeof(buf), " mac %x/%x", stateA.mac, stateB.mac);
+            why += buf;
+        }
+        if (stateA.clip != stateB.clip)
+        {
+            std::snprintf(buf, sizeof(buf), " clip %x/%x", stateA.clip, stateB.clip);
+            why += buf;
+        }
+        {
+            uint32_t a, b;
+            std::memcpy(&a, &stateA.q, 4);
+            std::memcpy(&b, &stateB.q, 4);
+            if (!close(a, b))
+            {
+                std::snprintf(buf, sizeof(buf), " q %08x/%08x", a, b);
+                why += buf;
+            }
+        }
+        unsigned memDiff = 0;
+        for (uint32_t o = 0; o + 4u <= dataSize; o += 4u)
+        {
+            uint32_t a, b;
+            std::memcpy(&a, dataA.data() + o, 4);
+            std::memcpy(&b, dataB.data() + o, 4);
+            if (!close(a, b))
+            {
+                if (memDiff++ < 3u)
+                {
+                    std::snprintf(buf, sizeof(buf), " mem[%x] %08x/%08x", o, a, b);
+                    why += buf;
+                }
+            }
+        }
+        if (memDiff)
+        {
+            std::snprintf(buf, sizeof(buf), " memDiffWords=%u", memDiff);
+            why += buf;
+        }
+        if (packetsA.size() != packetsB.size())
+        {
+            std::snprintf(buf, sizeof(buf), " packetBytes %zu/%zu", packetsA.size(), packetsB.size());
+            why += buf;
+        }
+        else
+        {
+            unsigned pd = 0;
+            for (size_t o = 0; o + 4u <= packetsA.size(); o += 4u)
+            {
+                uint32_t a, b;
+                std::memcpy(&a, packetsA.data() + o, 4);
+                std::memcpy(&b, packetsB.data() + o, 4);
+                if (!close(a, b) && pd++ < 2u)
+                {
+                    std::snprintf(buf, sizeof(buf), " pkt[%zx] %08x/%08x", o, a, b);
+                    why += buf;
+                }
+            }
+        }
+        if (!why.empty())
+        {
+            ++bad;
+            if (reports++ < 40u)
+                std::fprintf(stderr, "[vu1n-verify] run %u (bad %u) startPc=%x MISMATCH:%s\n", checked, bad, startPc, why.c_str());
+            if (reports <= 6u)
+            {
+                // bisect: smallest number of native blocks (rest exact) whose result already differs from the pure exact run
+                const auto differs = [&](unsigned limit)
+                {
+                    *this = saved;
+                    std::memcpy(vuData, dataSave.data(), dataSize);
+                    m_verifySilent = true;
+                    g_vuVerifyPackets.clear();
+                    m_native->limit = limit;
+                    m_native->count = 0u;
+                    m_native->trace.clear();
+                    StepContext c = context;
+                    runNativeLoop(c);
+                    m_native->limit = ~0u;
+                    bool d = m_state.pc != stateB.pc || (m_state.mac & 0xF0FFu) != (stateB.mac & 0xF0FFu) || m_state.clip != stateB.clip;
+                    for (int r = 0; r < 32 && !d; ++r)
+                        for (int k = 0; k < 4; ++k)
+                        {
+                            uint32_t a, b;
+                            std::memcpy(&a, &m_state.vf[r][k], 4);
+                            std::memcpy(&b, &stateB.vf[r][k], 4);
+                            d = d || !close(a, b);
+                        }
+                    for (int r = 1; r < 16 && !d; ++r)
+                        d = m_state.vi[r] != stateB.vi[r];
+                    for (uint32_t o = 0; o + 4u <= dataSize && !d; o += 4u)
+                    {
+                        uint32_t a, b;
+                        std::memcpy(&a, vuData + o, 4);
+                        std::memcpy(&b, dataB.data() + o, 4);
+                        d = !close(a, b);
+                    }
+                    return d;
+                };
+                unsigned lo = 0u, hi = 100000u;
+                std::fprintf(stderr, "[vu1n-verify]   exact-via-step differs from exact-compiled: %d\n", differs(0u) ? 1 : 0);
+                if (differs(hi))
+                {
+                    while (hi - lo > 1u)
+                    {
+                        const unsigned mid = (lo + hi) / 2u;
+                        (differs(mid) ? hi : lo) = mid;
+                    }
+                    differs(hi);
+                    std::fprintf(stderr, "[vu1n-verify]   first bad block #%u at pc=%x\n", hi, m_native->trace.empty() ? 0u : m_native->trace.back());
+                    if (std::getenv("GOW_VU1N_DUMP"))
+                    {
+                        const VU1State &e = m_native->snap;
+                        for (int r : {1, 2, 23})
+                            std::fprintf(stderr, "[vu1n-verify]   exact-final vf%d = %08x %08x %08x %08x\n", r, *reinterpret_cast<const uint32_t *>(&stateB.vf[r][0]), *reinterpret_cast<const uint32_t *>(&stateB.vf[r][1]), *reinterpret_cast<const uint32_t *>(&stateB.vf[r][2]), *reinterpret_cast<const uint32_t *>(&stateB.vf[r][3]));
+                        const auto w = [](float f) { uint32_t b; std::memcpy(&b, &f, 4); return b; };
+                        for (int r = 0; r < 32; ++r)
+                            std::fprintf(stderr, "[vu1n-verify]   entry vf%d = %08x %08x %08x %08x\n", r, w(e.vf[r][0]), w(e.vf[r][1]), w(e.vf[r][2]), w(e.vf[r][3]));
+                        std::fprintf(stderr, "[vu1n-verify]   entry acc = %08x %08x %08x %08x q=%08x mac=%x clip=%x\n", w(e.acc[0]), w(e.acc[1]), w(e.acc[2]), w(e.acc[3]), w(e.q), e.mac, e.clip);
+                        for (int r = 0; r < 16; ++r)
+                            std::fprintf(stderr, "[vu1n-verify]   entry vi%d = %x\n", r, e.vi[r]);
+                    }
+                }
+                else
+                    std::fprintf(stderr, "[vu1n-verify]   no native-block prefix reproduces it (exact-side/ordering difference)\n");
+                *this = saved;
+                std::memcpy(vuData, dataSave.data(), dataSize);
+                m_verifySilent = silentBefore;
+            }
+        }
+        else if (checked % 2000u == 0u)
+            std::fprintf(stderr, "[vu1n-verify] %u runs checked, %u mismatches\n", checked, bad);
+    }
+    if (m_unit == Unit::VU1 && m_native && m_native->enabled && vuData && codeSize == PS2_VU1_CODE_SIZE)
+    {
+        if (!runNativeLoop(context))
+            runExact(context);
+    }
+    else
+        runExact(context);
+    if (vuStats)
+    {
+        static uint64_t runs = 0, cycles = 0, interp = 0, runsInterp = 0; static double ms = 0.0, msInterp = 0.0;
+        static auto last = std::chrono::steady_clock::now();
+        const double dt = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - statT0).count();
+        ++runs; cycles += m_cycle - statCycle0; interp += interpretedSteps; ms += dt;
+        if (interpretedSteps) { ++runsInterp; msInterp += dt; }
+        if (std::chrono::steady_clock::now() - last > std::chrono::seconds(5))
+        {
+            std::fprintf(stderr, "[vu1-stats] runs=%llu (interpreted %llu) cycles=%llu interpSteps=%llu ms=%.0f (interp %.0f) ns/cycle=%.1f\n",
+                         (unsigned long long)runs, (unsigned long long)runsInterp, (unsigned long long)cycles, (unsigned long long)interp, ms, msInterp, cycles ? ms * 1e6 / cycles : 0.0);
+            extern unsigned long long g_vuUpperHist[128], g_vuLowerHist[128];
+            for (int pass = 0; pass < 2; ++pass)
+            {
+                unsigned long long *h = pass ? g_vuLowerHist : g_vuUpperHist; unsigned long long tot = 0;
+                for (int i = 0; i < 128; ++i) tot += h[i];
+                std::fprintf(stderr, "[vu1-generic-%s] total=%llu top:", pass ? "lower" : "upper", tot);
+                for (int k = 0; k < 10; ++k) { int b = 0; for (int i = 1; i < 128; ++i) if (h[i] > h[b]) b = i; if (!h[b]) break; std::fprintf(stderr, " %02x=%llu", b, h[b]); h[b] = 0; }
+                std::fprintf(stderr, "\n");
+                for (int i = 0; i < 128; ++i) h[i] = 0;
+            }
+            runs = cycles = interp = runsInterp = 0; ms = msInterp = 0.0; last = std::chrono::steady_clock::now();
+        }
+    }
     const bool programEnded = context.programEnded;
 
     if (programEnded)
@@ -2064,3 +2344,5 @@ void ps2Vu1ReloadEnvironmentOptions()
 {
     g_xgkickImmediate.store(-1, std::memory_order_relaxed);
 }
+
+#include "ps2_vu1_native.inl"

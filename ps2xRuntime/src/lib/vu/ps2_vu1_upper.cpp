@@ -30,8 +30,10 @@ namespace
 // ============================================================================
 // Upper instructions (FMAC pipeline)
 // ============================================================================
+unsigned long long g_vuUpperHist[128]; // GOW-Port: GOW_VU1_STATS op histogram of the generic (non-specialised) path
 void VU1Interpreter::execUpper(uint32_t instr)
 {
+    ++g_vuUpperHist[(instr & 0x3Fu) < 0x3Cu ? (instr & 0x3Fu) : 0x40u + ((instr & 3u) | ((instr >> 4) & 0x7Cu))];
     m_currentUpperInstruction = instr;
     uint8_t dest = DEST(instr);
     uint8_t ft = FT(instr);

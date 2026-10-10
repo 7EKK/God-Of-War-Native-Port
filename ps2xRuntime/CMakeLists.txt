@@ -566,6 +566,33 @@ if(PS2X_VU1_MICROCODE_DIR AND PS2X_VU1_GENERATOR_SOURCE AND NOT PS2X_IS_ANDROID 
         if(MSVC)
             set_source_files_properties(${PS2X_VU1_GENERATED_PARTS} PROPERTIES COMPILE_OPTIONS "/bigobj")
         endif()
+        # GOW-Port: native lean backend (tools/vu1/vu1n_gen.py): straight-line blocks with immediate semantics.
+        find_package(Python3 COMPONENTS Interpreter)
+        get_filename_component(PS2X_VU1N_GEN "${CMAKE_CURRENT_SOURCE_DIR}/../../../tools/vu1/vu1n_gen.py" ABSOLUTE)
+        if(Python3_FOUND AND EXISTS "${PS2X_VU1N_GEN}")
+            set(PS2X_VU1N_DIR "${CMAKE_CURRENT_BINARY_DIR}/vu1n_generado")
+            set(PS2X_VU1N_PARTS)
+            foreach(part RANGE 0 5)
+                list(APPEND PS2X_VU1N_PARTS "${PS2X_VU1N_DIR}/vu1n_part${part}.cpp")
+            endforeach()
+            set(PS2X_VU1N_HEADS "${PS2X_VU1_MICROCODE_DIR}/../vu1n_heads.txt")
+            get_filename_component(PS2X_VU1N_HEADS "${PS2X_VU1N_HEADS}" ABSOLUTE)
+            set(PS2X_VU1N_HEADS_DEP)
+            if(EXISTS "${PS2X_VU1N_HEADS}")
+                set(PS2X_VU1N_HEADS_DEP "${PS2X_VU1N_HEADS}")
+            endif()
+            add_custom_command(OUTPUT ${PS2X_VU1N_PARTS}
+                COMMAND "${Python3_EXECUTABLE}" -I "${PS2X_VU1N_GEN}" "${PS2X_VU1N_DIR}" "${PS2X_VU1_MICROCODE_DIR}" --heads "${PS2X_VU1N_HEADS}" --parts 6
+                DEPENDS "${PS2X_VU1N_GEN}" ${PS2X_VU1_IMAGES} ${PS2X_VU1N_HEADS_DEP}
+                VERBATIM)
+            target_sources(ps2EntryRunner PRIVATE ${PS2X_VU1N_PARTS})
+            set_source_files_properties(${PS2X_VU1N_PARTS} PROPERTIES
+                SKIP_UNITY_BUILD_INCLUSION ON
+                SKIP_PRECOMPILE_HEADERS ON)
+            if(MSVC)
+                set_source_files_properties(${PS2X_VU1N_PARTS} PROPERTIES COMPILE_OPTIONS "/bigobj")
+            endif()
+        endif()
         list(LENGTH PS2X_VU1_IMAGES PS2X_VU1_IMAGE_COUNT)
         message(STATUS "VU1 compilada: ${PS2X_VU1_IMAGE_COUNT} micromemorias en ${PS2X_VU1_MICROCODE_DIR}")
     endif()

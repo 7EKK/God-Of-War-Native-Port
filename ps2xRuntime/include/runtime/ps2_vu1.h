@@ -113,6 +113,7 @@ private:
     friend struct VU1CompiledProgram;
     friend struct VU1CompiledGenerator;
     friend struct VU1CompiledAccess;
+    friend struct VU1NativeAccess; // GOW-Port: native (ahead-of-time translated) blocks, see ps2_vu1_native.h
 
     enum Pipeline : uint8_t
     {
@@ -335,6 +336,14 @@ private:
     bool m_pendingHaltD = false;
     bool m_pendingHaltT = false;
     bool m_lastRunHitBudget = false; // GOW-Port: PR #12
+    // GOW-Port: native VU1 backend. runNative executes translated basic blocks with immediate (timing-free) semantics;
+    // it returns when the program ended or when the current pc has no native block (the caller then steps the exact
+    // engine). commitEverythingNow retires every in-flight pipeline entry without advancing the cycle counter.
+    struct NativeState;
+    NativeState *m_native = nullptr;
+    bool runNative(StepContext &context);
+    void nativeTiming(const uint8_t *code, uint32_t pc, uint32_t count, std::vector<uint8_t> &cyc);
+    void commitEverythingNow();
 
     void run(uint8_t *vuCode, uint32_t codeSize,
              uint8_t *vuData, uint32_t dataSize,
