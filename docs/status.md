@@ -580,3 +580,12 @@ set/weights (same 43 controllers of the player animator 0x74ED74 at identical ad
   CT32 targets (frame psm=2 on fbp 0, FBMSK 3fff/ffffff/ffff00ff) and single-plane G fills; those draws are currently skipped. Plan:
   a view round trip — proxy target in the view's format filled from the owner by the reinterpreting fetch, draw, resolve back by the
   inverse address mapping (needs texelBits > source bits support in the shader: two source pixels per word).
+
+## RESUME POINT (2026-10-10, end of session)
+State: native VU1 (done, verified) + native GS renderer (`PS2X_GS_HW=1`, opt-in, Olympus correct at 1x-3x, ~40 fps; ext 7664544).
+Open, in order: (1) GS mask passes (CT16-view draws of CT32 targets, single-plane G fills) -> proxy-target round trip, kills the stone
+blotches; (2) re-run all 4 zones with PS2X_GS_HW=1 (Cliffs was 11 fps), then make it the default and drop the bicubic upscale at
+internal >= window; (3) IOP / SPU2 / CDVD native replacement (no emulation rule); (4) EE speed; (5) LAST: read extracted game files
+instead of the ISO. Port KIexster's game-speed meter (ps2recomp-game-speed.patch, GOW_DELTA_DIAG=1) before quoting fps again.
+Debug env for the GS renderer: see the "night 2" section (GOW_GS_HW_STATS/_DUMP/_DUMPAT/_RTDUMPAT/_ONLY/_NODEPTH...).
+Run: `set PS2X_GS_HW=1 & set PS2X_GS_HW_SCALE=3 & python -I tools/zones.py --slots 1`.
