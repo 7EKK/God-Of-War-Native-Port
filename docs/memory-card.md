@@ -30,6 +30,19 @@ the same image file (`GOW_MC0`, PCSX2 `.ps2` format).
   first cluster, 0xFFFFFFFF for an empty file), dirEntry u32 (0x14; in a subdir's "." = its index in the parent),
   modified time (0x18), attr u32 (0x20), name[32] (0x40). Entry 0 = ".", entry 1 = "..".
 
+## The game's card protocol (captured 2026-10-11, PS2X_TRACE_RPC=800013, boot + save load, port/rpc2)
+- **The card file system runs on the EE** (libmc2); the IOP side (DBCMAN + MC2_D) only moves raw pages. A native service
+  therefore only has to answer raw page commands from the card image; the game keeps doing its own file system.
+- DBCMAN main server 0x80001300 (0x90-byte buffers, synchronous): fn 0x80001363 version check; fn 0x80001304
+  (words 0x310, 0x30CF40 = an EE buffer); fn 0x80001301 twice = socket creation, buffer `3 2 {2|3} 0 0 "MC2SOCKET"`
+  (memory-card sockets on ports 2 and 3).
+- MC2 socket server **0x8000131C** (fn 0x8000131C, mode 1 = asynchronous, send/receive 0x2090 bytes, ~270 calls/s).
+  Send words: `0, cmd, 0x2080, page, count, 0x200 (page size), 0x10 (spare size), 0x4000`. Counts seen:
+  cmd 1 x31354 (read `count` pages from `page`; pages advance by 2 = one cluster), cmd 4 x975 (about once per frame:
+  status poll), cmd 6 x8 and cmd 0xC x8 (around the save load), cmd 0xD x1, cmd 3 x1 (all other words 0: probe/identify).
+- Still to find: the reply layout of each command (receive buffer after completion: data + spare, status words) and the
+  meaning of cmds 3/4/6/0xC/0xD (MC2_D dispatch), plus the write/erase commands (only seen when saving).
+
 ## Still to find (next)
 - DBCMAN RPC protocol for the card and pad as this game uses it (function numbers, argument/result layout), from
   DBCMAN.IRX / MC2_D.IRX dispatch and the EE libmc2 / libdbc client code.
