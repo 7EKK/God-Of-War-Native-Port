@@ -430,3 +430,13 @@ the VU1 verifier finding no difference). Only after this is fixed and no other a
   UNPACKs are V4-16/V4-8 (vertex data) and V4-32 num=1 (headers); no big V4-32 matrix blocks.
 - DMA chain walker reviewed: tag ids 0-7 match hardware. No tag with the SPR flag (bit 63) occurs on any channel
   (`[dma] chain tag with SPR flag` diag, port/spr1) → ruled out.
+- Dense capture (port/sq1_sheet.png, 16 frames over 1.5 s of the walk toward the camera): the raised-arm/blade pose is
+  CONSTANT while the legs animate → the upper body is frozen in one pose (not a periodic glitch): upper-body layer
+  not advancing, or blended at the wrong weight with a static "ready" pose.
+- Checked, no difference: pad packet (pressures, order), DMA tag semantics, VIF OFFSET/BASE/ITOP/MSCAL double buffer logic,
+  UNPACK mask/mode. Animator node lists differ in ours vs PCSX2 (3 contiguous 0x1E0024 nodes vs 2 nodes 0xB0024 in
+  PCSX2) — header meaning unknown; may just be heap layout.
+- **Next (decisive, not yet done)**: log Kratos' layer controllers' time/weight EVERY frame in ours during the walk
+  (controller type 0x2C2D20 via layer parent 0x2BF1A0 +0x18/+0x1C; parent for owner 0x8629C0 at 0x6FC4F0 in ours rdump)
+  to see whether layer 1 (flag 0x81, upper body) advances and what weight the blend uses; compare with PCSX2 states over a
+  few frames (PINE reads). If time advances and weight is ok, the sampled clip data (disc-loaded) is the suspect.
