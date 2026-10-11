@@ -1,6 +1,6 @@
 // GOW-Port: render-target GS renderer, see include/runtime/gs/gs_hw_backend.h.
 #include "runtime/gs/gs_hw_backend.h"
-#include "runtime/gs/gs_cpu_backend.h"
+#include "gs_texture_store.h"
 #include "runtime/gs/gs_swizzle.h"
 #include "gs_gl.h"
 #include "../gs_gpu_helpers.h"
@@ -422,7 +422,7 @@ void main()
 
 struct GSHwBackend::Impl
 {
-    GSCpuBackend cpu;
+    GSTextureStore store; // uploaded texture bytes + CLUT (no rasteriser, no framebuffer)
     GSGL::Context context;
     bool initialized = false, failed = false;
     uint8_t *vram = nullptr;
@@ -780,7 +780,7 @@ struct GSHwBackend::Impl
         const bool sixteen = f.kind == GSSwizzle::Kind::Bits16;
         if (!vram || !f.table || !(sixteen || f.kind == GSSwizzle::Kind::Bits32 || f.kind == GSSwizzle::Kind::Bits24))
         {
-            cpu.DecodeTextureRgba(s, out); // formats without a direct layout (none seen in this game)
+            store.DecodeTextureRgba(s, out); // formats without a direct layout (none seen in this game)
             return;
         }
         out.resize(static_cast<size_t>(w) * h);
@@ -862,7 +862,7 @@ struct GSHwBackend::Impl
             palettes.clear();
         }
         uint32_t colors[256];
-        cpu.BuildPalette(s, colors);
+        store.BuildPalette(s, colors);
         GLuint id = 0;
         g.GenTextures(1, &id);
         g.BindTexture(kTexture2D, id);
@@ -902,7 +902,7 @@ struct GSHwBackend::Impl
 
     // ---- render target -> shadow VRAM ------------------------------------------------------------------------------
     // Textures / CLUTs that address a render target with another layout (other format, other width, inside it) are decoded from
-    // the shadow VRAM, so the target is written back there (downsampled to PS2 resolution, swizzled by the CPU backend).
+    // the shadow VRAM, so the target is written back there (downsampled to PS2 resolution, swizzled into the texture store).
     void syncTargetToVram(RenderTarget &t)
     {
         if (t.syncedVersion == t.version || t.usedW == 0u || t.usedH == 0u)
@@ -926,7 +926,7 @@ struct GSHwBackend::Impl
                 uint32_t value = p[0] | (p[1] << 8) | (p[2] << 16) | (static_cast<uint32_t>(p[3]) << 24);
                 if (sixteen)
                     value = ((p[3] >> 7) << 15) | ((p[2] >> 3) << 10) | ((p[1] >> 3) << 5) | (p[0] >> 3);
-                cpu.WriteVram(t.psm, base, t.fbw, x, y, value);
+                store.Write(t.psm, base, t.fbw, x, y, value);
             }
         }
         t.syncedVersion = t.version;
@@ -1015,7 +1015,7 @@ struct GSHwBackend::Impl
         if (kind == 3)
         {
             uint32_t palette[256];
-            cpu.BuildPalette(s, palette);
+            store.BuildPalette(s, palette);
             g.ActiveTexture(kTexture0 + 3);
             g.BindTexture(kTexture2D, paletteTex);
             g.PixelStorei(kUnpackAlignment, 4);
@@ -1827,7 +1827,7 @@ void GSHwBackend::Initialize(uint8_t *vram, uint32_t vramSize)
 {
     m_impl->vram = vram;
     m_impl->vramSize = vramSize;
-    m_impl->cpu.Initialize(vram, vramSize);
+    m_impl->store.Initialize(vram, vramSize);
     // GOW-Port: create the GL context now (on the GS worker, while the host context is released) so that it can share
     // objects with the host window and UsesSharedPresentation() is known right after Initialize.
     m_impl->ensure();
@@ -1842,7 +1842,7 @@ void GSHwBackend::Reset()
 {
     Impl &d = *m_impl;
     d.flushPending();
-    d.cpu.Reset();
+    d.store.Reset();
     for (auto &kv : d.textures)
         kv.second.valid = false;
 }
@@ -1863,15 +1863,15 @@ void GSHwBackend::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
     d.flushPending();
     if (d.initialized && (tex0.psm == GS_PSM_T8 || tex0.psm == GS_PSM_T8H || tex0.psm == GS_PSM_T4 || tex0.psm == GS_PSM_T4HL || tex0.psm == GS_PSM_T4HH))
         d.syncOverlapping(tex0.cbp, tex0.cbp + 64u, nullptr);
-    d.cpu.LoadClut(tex0, texclut);
-    d.clutHash = d.cpu.ClutHash();
+    d.store.LoadClut(tex0, texclut);
+    d.clutHash = d.store.ClutHash();
 }
 
 void GSHwBackend::BeginTransfer(const GSTransferCommand &command)
 {
     Impl &d = *m_impl;
     d.flushPending();
-    d.cpu.BeginTransfer(command);
+    d.store.BeginTransfer(command);
     d.noteTransfer(command);
     if (command.direction == 0u || command.direction == 2u)
     {
@@ -1886,25 +1886,22 @@ void GSHwBackend::BeginTransfer(const GSTransferCommand &command)
 
 void GSHwBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
 {
-    m_impl->cpu.UploadImage(data, sizeBytes);
+    m_impl->store.Upload(data, sizeBytes);
 }
 
 void GSHwBackend::Flush()
 {
     m_impl->flushPending();
-    m_impl->cpu.Flush();
 }
 
 void GSHwBackend::TextureFlush()
 {
-    m_impl->flushPending();
-    m_impl->cpu.TextureFlush();
+    m_impl->flushPending(); // textures are re-read from the store when an upload overlaps them, not on TEXFLUSH
 }
 
-void GSHwBackend::Sync(GSSyncReason reason)
+void GSHwBackend::Sync(GSSyncReason)
 {
     m_impl->flushPending();
-    m_impl->cpu.Sync(reason);
 }
 
 bool GSHwBackend::ClearFramebuffer(const GSContext &context, uint32_t rgba)
@@ -1928,29 +1925,30 @@ bool GSHwBackend::ClearFramebuffer(const GSContext &context, uint32_t rgba)
     return true;
 }
 
-uint32_t GSHwBackend::ConsumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes)
+// GOW-Port: the game never reads GS memory back (LOCAL->HOST), so there is nothing to hand out.
+uint32_t GSHwBackend::ConsumeLocalToHostBytes(uint8_t *, uint32_t)
 {
-    return m_impl->cpu.ConsumeLocalToHostBytes(dst, maxBytes);
+    return 0u;
 }
 
 uint32_t GSHwBackend::ReadVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y) const
 {
-    return m_impl->cpu.ReadVram(psm, base, bw, x, y);
+    return m_impl->store.Read(psm, base, bw, x, y);
 }
 
 void GSHwBackend::WriteVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y, uint32_t value)
 {
-    m_impl->cpu.WriteVram(psm, base, bw, x, y, value);
+    m_impl->store.Write(psm, base, bw, x, y, value);
 }
 
 void GSHwBackend::SnapshotVram(std::vector<uint8_t> &out) const
 {
-    m_impl->cpu.SnapshotVram(out);
+    m_impl->store.Snapshot(out);
 }
 
 GSTransferSnapshot GSHwBackend::GetTransferSnapshot() const
 {
-    return m_impl->cpu.GetTransferSnapshot();
+    return m_impl->store.TransferState();
 }
 
 PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)

@@ -383,12 +383,13 @@ add_library(ps2_runtime STATIC
     src/lib/gs/ps2_gs_memory.cpp
     src/lib/gs/gs_frontend.cpp
     src/lib/gs/gs_host_present.cpp # GOW-Port: mismo consumidor de textura en juego y controles.
-    src/lib/gs/gs_cpu_backend.cpp
-    # GOW-Port: backend OpenGL y cola del fork SotC ac9efa0 (GPL-3.0).
+        # GOW-Port: backend OpenGL y cola del fork SotC ac9efa0 (GPL-3.0).
     src/lib/gs/gs_threaded_backend.cpp
     src/lib/gs/gs_swizzle.cpp
     src/lib/gs/gpu/gs_gl.cpp
     src/lib/gs/gpu/gs_hw_backend.cpp
+
+src/lib/gs/gpu/gs_texture_store.cpp
     src/lib/ps2_iop_host.cpp
     src/lib/ps2_memory.cpp
     src/lib/ps2_pad.cpp

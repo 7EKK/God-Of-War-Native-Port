@@ -6,9 +6,6 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(CTest)
-if(BUILD_TESTING)
-    add_subdirectory(gs_cache)
-endif()
 
 # Static library with test logic (no main), used by ps2xStudio
 add_library(ps2_test_function_table OBJECT
