@@ -625,9 +625,16 @@ set/weights (same 43 controllers of the player animator 0x74ED74 at identical ad
 - Main achievement set by the user: after the PC port the game must run on the Nintendo Switch (docs/README.md). Citron
   (Switch emulator, nightly 0237a9b88, MSVC build) is unpacked in ref/citron (citron-cmd.exe) for testing the Switch build.
 
+## 2026-10-11: no-emulation order steps 1 and 3 done (ext 875661a, fcc1697)
+- Step 1: pad and memory card are native services; the SIO2 chip model is deleted (docs/memory-card.md).
+- Step 3: the SPU2 register model and the SPU DMA channels are deleted; LIBSD's exports are native and drive a typed
+  SoundEngine (docs/sound.md). Desert audio matches the former model; save test ok.
+- EE and VU1 speed agents merged (ext 39379ea, 492db8f): Olympus steady 30 fps (VBlank lock; docs/performance.md).
+
 ## RESUME POINT (2026-10-11)
-State: native EE (recompiled), VU1 (compiled), IOP IRX code (compiled), GS (native renderer, only one; ext c122cad).
-Open, in order: (1) GS: native texture store instead of the GSCpuBackend byte store, drop the bicubic upscale at internal >= window; (2) SPU2 / SIO2 / CDVD hardware models -> native services (IRX code is already native); (4) EE speed; (5) LAST: read extracted game files
-instead of the ISO. Port KIexster's game-speed meter (ps2recomp-game-speed.patch, GOW_DELTA_DIAG=1) before quoting fps again.
+State: native EE (recompiled), VU1 (compiled), IOP IRX code (compiled), GS (native renderer, only one), pad/card and sound
+native services. Order left (docs/native-port.md): (2) VIF1/GIF/DMA data path, (4) SIF, (5) GS memory image -> native
+texture store, (6) LAST: extracted game files instead of the ISO. Port KIexster's game-speed meter
+(ps2recomp-game-speed.patch, GOW_DELTA_DIAG=1) before quoting fps again.
 Debug env for the GS renderer: see the "night 2" section (GOW_GS_HW_STATS/_DUMP/_DUMPAT/_RTDUMPAT/_ONLY/_NODEPTH...).
-Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`).
+Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); save test: `python -I tools/savetest.py`.
