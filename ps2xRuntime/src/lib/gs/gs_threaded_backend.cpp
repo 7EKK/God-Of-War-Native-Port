@@ -1,7 +1,6 @@
 // GOW-Port: adaptado de Taylor N. Albarnaz / LightVelox (GPL-3.0).
 // Origen: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
 #include "runtime/gs/gs_threaded_backend.h"
-#include "runtime/gs/gs_cpu_backend.h"
 #include "runtime/gs/gs_hw_backend.h"
 #include "runtime/gs/gs_shared_present.h"
 #include "gs_inventory.h"

@@ -357,7 +357,7 @@ void GSHostPresentation::shutdown(GS &gs)
 {
     if (!started && fallback.id == 0u)
         return;
-    // GOW-Port: nullptr crea CPU; drena y destruye el worker/contexto compartido.
+    // GOW-Port: nullptr instala un backend nulo; drena y destruye el worker/contexto compartido.
     gs.setRasterBackend(nullptr);
     restoreHostContext();
     if (fallback.id != 0u)

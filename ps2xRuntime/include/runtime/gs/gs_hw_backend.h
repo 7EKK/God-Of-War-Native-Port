@@ -1,7 +1,7 @@
 // GOW-Port: native GS renderer, the only GS renderer. Every draw is rasterised by the GPU into scaled RGBA render targets (one
 // per frame buffer base); textures are read from the uploaded bytes (paletted ones as index + palette textures) and cached;
 // the game's reinterpretation passes (channel shuffles, Z in colour memory, CRTC circuit merge) are done natively and the
-// output is composed on the GPU at PS2X_GS_HW_SCALE. A GSCpuBackend instance only stores the uploaded bytes and the CLUT.
+// output is composed on the GPU at PS2X_GS_HW_SCALE. A small native store (GSTextureStore) keeps the uploaded bytes and the CLUT.
 #pragma once
 
 #include "runtime/gs/gs_backend.h"
