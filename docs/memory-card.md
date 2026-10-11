@@ -55,5 +55,5 @@ the same image file (`GOW_MC0`, PCSX2 `.ps2` format).
   129 pages written, root directory intact, the saved card loads into gameplay (port/savetest3, port/saveload1).
 
 ## Still to find (next)
-- Pad side: SIO2D still probes the ports over the SIO2 model and DS2U_D polls the DualShock every vblank although the
-  EE reads the host pad natively (gow_overrides.cpp scePad2*) and opens no pad socket on the IOP.
+- Done: SIO2D's probes are native too (pad probe 0x0978 -> none, card probe 0x0a1c -> card image present on port 2/3),
+  MC2_D's F3 check 0x08d8 native; no SIO2 transfer exists, the SIO2 model is deleted (ext 2026-10-11).

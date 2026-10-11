@@ -23,8 +23,9 @@ Native now: EE game code (recompiled), VU0 macro, VU1 microprograms and the IOP 
 rendering (native renderer, the only one), kernel (HLE). Remaining hardware models, converted in this order, each step
 verified on the 4 zones (images, fps, audio) before the next:
 1. pad / memory card: SIO2 chip model + sio2man/dbcman/sio2d/ds2u_d/mc2_d -> native pad and memory-card services;
-   - memory card: DONE (2026-10-11) - MC2_D's card I/O routines are native C++ overrides on the card image (docs/memory-card.md);
-     mechanism: IRX function overrides (IopNativeOverride, tools/iop/native_overrides.txt);
+   - DONE (2026-10-11): MC2_D's card I/O routines and SIO2D's port probes are native C++ overrides (docs/memory-card.md);
+     the SIO2 chip model and the DualShock model are deleted; the pad is read natively on the EE (gow_overrides.cpp).
+     Mechanism for all such cuts: IRX function overrides (IopNativeOverride, tools/iop/native_overrides.txt);
 2. VIF1 / GIF / DMA data path -> VU1 and GS fed directly from the game's packets;
 3. SPU2 register-level voice mixer -> native mixer;
 4. SIF (EE <-> IOP RPC/DMA) -> direct native calls;

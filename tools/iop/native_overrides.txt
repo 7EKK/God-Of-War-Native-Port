@@ -6,3 +6,6 @@ mc2_d_irx 0a98 erase_block
 mc2_d_irx 13a8 get_specs
 mc2_d_irx 0650 init_card
 mc2_d_irx 164c probe
+mc2_d_irx 08d8 probe_f3
+sio2d_irx 0978 probe_pad
+sio2d_irx 0a1c probe_card
