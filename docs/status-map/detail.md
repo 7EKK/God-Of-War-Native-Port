@@ -25,7 +25,7 @@ Generated from `data.toml` by `tools/status_map.py`; do not edit by hand.
 | fileio | 15 | ✅ ok |  |
 | loadfile | 14 | ✅ ok |  |
 
-## PS2 hardware (89.5%)
+## PS2 hardware (91.9%)
 
 | Group | Component | Weight | State |
 |---|---|---:|---|
@@ -37,7 +37,7 @@ Generated from `data.toml` by `tools/status_map.py`; do not edit by hand.
 | EE | Timers T0/T1/T2: still register-level (native clock in progress) | 1 | 🔧 partial |
 | GS / VU | GS: native OpenGL render-target renderer, 2x internal, 16:9; display registers native | 3 | ✅ ok |
 | GS / VU | VIF1 decoded directly; VU1 microprograms compiled ahead of time to C++ | 3 | ✅ ok |
-| GS / VU | Textures and CLUT: native texture store; palettes from render targets still read back | 2 | 🔧 partial |
+| GS / VU | Textures and CLUT: native texture store; palettes from render targets read on the GPU | 2 | ✅ ok |
 | GS / VU | GIF (PATH1-3): the game's GIF tags fed to the renderer | 2 | ✅ ok |
 | GS / VU | IPU: FMV video (skipped for now) | 2 | ⏳ pending |
 | IOP | R3000A CPU: no interpreter on the hot path | 3 | ✅ ok |

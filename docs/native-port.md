@@ -54,9 +54,16 @@ verified on the 4 zones (images, fps, audio) before the next:
      DecodeTextureRgba (for formats without a direct layout; none seen). LOCAL->HOST is not modelled (the game never
      reads GS memory back): ConsumeLocalToHostBytes returns 0. The one-page texture-cache model (stale reads until
      TEXFLUSH) is gone: CLUT loads read the current bytes, like the renderer's own texture decode always did.
-     What still writes into the memory image besides uploads: the renderer's conservative render-target write-back
-     (`syncTargetToVram`, for CLUTs loaded from a render target, ~2.8k of 8.9k loads in Olympus) - the renderer's
-     own data, not a hardware model, but the next candidate to replace (palette straight from the GPU target).
+     Nothing but the game's uploads writes the memory image (2026-10-12, branch agent/clutrt): a CLUT load whose
+     source memory a render target was drawn into (TEX0.CBP inside a live target, not overwritten by a later
+     upload) reads its source words from that target on the GPU - the store computes the CSM1/CSM2 source pixels,
+     the renderer's CLUT fetch pass reads them through the reinterpreting fetch (CPSM view of the target, same
+     address math as textures read from targets) into a 256x1 target and returns the 1 KB of raw words, cached per
+     target version. The former whole-target readback into the memory image (`syncTargetToVram`) is deleted.
+     Measured with `GOW_GS_TEXSRC=1` (key `clut-from-rt`): no CLUT of zones 1-4 comes from a render target (the
+     2.8k of the 2026-10-10 inventory were span-heuristic false positives), so the pass is a safety path for
+     other scenes. The backend interface's ReadVram/WriteVram/SnapshotVram (debug panel, GS recorder) still
+     reach the store;
      `GS::setRasterBackend(nullptr)` (host shutdown) now installs a no-op backend instead of the CPU rasteriser;
    - GS privileged registers DONE (2026-10-11, branch agent/gsregs): the game no longer touches them. The three
      functions that did are native overrides (gow_overrides.cpp) on a small native service, `runtime/gs/gs_display.h`
@@ -76,6 +83,21 @@ verified on the 4 zones (images, fps, audio) before the next:
        FINISH); its CSR store is the native ack.
      The MMIO decode of 0x12000000-0x12001FFF in PS2Memory stays only as an unused fallback (`GOW_IO_HIST` shows any
      access);
+EE timers (no-emulation order, after step 5):
+   - Timer 2 DONE (2026-10-12, branch agent/timers): libkernel's timer system (InitTimer/StartTimerSystemTime from
+     _InitSys 0x2994A0, SetTimerAlarm, the timer-2 interrupt handler cbTimerHandler 0x299D08) served only DelayThread
+     (0x294A30; ~9 calls per 150 s in Olympus). DelayThread is native (`gowDelayThread`: `EeScheduler::delayCurrent`,
+     a guest-time wake-up event, same return values) and InitTimer/StartTimerSystemTime return success without
+     programming timer 2 or installing its handler, so no game code touches timer 2 (`GOW_IO_HIST`: 0 accesses, before
+     ~60 incl. the uncached 0xB0001000/10/20 stores). An unexpected user of the timer system would show up there;
+   - Timers 0/1 NOT converted: the game's clock idiom (T0 count + wrap word 0x303628 + last value 0x2C7908, T1 the
+     same with 0x303630/0x2C790C) is inlined in 0x179F00 (T0 twice, T1), 0x17A0E0, 0x17A2A0, 0x17D778 (frame step,
+     twice), 0x14A290 and the FINISH handler. All but 0x17D778 call guest functions that can block (vid::Flip
+     0x1837B8, the DMA-done spin), so they cannot be replaced by C++ overrides: a C++ frame cannot resume after a
+     thread switch. Clean cut: a recompiler binding that emits constant-address timer COUNT loads as a call to a
+     native EE clock (count = (EE cycle - epoch) >> 9 for BUSCLK/256, x 15734 / 294912000 for H-BLNK: exactly what the
+     timer model returns today), with the epoch taken by a native 0x138978 (the boot code that sets both modes). Needs a
+     USA regeneration (full rebuild), so it waits for the next one;
 6. CDVD -> extracted game files (last).
 
 ## Hardware access inventory (2026-10-11, `GOW_IO_HIST=150`, boot + Olympus)
@@ -86,8 +108,8 @@ access with `// MMIO:`; `tools/dis.py ADDR` disassembles the USA build):
   DISPFB2/DISPLAY2/BGCOLOR stored once per frame by 0x183360.
 - EE timers: T0 count (~50k reads in 150 s: the game's 64-bit clock pattern "T0 + wrap count 0x303628, last value
   0x2C7908" inlined at 0x179F18/54, 0x17A168, 0x17A2C8, 0x17D780/7BC (2 per frame each) and in the FINISH handler),
-  T1 count once per frame (0x179F94), T0/T1 mode once at boot (0x138984/94), T2 in libkernel's alarm code (0x2998xx-0x299Fxx,
-  ~50 accesses).
+  T1 count once per frame (0x179F94), T0/T1 mode once at boot (0x138984/94). T2: none since agent/timers (before: libkernel's
+  timer system 0x2998xx-0x299Fxx, ~60 accesses).
 - Scratchpad DMA (channels 8/9) in 0x117D10, 0x1188F0, 0x1590F0, 0x159C58, 0x101888 and D_STAT clears: served as copies.
 - IPU + its DMA (libmpeg 0x26F228..0x279588, 0x189BD0..0x18A5E0) and D_ENABLER/W: FMV, skipped (GOW_SKIP_FMV).
 - INTC mask (libkernel 0x2940B0/0x294140), once per DI/EI (not seen in the slot-1 runs of 2026-10-11 evening).

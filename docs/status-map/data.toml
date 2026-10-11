@@ -164,8 +164,8 @@ group = "GS / VU"
   weight = 3
   [[hardware.item]]
   short = "Tex/CLUT"
-  name = "Textures and CLUT: native texture store; palettes from render targets still read back"
-  state = "partial"
+  name = "Textures and CLUT: native texture store; palettes from render targets read on the GPU"
+  state = "ok"
   weight = 2
   [[hardware.item]]
   short = "GIF"
