@@ -6,6 +6,7 @@
 #include "../gs_gpu_helpers.h"
 #include "runtime/gs/gs_shared_present.h"
 
+#include <map>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -733,6 +734,7 @@ struct GSHwBackend::Impl
             return tex;
         }
         ++stats.texDecodes;
+        classifyTexture(s);
         const Api &g = gl();
         std::vector<uint32_t> pixels;
         decodeDirect(s, pixels);
@@ -810,6 +812,7 @@ struct GSHwBackend::Impl
             return tex;
         }
         ++stats.texDecodes;
+        classifyTexture(s);
         const GSSwizzle::Format &f = GSSwizzle::GetFormat(t.psm);
         tex.width = std::max<uint32_t>(1u, s.textureWidth);
         tex.height = std::max<uint32_t>(1u, s.textureHeight);
@@ -904,6 +907,8 @@ struct GSHwBackend::Impl
     {
         if (t.syncedVersion == t.version || t.usedW == 0u || t.usedH == 0u)
             return;
+        if (texSrcDiag)
+            ++texSources["rt-readback psm=" + std::to_string(t.psm)];
         const Api &g = gl();
         std::vector<uint8_t> px(static_cast<size_t>(t.glW) * t.glH * 4u);
         g.BindFramebuffer(kFramebuffer, t.fbo);
@@ -1730,8 +1735,65 @@ struct GSHwBackend::Impl
                 std::fprintf(stderr, "[gs-hw] GL error 0x%x after batch %llu\n", err, (unsigned long long)stats.batches), ++errorsShown;
     }
 
+    // GOW-Port: GOW_GS_TEXSRC=1 classifies every texture decode (and target readback) by where its data came from, every
+    // 5 s: one upload of the same format and buffer, parts / other formats of uploads, local copies, render targets.
+    // Measures what a texture store without the GS memory image must handle (docs/native-port.md, step 5).
+    struct UploadRect { uint32_t dbp, dbw, dpsm, x, y, w, h, dir; };
+    std::vector<UploadRect> uploadRects;
+    std::map<std::string, uint64_t> texSources;
+    const bool texSrcDiag = std::getenv("GOW_GS_TEXSRC") != nullptr;
+    void noteTransfer(const GSTransferCommand &c)
+    {
+        if (!texSrcDiag)
+            return;
+        if (uploadRects.size() > 8192u)
+            uploadRects.erase(uploadRects.begin(), uploadRects.begin() + 4096);
+        uploadRects.push_back({c.bitbltbuf.dbp, c.bitbltbuf.dbw, c.bitbltbuf.dpsm, c.trxpos.dsax, c.trxpos.dsay,
+                               c.trxreg.rrw, c.trxreg.rrh, c.direction});
+    }
+    void classifyTexture(const GSDrawState &s)
+    {
+        if (!texSrcDiag)
+            return;
+        const GSTex0Reg &t = s.context.tex0;
+        const uint32_t lo = t.tbp0, hi = lo + spanBlocks(t.psm, t.tbw, std::max<uint32_t>(1u, s.textureHeight));
+        const char *what = "none";
+        uint32_t otherPsm = 0;
+        for (auto it = uploadRects.rbegin(); it != uploadRects.rend(); ++it)
+        {
+            const UploadRect &u = *it;
+            const uint32_t ulo = u.dbp, uhi = ulo + spanBlocks(u.dpsm, u.dbw, u.y + u.h);
+            if (!(ulo < hi && lo < uhi))
+                continue;
+            if (u.dir == 2u)
+                what = "local-copy";
+            else if (u.dpsm != t.psm)
+                what = "upload-other-psm", otherPsm = u.dpsm;
+            else if (u.dbp == t.tbp0 && u.dbw == t.tbw && u.x == 0u && u.y == 0u && u.w >= s.textureWidth && u.h >= s.textureHeight)
+                what = "upload-exact";
+            else
+                what = "upload-same-psm-part";
+            break;
+        }
+        char key[96];
+        std::snprintf(key, sizeof(key), "%s psm=%02x%s", what, t.psm, otherPsm ? (std::string(" from ") + std::to_string(otherPsm)).c_str() : "");
+        ++texSources[key];
+    }
+
     void reportStats()
     {
+        if (texSrcDiag)
+        {
+            static auto last = std::chrono::steady_clock::now();
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last >= std::chrono::seconds(5))
+            {
+                last = now;
+                for (const auto &kv : texSources)
+                    std::fprintf(stderr, "[gs-texsrc] %s x%llu\n", kv.first.c_str(), static_cast<unsigned long long>(kv.second));
+                texSources.clear();
+            }
+        }
         if (!statsEnabled)
             return;
         const auto now = std::chrono::steady_clock::now();
@@ -1810,6 +1872,7 @@ void GSHwBackend::BeginTransfer(const GSTransferCommand &command)
     Impl &d = *m_impl;
     d.flushPending();
     d.cpu.BeginTransfer(command);
+    d.noteTransfer(command);
     if (command.direction == 0u || command.direction == 2u)
     {
         const uint32_t rows = static_cast<uint32_t>(command.trxpos.dsay) + command.trxreg.rrh;
