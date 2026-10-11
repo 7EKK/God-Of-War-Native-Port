@@ -77,10 +77,10 @@ Native Windows build, 1920x1080 window, captured by the automatic zone test (`to
 | IOP modules as native code (boot to gameplay 95 s → 20 s) | ✅ |
 | Native pad, memory card (load/save verified), sound engine | ✅ |
 | Native DMA data path; SIF already native | ✅ |
-| GS memory image → native texture/CLUT store; GS display registers native | 🔧 almost done |
+| GS memory image → native texture/CLUT store; GS display registers native | ✅ |
 | EE timers → native clock | 🔧 in progress |
-| Speed: 60 fps in Olympus, Desert and slot 4; Cliffs 30 fps | 🔧 in progress |
-| Game speed: exact at 30 fps, 2-3 % fast at 60 fps | 🔧 in progress |
+| Speed: 60 fps in Olympus, Desert and slot 4; Cliffs ~32 fps | 🔧 in progress |
+| Game speed exact (1.00) at 30 and 60 fps, matching PCSX2 | ✅ |
 | Game data from extracted files instead of the ISO | ⏳ last step |
 | FMV (currently skipped) | ⏳ |
 | Nintendo Switch build | ⏳ after the PC port |

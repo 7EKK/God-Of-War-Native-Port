@@ -165,11 +165,22 @@ Gains per lever above are estimates from the Gemini review (gemini-work/results/
   | 2 Desert | 60 | 1.024 | - | 1.024 |
   | 3 Cliffs | 30 (60 for ~20 s) | 1.026 | 0.999 | 1.004 |
   | 4 Final battle | 60 | 1.018 | - | 1.018 |
-- Reading: the 60 fps is real: the game takes ~1/60 s steps (delta_min 0.0166) and game time follows wall time within
-  2-3 %; it is not a 30 fps game whose clock runs double. But at 60 fps game time runs 2-3 % fast, at 30 fps exactly
-  1.00. Unverified explanation: delta_min is pinned at 0.0166 (looks like a clamp at 1/60) while delta_max reaches
-  0.04-0.05 once a second or so, so host pacing jitter only ever adds time. Next step if it matters: per-frame delta
-  histogram at 60 fps and the code that writes 0x29C64C (0x17D778).
+- Reading: the 60 fps is real: the game takes ~1/60 s steps (delta_min 0.0166); it is not a 30 fps game whose clock
+  runs double. The 2-3 % excess at 60 fps was a runtime timing error, fixed (below).
+- How the game measures a frame (0x17D778, also inlined in vid::WaitForDMAComplete 0x17A2A0): T0 (BUSCLK/256 =
+  576 kHz) extended to 64 bit (wraps at 0x303628, last value 0x2C7908); ticks since its previous frame read -> 0x29C670;
+  fields = ticks / 96.1 / 100 (115.2 in PAL), clamped to [1, 4], then max(fields, 60 / target fps); step = fields / 60.
+  So a frame shorter than one field counts as one field and a longer one counts in full: any jitter of the read point
+  only adds game time.
+- Cause (2026-10-12): per-frame ticks alternated ~9000 / ~10200 in our build (`[gow-speed-hist]`: half the frames in
+  bin 9, half in bin 10 at 1.06 fields), while PCSX2 reads 9572-9640 every frame (PINE, desert, speed 1.000). Trace:
+  vid::WaitForDMAComplete spins on the GS-done flag 0x29C7D0 and the recompiled spin burns guest cycles ~10x faster
+  than wall time (a FINISH 1 ms of wall time after a VBlank arrived 5800 ticks = 10 ms of guest time after it), so where
+  the FINISH and the next frame-clock read land in guest time depended on how long the host GS worker took.
+- Fix (EeScheduler::processDueDeadlines, ext agent/gamespeed): 15 no-op pacing deadlines per field on the VBlank grid
+  (cycle deadline and host deadline in lockstep, like VBlank itself). The guest clock can no longer run ahead of the
+  wall clock by more than 1/16 field inside a frame; real work runs at about wall rate already, so only spins are held.
+  `[gow-speed-hist]` (same switch) prints the per-frame tick histogram in tenths of a field.
 - Note: runs that never log `[memory card]` (stale git-ignored iopn_*/gow_overrides.cpp in a worktree) stay in the
   menu at 60 fps, speed 1.00; their numbers say nothing about gameplay.
 
