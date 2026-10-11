@@ -28,6 +28,7 @@ verified on the 4 zones (images, fps, audio) before the next:
      Mechanism for all such cuts: IRX function overrides (IopNativeOverride, tools/iop/native_overrides.txt);
 2. VIF1 / GIF / DMA data path -> VU1 and GS fed directly from the game's packets;
 3. SPU2 register-level voice mixer -> native mixer;
+   - DONE (2026-10-11): LIBSD exports are native, driving SoundEngine; SPU2 model and SPU DMA removed (docs/sound.md);
 4. SIF (EE <-> IOP RPC/DMA) -> direct native calls;
 5. GS register / 4 MB memory image -> native texture and CLUT store;
 6. CDVD -> extracted game files (last).

@@ -36,6 +36,7 @@ while i < len(img) - 4:
         i += 4
 ta, to, ts = secs['.text']
 md = capstone.Cs(capstone.CS_ARCH_MIPS, capstone.CS_MODE_MIPS32 | capstone.CS_MODE_LITTLE_ENDIAN)
+md.skipdata = True  # keep going over words capstone cannot decode
 print(f'; {sys.argv[1]}: .text 0x{ta:x}+0x{ts:x}; imports: ' + ', '.join(sorted(set(v.split("#")[0] for v in stubs.values()))))
 for ins in md.disasm(bytes(img[ta:ta + ts]), ta):
     extra = ''

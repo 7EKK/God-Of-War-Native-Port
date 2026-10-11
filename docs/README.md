@@ -28,6 +28,7 @@ The user wants the game **totally playable**; work continues until then. Game da
 | [runtime-changes.md](runtime-changes.md) | Every change made to the EE runtime (ps2xRuntime) and recompiler, and why. |
 | [iop-changes.md](iop-changes.md) | Every change made to the IOP emulator (ps2xIOP), and why. |
 | [native-port.md](native-port.md) | Inventory of every emulated layer, its native replacement, measured cost and the order of work. |
+| [sound.md](sound.md) | Native sound engine: the LIBSD API boundary, SoundEngine, what is mixed. |
 | [memory-card.md](memory-card.md) | PS2 memory card format and how the game reaches the card (for the native card service). |
 | [switch.md](switch.md) | Switch toolchain (WSL + devkitPro), Switch build changes, open Switch issues. |
 | [gemini-helper.md](gemini-helper.md) | Read-only helper agent (`agy`/Gemini) to offload log/dump analysis: when and how to call it. |
