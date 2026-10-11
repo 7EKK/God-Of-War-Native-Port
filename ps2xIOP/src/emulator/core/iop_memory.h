@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "sio2.h"
+#include "memory_card.h"
 #include "spu2.h"
 
 namespace ps2x::iop::detail
@@ -143,8 +143,8 @@ namespace ps2x::iop::detail
         }
         [[nodiscard]] std::span<const uint8_t> ram() const noexcept { return m_ram; }
         [[nodiscard]] Spu2 &spu2() noexcept { return m_spu2; }
-        [[nodiscard]] Sio2 &sio2() noexcept { return m_sio2; }
-        [[nodiscard]] bool sio2Enabled() const noexcept { return m_sio2Enabled; }
+        // GOW-Port: the memory cards (native card storage, see memory_card.h)
+        [[nodiscard]] MemoryCardSlots &cards() noexcept { return m_cards; }
 
         [[nodiscard]] static uint32_t physicalAddress(uint32_t address) noexcept { return address & 0x1FFFFFFFu; }
 
@@ -164,8 +164,6 @@ namespace ps2x::iop::detail
         uint32_t m_interruptControl = 1;
         std::optional<DmaStart> m_dmaStart;
         Spu2 m_spu2; // GOW-Port
-        mutable Sio2 m_sio2; // GOW-Port: leer la FIFO de salida consume bytes
-        bool m_sio2Enabled = true; // GOW_SIO2=0: registros del SIO2 como simples latches (comportamiento anterior)
-        void startSio2Dma(uint32_t chcrAddress, uint32_t value);
+        MemoryCardSlots m_cards;
     };
 }

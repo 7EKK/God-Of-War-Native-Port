@@ -129,9 +129,9 @@ namespace ps2x::iop::detail
         {
             reset();
             kernel.setOutsideThreadWait([this](const std::function<bool()> &ready) { return waitOutsideThread(ready); });
-            // GOW-Port: memory card del SIO2. Puerto 1: GOW_MC0 o Mcd001.ps2 junto al ELF (formato de PCSX2);
-            // puerto 2: solo con GOW_MC1. GOW_MC0=0 deja el puerto 1 vacio.
-            memory.sio2().setCardPathProvider([this](uint32_t port) -> std::string
+            // GOW-Port: memory card images (PCSX2 .ps2 format). Slot 1: GOW_MC0 or Mcd001.ps2 next to the ELF; slot 2: only
+            // with GOW_MC1. GOW_MC0=0 leaves slot 1 empty.
+            memory.cards().setPathProvider([this](uint32_t port) -> std::string
             {
                 const char *setting = std::getenv(port == 0u ? "GOW_MC0" : "GOW_MC1");
                 if (setting != nullptr)
@@ -372,8 +372,8 @@ namespace ps2x::iop::detail
                     secrMcDevIdHandler = {a0, cpu.gpr[28]};
                     setV0(0);
                     return ImportDisposition::Handled;
-                case 6: // SecrAuthCard: GOW-Port: la memory card emulada no lleva MagicGate, se da por autenticada
-                    setV0(memory.sio2Enabled() ? 1u : 0u);
+                case 6: // SecrAuthCard: GOW-Port: a card image has no MagicGate; always authenticated
+                    setV0(1u);
                     return ImportDisposition::Handled;
                 case 7: // SecrResetAuthCard
                     setV0(0);
@@ -406,25 +406,7 @@ namespace ps2x::iop::detail
                 return ImportDisposition::Handled;
             if (iequals(call.library, "dmacman"))
             {
-                // GOW-Port: sio2man programa los DMA 11 y 12 del SIO2 con sceSetSliceDMA/sceStartDMA.
-                const uint32_t channel = a0;
-                const bool sio2Channel = memory.sio2Enabled() && (channel == 11u || channel == 12u);
-                const uint32_t channelBase = 0x1F801500u + (channel - 7u) * 0x10u;
-                if (sio2Channel && call.ordinal == 28u) // sceSetSliceDMA(canal, direccion, palabras, bloques, sentido)
-                {
-                    const uint32_t direction = memory.read32(cpu.gpr[29] + 16u);
-                    write32(channelBase, cpu.gpr[5] & 0xFFFFFFu);
-                    write32(channelBase + 4u, (cpu.gpr[6] & 0xFFFFu) | (cpu.gpr[7] << 16u));
-                    write32(channelBase + 8u, (direction & 1u) | 0x200u | (direction == 0u ? 0x40000000u : 0u));
-                    setV0(1);
-                    return ImportDisposition::Handled;
-                }
-                if (sio2Channel && call.ordinal == 32u) // sceStartDMA(canal)
-                {
-                    write32(channelBase + 8u, memory.read32(channelBase + 8u) | 0x01000000u);
-                    setV0(0);
-                    return ImportDisposition::Handled;
-                }
+                // GOW-Port: only sio2man used the DMA controller (SIO2 channels 11/12); no SIO2 transfers exist any more.
                 setV0(0);
                 return ImportDisposition::Handled;
             }

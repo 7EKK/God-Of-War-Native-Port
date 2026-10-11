@@ -4,7 +4,7 @@
 
 #include "emulator/core/iop_cpu.h"
 #include "emulator/core/iop_memory.h"
-#include "emulator/core/sio2.h"
+#include "emulator/core/memory_card.h"
 
 #include <vector>
 
@@ -21,10 +21,7 @@ namespace ps2x::iop::detail
 
         MemoryCard *cardFor(IopMemory &memory, uint32_t port)
         {
-            Sio2 &sio2 = memory.sio2();
-            sio2.prepareCard(port & 1u);
-            MemoryCard &card = sio2.card(port & 1u);
-            return card.present() ? &card : nullptr;
+            return memory.cards().card(port & 1u); // ports 2/3 -> slots 0/1
         }
 
         // 0x0c8c: int read_page(port, slot, page, size, void *iopDst /* stack +0x10 */); 1 = ok, 0 = error
@@ -101,7 +98,34 @@ namespace ps2x::iop::detail
             cpu.gpr[kV0] = cardFor(memory, cpu.gpr[kA0]) ? 1u : 0u;
         }
 
+        // MC2_D 0x08d8: int probe_f3(port, slot): the card's "81 F3" presence check before connecting -> 1 if present
+        void mcProbeF3(IopCpuState &cpu, IopMemory &memory, IopHost &)
+        {
+            cpu.gpr[kV0] = cardFor(memory, cpu.gpr[kA0]) ? 1u : 0u;
+        }
+
+        // ---- SIO2D.IRX: device detection (docs/memory-card.md) -----------------------------------------------------
+        // The game reads the controller on the EE natively (scePad2* in gow_overrides.cpp) and opens no pad socket on
+        // the IOP, so no pad is reported: DS2U_D never connects and never polls. Memory cards are reported from the
+        // card images, which runs MC2_D's own connect path. No SIO2 transfer is issued any more.
+
+        // 0x0978: int probe_pad(port, slot, u8 *reply) -> > 0 = connected (reply[1] = mode id)
+        void sio2dProbePad(IopCpuState &cpu, IopMemory &, IopHost &)
+        {
+            cpu.gpr[kV0] = 0u;
+        }
+
+        // 0x0a1c: int probe_card(port, slot) -> non-zero = memory card present (ports 2/3)
+        void sio2dProbeCard(IopCpuState &cpu, IopMemory &memory, IopHost &)
+        {
+            const uint32_t port = cpu.gpr[kA0];
+            cpu.gpr[kV0] = (port == 2u || port == 3u) && cpu.gpr[kA1] == 0u && cardFor(memory, port) ? 1u : 0u;
+        }
+
         const IopNativeOverride kOverrides[] = {
+            {"mc2_d_irx", 0x08d8u, "mc2_d probe_f3", &mcProbeF3},
+            {"sio2d_irx", 0x0978u, "sio2d probe_pad", &sio2dProbePad},
+            {"sio2d_irx", 0x0a1cu, "sio2d probe_card", &sio2dProbeCard},
             {"mc2_d_irx", 0x0c8cu, "mc2_d read_page", &mcReadPage},
             {"mc2_d_irx", 0x0fdcu, "mc2_d write_page", &mcWritePage},
             {"mc2_d_irx", 0x0a98u, "mc2_d erase_block", &mcEraseBlock},
