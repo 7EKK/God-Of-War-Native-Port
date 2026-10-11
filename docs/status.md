@@ -653,3 +653,11 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   agent/gsregs (PS2Recomp-kl-vu): GS privileged registers (CSR/PMODE/DISPFB/DISPLAY) as native display state;
   agent/speedmeter (PS2Recomp-kl-ee): KIexster's game-speed meter (GOW_DELTA_DIAG) + zones.py column.
 - Zones on main (port/texsrc/20261011_203828): slot 1 60 fps, slot 3 30 fps, both ok.
+- Merged (ext a60ce1c, 9290b52, 567dbfa): game-speed meter, native texture/CLUT store (GSCpuBackend deleted), GS
+  privileged registers as native display state (0 GS register accesses from game code, boot + Olympus).
+  Merged build (port/merged5/20261012_001103, silent): slots 1-4 ok, 60/60/30/60 fps, game speed 1.03/1.02/1.00/1.02;
+  savetest ok. A/B texstore vs old main on slots 1,4 (idle machine): equal fps, GS time within 3 %.
+- Test runs are silent by default (`--audio` for audio tests).
+- Left in step 5: palette loads from a render target still go through a readback into the GS memory image
+  (syncTargetToVram, ~2.8k of 8.9k CLUT loads in Olympus). Timers: proposal in docs/native-port.md (T0 game clock,
+  T2 kernel alarms). Game speed at 60 fps is 2-3 % fast (step clamped at 1/60 s? unverified).
