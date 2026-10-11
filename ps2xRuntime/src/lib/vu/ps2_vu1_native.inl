@@ -138,6 +138,66 @@ void VU1NativeAccess::xgkick(VU1NativeCtx &n, uint32_t qwordAddress)
     vu.m_xgkick.sourceAddress = (qwordAddress * 16u) % vu.m_activeVuDataSize;
     vu.m_xgkick.cycleCredit = 0x40000000u; // the whole packet is read at once (PCSX2 does the same)
     vu.m_xgkick.issueCycle = vu.m_cycle;
+    // Fast path: walk the GIFtags in VU memory, then copy the whole packet with at most two memcpy (wrap). Same bytes and
+    // end state as progressXgkick's qword loop; anything unusual (bad format, oversize, xgkick trace on) takes that loop.
+    const uint32_t size = vu.m_activeVuDataSize;
+    if (!g_xgkickTrace && (size & (size - 1u)) == 0u)
+    {
+        constexpr uint32_t kMax = VU1Interpreter::XgkickPipeline::kBufferSize;
+        const uint32_t src = vu.m_xgkick.sourceAddress;
+        uint32_t total = 0u;
+        bool ok = false;
+        for (;;)
+        {
+            const uint32_t at = (src + total) & (size - 1u);
+            if (total > kMax - 16u || at + 8u > size)
+                break;
+            uint64_t tagLo;
+            std::memcpy(&tagLo, vu.m_activeVuData + at, 8);
+            const uint32_t nloop = static_cast<uint32_t>(tagLo & 0x7FFFu);
+            const uint32_t format = static_cast<uint32_t>((tagLo >> 58) & 0x3u);
+            uint32_t nreg = static_cast<uint32_t>((tagLo >> 60) & 0xFu);
+            if (nreg == 0u)
+                nreg = 16u;
+            uint64_t tagBytes = 16u;
+            if (format == 0u)
+                tagBytes += static_cast<uint64_t>(nloop) * nreg * 16u;
+            else if (format == 1u)
+                tagBytes += ((static_cast<uint64_t>(nloop) * nreg + 1u) & ~1ull) * 8u;
+            else if (format == 2u)
+                tagBytes += static_cast<uint64_t>(nloop) * 16u;
+            else
+                break;
+            if (tagBytes > kMax - total)
+                break;
+            total += static_cast<uint32_t>(tagBytes);
+            if ((tagLo >> 15) & 1u)
+            {
+                ok = true;
+                break;
+            }
+        }
+        if (ok)
+        {
+            uint8_t *dst = vu.m_xgkick.packet.data();
+            const uint32_t first = src & (size - 1u);
+            const uint32_t head = std::min(total, size - first);
+            std::memcpy(dst, vu.m_activeVuData + first, head);
+            for (uint32_t done = head; done < total;)
+            {
+                const uint32_t chunk = std::min(total - done, size);
+                std::memcpy(dst + done, vu.m_activeVuData, chunk);
+                done += chunk;
+            }
+            vu.m_xgkick.copiedBytes = total;
+            vu.m_xgkick.totalBytes = total;
+            vu.m_xgkick.currentTagEnd = total;
+            vu.m_xgkick.currentTagEop = true;
+            vu.m_xgkick.cycleCredit = 0x40000000u - (total / 16u) * 2u + 1u;
+            vu.finishXgkick();
+            return;
+        }
+    }
     vu.progressXgkick();
 }
 
@@ -288,6 +348,7 @@ namespace
         uint8_t code[PS2_VU1_CODE_SIZE];
         uint8_t data[16384];
     };
+    uint64_t g_vu1nReplayNs = 0; // time spent in the native runs of the replay (GOW_VU1N_REPLAY_REPS timing)
     inline uint64_t fnvBytes(uint64_t h, const void *p, size_t n)
     {
         const uint8_t *b = static_cast<const uint8_t *>(p);
@@ -305,6 +366,7 @@ uint64_t VU1NativeAccess::silentNativeHash(VU1Interpreter &vu, void *contextPtr)
     g_vuVerifyCapture = true;
     g_vuVerifyPackets.clear();
     VU1Interpreter::StepContext c = context;
+    const auto t0 = std::chrono::steady_clock::now();
     for (;;)
     {
         if (vu.runNative(c))
@@ -312,6 +374,7 @@ uint64_t VU1NativeAccess::silentNativeHash(VU1Interpreter &vu, void *contextPtr)
         if (!vu.stepInterpreted(c))
             break;
     }
+    g_vu1nReplayNs += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
     vu.flushPipelines();
     g_vuVerifyCapture = false;
     vu.m_verifySilent = silentBefore;
@@ -355,23 +418,36 @@ void VU1NativeAccess::recordReplay(VU1Interpreter &vu, void *contextPtr, uint32_
         auto rec = std::make_unique<Vu1nRecord>();
         VU1Interpreter saved(vu);
         unsigned total = 0, differ = 0;
+        static const unsigned reps = std::getenv("GOW_VU1N_REPLAY_REPS") ? static_cast<unsigned>(std::atoi(std::getenv("GOW_VU1N_REPLAY_REPS"))) : 1u;
+        auto scratch = std::make_unique<Vu1nRecord>();
+        uint64_t timedNs = 0;
         while (std::fread(rec.get(), sizeof(Vu1nRecord), 1, f) == 1)
         {
             ++total;
-            vu = saved;
-            vu.m_state = rec->state;
-            vu.m_native->generation = ~0ull - 1u; // micro memory is not the game's: forget the block cache
-            VU1Interpreter::StepContext c = context;
-            c.vuCode = rec->code;
-            c.vuData = rec->data;
-            c.budgetEnd = vu.m_cycle + rec->maxCycles;
-            c.programEnded = false;
-            vu.m_activeVuData = rec->data;
-            vu.m_activeVuDataSize = 16384u;
-            const uint64_t h = silentNativeHash(vu, &c);
-            if (h != rec->hash && differ++ < 20u)
-                std::fprintf(stderr, "[vu1n-replay] record %u startPc=%x differs\n", total, rec->state.pc);
+            for (unsigned rep = 0; rep < std::max(reps, 1u); ++rep)
+            {
+                vu = saved;
+                vu.m_state = rec->state;
+                if (rep == 0u)
+                    vu.m_native->generation = ~0ull - 1u; // micro memory is not the game's: forget the block cache
+                std::memcpy(scratch->data, rec->data, sizeof(rec->data));
+                VU1Interpreter::StepContext c = context;
+                c.vuCode = rec->code;
+                c.vuData = scratch->data;
+                c.budgetEnd = vu.m_cycle + rec->maxCycles;
+                c.programEnded = false;
+                vu.m_activeVuData = scratch->data;
+                vu.m_activeVuDataSize = 16384u;
+                g_vu1nReplayNs = 0;
+                const uint64_t h = silentNativeHash(vu, &c);
+                if (rep != 0u)
+                    timedNs += g_vu1nReplayNs; // warm block cache only
+                else if (h != rec->hash && differ++ < 20u)
+                    std::fprintf(stderr, "[vu1n-replay] record %u startPc=%x differs\n", total, rec->state.pc);
+            }
         }
+        if (reps > 1u)
+            std::fprintf(stderr, "[vu1n-replay] timing: %.3f ms for %u warm runs\n", timedNs / 1e6, total * (reps - 1u));
         std::fclose(f);
         vu = saved;
         vu.m_native->generation = ~0ull - 1u;
