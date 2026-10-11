@@ -196,43 +196,6 @@ namespace
         const uint32_t distance = (target - count) & 0xFFFFu;
         return distance == 0u ? 0x10000ull : static_cast<uint64_t>(distance);
     }
-
-    struct DmaTagView
-    {
-        uint16_t qwc = 0;
-        uint8_t id = 0;
-        bool irq = false;
-        uint32_t addr = 0;
-        uint32_t upper = 0;
-    };
-
-    inline DmaTagView decodeDmaTag(uint64_t tag)
-    {
-        DmaTagView out{};
-        out.qwc = static_cast<uint16_t>(tag & 0xFFFFu);
-        out.id = static_cast<uint8_t>((tag >> 28u) & 0x7u);
-        out.irq = ((tag >> 31u) & 0x1ull) != 0ull;
-        out.addr = static_cast<uint32_t>((tag >> 32u) & 0x7FFFFFFFu);
-        out.upper = static_cast<uint32_t>((tag >> 16u) & 0xFFFFu);
-        return out;
-    }
-
-    inline uint32_t gifTagNloop(uint64_t tagLo)
-    {
-        return static_cast<uint32_t>(tagLo & 0x7FFFu);
-    }
-
-    inline uint8_t gifTagFlg(uint64_t tagLo)
-    {
-        return static_cast<uint8_t>((tagLo >> 58u) & 0x3u);
-    }
-
-    inline uint32_t gifTagNreg(uint64_t tagLo)
-    {
-        uint32_t nreg = static_cast<uint32_t>((tagLo >> 60u) & 0xFu);
-        return nreg == 0u ? 16u : nreg;
-    }
-
 }
 
 // Helpers for GS VRAM addressing (PSMCT32 path).
@@ -371,7 +334,6 @@ bool PS2Memory::initialize(size_t ramSize)
 
         // Initialize I/O registers
         m_ioRegisters.clear();
-        m_gifStatSlot = nullptr;
 
         // Initialize GS registers
         memset(&gs_regs, 0, sizeof(gs_regs));
@@ -440,17 +402,6 @@ uint32_t PS2Memory::advanceEeTimers(uint64_t eeCycles) noexcept
     {
         return 0u;
     }
-
-    constexpr uint32_t kGifStat = 0x10003020u;
-    constexpr uint32_t kGifFqcMask = 0x1F000000u;
-    if (m_gifStatSlot == nullptr)
-    {
-        auto gifStatIt = m_ioRegisters.find(kGifStat);
-        if (gifStatIt != m_ioRegisters.end())
-            m_gifStatSlot = &gifStatIt->second;
-    }
-    if (m_gifStatSlot != nullptr)
-        *m_gifStatSlot &= ~kGifFqcMask;
 
     m_eeTimerPendingCycles += eeCycles;
     if (m_eeTimerPendingCycles < m_eeTimerBudget)
@@ -1266,23 +1217,10 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
         return true;
     }
 
+    // GOW-Port: D_STAT. The game clears its DMA-end bits after its scratchpad copies; no DMA status is kept, transfers
+    // are complete when the store that starts them returns (docs/native-port.md, step 2).
     if (address == 0x1000E010u)
-    {
-        const uint32_t current = m_ioRegisters.count(address) ? m_ioRegisters[address] : 0u;
-        uint32_t status = current & 0x3FFu;
-        uint32_t mask = (current >> 16) & 0x3FFu;
-
-        // D_STAT low bits are W1C status, high bits [16..25] toggle masks on write-one.
-        status &= ~(value & 0x3FFu);
-        mask ^= ((value >> 16) & 0x3FFu);
-
-        uint32_t next = (current & ~((0x3FFu) | (0x3FFu << 16) | (1u << 31)));
-        next |= status | (mask << 16);
-        if ((status & mask) != 0u)
-            next |= (1u << 31);
-        m_ioRegisters[address] = next;
         return true;
-    }
 
     m_ioRegisters[address] = value;
 
@@ -1360,339 +1298,59 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
         return true;
     }
 
+    // GOW-Port: DMA channel registers written by game code (the boot VIF0 chain 0x1838D0, the scratchpad copies,
+    // VIF1's tag-transfer bit set by 0x13F700) are latched; a CHCR store with STR runs that transfer natively now and
+    // its DMA-end handlers after the store. VIF1 / GIF packets are normally sent through sceDmaSend (Stubs/DMA.cpp).
     if (address >= 0x10008000 && address < 0x1000F000)
     {
-        if ((address & 0xFF) == 0x00 && (value & 0x100))
+        if ((address & 0xFFu) != 0u || (value & 0x100u) == 0u)
+            return true;
+        const uint32_t channelBase = address & 0xFFFFFF00u;
+        m_ioRegisters[address] = value & ~0x100u;
+        m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
+
+        // GOW-Port: PS2X_EE_WATCH_WORD also reports scratchpad DMAs that change the watched RAM word.
+        static const uint32_t watchWord = [] {
+            const char *v = std::getenv("PS2X_EE_WATCH_WORD");
+            return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 16)) & 0x01FFFFFCu : 0u;
+        }();
+        uint32_t watchBefore = 0u;
+        if (watchWord)
+            std::memcpy(&watchBefore, m_rdram + watchWord, 4);
+        if (tryProcessScratchpadDma(channelBase, value))
         {
-            const auto dctrlIt = m_ioRegisters.find(0x1000E000u);
-            const bool dmacEnabled = (dctrlIt == m_ioRegisters.end()) || ((dctrlIt->second & 0x1u) != 0u);
-            if (!dmacEnabled)
-            {
-                return true;
-            }
-
-            const uint32_t channelBase = address & 0xFFFFFF00;
-            const uint32_t madr = m_ioRegisters[channelBase + 0x10];
-            const uint32_t qwc = m_ioRegisters[channelBase + 0x20];
-            m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
-
-            // GOW-Port: PS2X_EE_WATCH_WORD also reports scratchpad DMAs that change the watched RAM word.
-            static const uint32_t watchWord = [] {
-                const char *v = std::getenv("PS2X_EE_WATCH_WORD");
-                return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 16)) & 0x01FFFFFCu : 0u;
-            }();
-            uint32_t watchBefore = 0u;
             if (watchWord)
-                std::memcpy(&watchBefore, m_rdram + watchWord, 4);
-            const uint32_t sprSadr = m_ioRegisters[channelBase + 0x80u];
-            if (tryProcessScratchpadDma(channelBase, value))
             {
-                if (watchWord)
-                {
-                    uint32_t watchAfter;
-                    std::memcpy(&watchAfter, m_rdram + watchWord, 4);
-                    static unsigned reports = 0u;
-                    if (watchAfter != watchBefore && ++reports <= 40u)
-                        std::fprintf(stderr, "[eewatch] SPR DMA %08x chcr=%08x madr=%08x qwc=%u sadr=%04x: %08x -> %08x\n",
-                                     channelBase, value, madr, qwc & 0xFFFFu, sprSadr & 0x3FF0u, watchBefore, watchAfter);
-                }
-                return true;
+                uint32_t watchAfter;
+                std::memcpy(&watchAfter, m_rdram + watchWord, 4);
+                static unsigned reports = 0u;
+                if (watchAfter != watchBefore && ++reports <= 40u)
+                    std::fprintf(stderr, "[eewatch] SPR DMA %08x chcr=%08x: %08x -> %08x\n", channelBase, value,
+                                 watchBefore, watchAfter);
             }
-
-            if ((channelBase == 0x1000A000u || channelBase == 0x10009000u || channelBase == 0x10008000u) && (m_gsVRAM || channelBase == 0x10008000u))
-            {
-                auto enqueueTransfer = [&](uint32_t srcAddr, uint32_t qwCount)
-                {
-                    if (qwCount == 0)
-                        return;
-                    const bool scratch = isScratchpad(srcAddr);
-                    PendingTransfer pt;
-                    pt.fromScratchpad = scratch;
-                    pt.srcAddr = srcAddr;
-                    pt.qwc = qwCount;
-                    if (channelBase == 0x1000A000u)
-                        m_pendingGifTransfers.push_back(pt);
-                    else if (channelBase == 0x10009000u)
-                        m_pendingVif1Transfers.push_back(pt);
-                    else if (channelBase == 0x10008000u)
-                        m_pendingVif0Transfers.push_back(pt);
-                };
-
-                uint32_t chcr = value;
-                uint32_t mode = (chcr >> 2) & 0x3;
-
-                if (mode == 0 && qwc > 0)
-                {
-                    enqueueTransfer(madr, qwc);
-                }
-                else if (mode == 1)
-                {
-                    uint32_t tagAddr = m_ioRegisters[channelBase + 0x30];
-                    uint32_t asr0 = m_ioRegisters[channelBase + 0x40];
-                    uint32_t asr1 = m_ioRegisters[channelBase + 0x50];
-                    uint32_t asp = (chcr >> 4) & 0x3u;
-                    const bool tieEnabled = (chcr & (1u << 7)) != 0u;
-                    // GOW-Port: las cadenas largas (mas de 4096 tags) se cortaban y dejaban el GIF en modo IMAGE
-                    // (fork de SotC, e36fbf1).
-                    const int kMaxChainTags = 1 << 20;
-                    std::vector<uint8_t> chainBuf;
-
-                    auto appendData = [&](uint32_t srcAddr, uint32_t qwCount)
-                    {
-                        const uint64_t bytes64 = static_cast<uint64_t>(qwCount) * 16ull;
-                        uint32_t bytes = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
-                        const bool scratch = isScratchpad(srcAddr);
-                        uint32_t src = 0;
-                        src = translateAddress(srcAddr);
-                        const uint8_t *base2;
-                        uint32_t maxSz2;
-                        if (scratch)
-                        {
-                            base2 = m_scratchpad;
-                            maxSz2 = PS2_SCRATCHPAD_SIZE;
-                        }
-                        else
-                        {
-                            base2 = m_rdram;
-                            maxSz2 = PS2_RAM_SIZE;
-                        }
-
-                        while (bytes > 0)
-                        {
-                            if (src >= maxSz2)
-                                src = 0;
-                            uint32_t chunk = bytes;
-                            if (src + chunk > maxSz2)
-                                chunk = maxSz2 - src;
-                            if (chunk == 0)
-                                break;
-                            chainBuf.insert(chainBuf.end(), base2 + src, base2 + src + chunk);
-                            bytes -= chunk;
-                            src += chunk;
-                        }
-                    };
-
-                    auto appendVifTagData = [&](uint32_t localTagAddr)
-                    {
-                        uint32_t tagPhys = 0u;
-                        const bool tagScratch = isScratchpad(localTagAddr);
-                        tagPhys = translateAddress(localTagAddr);
-
-                        const uint8_t *localBase = tagScratch ? m_scratchpad : m_rdram;
-                        const uint32_t localMax = tagScratch ? PS2_SCRATCHPAD_SIZE : PS2_RAM_SIZE;
-                        if (tagPhys + 16u > localMax)
-                            return;
-
-                        // CHCR.TTE sends the DMAtag's upper 64 bits to the channel before
-                        // the tag payload. VIF chains use those bytes for two VIFcodes.
-                        chainBuf.insert(chainBuf.end(), localBase + tagPhys + 8u, localBase + tagPhys + 16u);
-                    };
-
-                    const bool isVifChannel =
-                        channelBase == 0x10009000u || channelBase == 0x10008000u;
-                    const bool transferTagData = isVifChannel && (chcr & 0x40u) != 0u;
-
-                    int tagsProcessed = 0;
-                    uint32_t lastTagUpper = (chcr >> 16) & 0xFFFFu;
-
-                    while (tagsProcessed < kMaxChainTags)
-                    {
-                        const uint32_t currentTagAddr = tagAddr;
-                        const bool tagInSPR = isScratchpad(tagAddr);
-                        uint32_t physTag = 0;
-                        try
-                        {
-                            physTag = translateAddress(tagAddr);
-                        }
-                        catch (...)
-                        {
-                            break;
-                        }
-                        const uint8_t *tagBase;
-                        uint32_t tagMax;
-                        if (tagInSPR)
-                        {
-                            tagBase = m_scratchpad;
-                            tagMax = PS2_SCRATCHPAD_SIZE;
-                        }
-                        else
-                        {
-                            tagBase = m_rdram;
-                            tagMax = PS2_RAM_SIZE;
-                        }
-                        if (physTag + 16 > tagMax)
-                            break;
-
-                        const uint8_t *tp = tagBase + physTag;
-                        uint64_t tag = loadScalar<uint64_t>(tp, 0, 16, "dma chain tag", tagAddr);
-                        uint16_t tagQwc = static_cast<uint16_t>(tag & 0xFFFF);
-                        uint32_t id = static_cast<uint32_t>((tag >> 28) & 0x7);
-                        const bool irq = ((tag >> 31) & 0x1ull) != 0ull;
-                        uint32_t addr = static_cast<uint32_t>((tag >> 32) & 0x7FFFFFFF);
-                        if ((tag >> 63) != 0ull)
-                        {
-                            static unsigned sprTags = 0;
-                            if (++sprTags <= 20u || sprTags % 100000u == 0u)
-                                std::fprintf(stderr, "[dma] chain tag with SPR flag #%u ch=%08x id=%u addr=%08x qwc=%u\n", sprTags, channelBase, id, addr, tagQwc);
-                        }
-                        lastTagUpper = static_cast<uint32_t>((tag >> 16) & 0xFFFFu);
-                        ++tagsProcessed;
-
-                        uint32_t dataAddr = 0;
-                        bool hasPayload = (tagQwc > 0);
-                        bool endChain = false;
-
-                        switch (id)
-                        {
-                        case 0:
-                            dataAddr = addr;
-                            tagAddr = tagAddr + 16;
-                            endChain = true;
-                            break;
-                        case 1:
-                            dataAddr = tagAddr + 16;
-                            tagAddr = dataAddr + static_cast<uint32_t>(tagQwc) * 16u;
-                            break;
-                        case 2:
-                            dataAddr = tagAddr + 16;
-                            tagAddr = addr;
-                            break;
-                        case 3:
-                        case 4:
-                            dataAddr = addr;
-                            tagAddr = tagAddr + 16;
-                            break;
-                        case 5:
-                            dataAddr = tagAddr + 16;
-                            {
-                                const uint32_t retAddr = dataAddr + static_cast<uint32_t>(tagQwc) * 16u;
-                                if (asp == 0u)
-                                {
-                                    asr0 = retAddr;
-                                    asp = 1u;
-                                }
-                                else if (asp == 1u)
-                                {
-                                    asr1 = retAddr;
-                                    asp = 2u;
-                                }
-                            }
-                            tagAddr = addr;
-                            break;
-                        case 6:
-                            dataAddr = tagAddr + 16;
-                            if (asp == 2u)
-                            {
-                                tagAddr = asr1;
-                                asp = 1u;
-                            }
-                            else if (asp == 1u)
-                            {
-                                tagAddr = asr0;
-                                asp = 0u;
-                            }
-                            else
-                            {
-                                endChain = true;
-                            }
-                            break;
-                        case 7:
-                            dataAddr = tagAddr + 16;
-                            endChain = true;
-                            break;
-                        default:
-                            hasPayload = false;
-                            endChain = true;
-                            break;
-                        }
-
-                        {
-                            static const double bigFrom = std::getenv("GOW_DMA_BIGTAGS") ? std::atof(std::getenv("GOW_DMA_BIGTAGS")) : -1.0;
-                            static const auto bigT0 = std::chrono::steady_clock::now();
-                            const bool bigTags = bigFrom >= 0.0 && std::chrono::duration<double>(std::chrono::steady_clock::now() - bigT0).count() >= bigFrom;
-                            static unsigned bigCount = 0;
-                            if (bigTags && isVifChannel && hasPayload && tagQwc >= 200u && ++bigCount <= 400u)
-                                std::fprintf(stderr, "[dma-big] ch=%08x id=%u data=%08x qwc=%u\n", channelBase, id, dataAddr, tagQwc);
-                        }
-                        {
-                            // GOW_DMA_BLOCKDUMP=<file>:<from s>:<len s>: append [u32 addr][u32 qwc][data] of every VIF1 chain block.
-                            static const char *spec = std::getenv("GOW_DMA_BLOCKDUMP");
-                            if (spec && isVifChannel && hasPayload && tagQwc >= 4u && tagQwc <= 2000u)
-                            {
-                                static std::string path; static double from = 0, len = 1;
-                                static const auto t0 = g_gowProcStart;
-                                static bool init = [&] { path = spec; size_t c2 = path.rfind(':'); size_t c1 = (c2 == std::string::npos || c2 == 0) ? std::string::npos : path.rfind(':', c2 - 1); if (c1 != std::string::npos && c1 > 1) { from = std::atof(path.c_str() + c1 + 1); len = std::atof(path.c_str() + c2 + 1); path.resize(c1); } return true; }();
-                                (void)init;
-                                const double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-                                if (now >= from && now < from + len && !isScratchpad(dataAddr) && (dataAddr & 0x01FFFFFFu) + tagQwc * 16u <= PS2_RAM_SIZE)
-                                    if (FILE *df = std::fopen(path.c_str(), "ab"))
-                                    {
-                                        const uint32_t hdr[2] = {dataAddr, tagQwc};
-                                        std::fwrite(hdr, 4, 2, df); std::fwrite(m_rdram + (dataAddr & 0x01FFFFFFu), 16, tagQwc, df); std::fclose(df);
-                                    }
-                            }
-                        }
-                        if (transferTagData)
-                            appendVifTagData(currentTagAddr);
-
-                        if (hasPayload)
-                            appendData(dataAddr, tagQwc);
-                        if (irq && tieEnabled)
-                            endChain = true;
-                        if (endChain)
-                            break;
-                    }
-
-                    if (tagsProcessed >= kMaxChainTags)
-                    {
-                        std::fprintf(stderr, "[dma] chain on 0x%08x stopped after %d tags at 0x%08x\n", channelBase, tagsProcessed, tagAddr);
-                        std::fflush(stderr);
-                    }
-                    m_ioRegisters[channelBase + 0x30] = tagAddr;
-                    m_ioRegisters[channelBase + 0x40] = asr0;
-                    m_ioRegisters[channelBase + 0x50] = asr1;
-                    chcr = (chcr & ~(0x3u << 4)) | ((asp & 0x3u) << 4);
-                    chcr = (chcr & 0x0000FFFFu) | (lastTagUpper << 16);
-                    m_ioRegisters[channelBase + 0x00] = chcr;
-
-                    if (!chainBuf.empty())
-                    {
-                        PendingTransfer pt;
-                        pt.fromScratchpad = false;
-                        pt.srcAddr = 0;
-                        pt.qwc = 0;
-                        pt.chainData = std::move(chainBuf);
-                        if (channelBase == 0x1000A000)
-                        {
-                            m_pendingGifTransfers.push_back(std::move(pt));
-                        }
-                        else if (channelBase == 0x10009000u)
-                        {
-                            m_pendingVif1Transfers.push_back(std::move(pt));
-                        }
-                        else if (channelBase == 0x10008000u)
-                        {
-                            m_pendingVif0Transfers.push_back(std::move(pt));
-                        }
-                    }
-                    // else if (channelBase == 0x10009000u)
-                    // {
-
-                    // }
-                }
-                else if (qwc > 0)
-                {
-                    enqueueTransfer(madr, qwc);
-                }
-
-                const bool autoProcessTransfers =
-                    (channelBase == 0x1000A000u) ? (m_gifPacketCallback || m_gifArbiter != nullptr) : true;
-                if (autoProcessTransfers)
-                {
-                    processPendingTransfers();
-                }
-            }
+            return true;
         }
+
+        DmaPath path;
+        uint32_t cause;
+        switch (channelBase)
+        {
+        case 0x10008000u: path = DmaPath::Vif0; cause = 0u; break;
+        case 0x10009000u: path = DmaPath::Vif1; cause = 1u; break;
+        case 0x1000A000u: path = DmaPath::Gif; cause = 2u; break;
+        default:
+        {
+            static unsigned reports = 0u;
+            if (++reports <= 20u)
+                std::fprintf(stderr, "[dma] channel %08x started by game code is not handled (chcr=%08x)\n", channelBase, value);
+            return true;
+        }
+        }
+        if (((value >> 2u) & 0x3u) == 1u)
+            sendDmaChain(path, m_ioRegisters[channelBase + 0x30u]);
+        else
+            sendDma(path, m_ioRegisters[channelBase + 0x10u], m_ioRegisters[channelBase + 0x20u] & 0xFFFFu);
+        queueCompletedDmacCause(cause);
         return true;
     }
 
@@ -1781,7 +1439,7 @@ bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
     m_ioRegisters[channelBase + 0x10u] = (originalMadr + byteCount) & 0x7FFFFFF0u;
     m_ioRegisters[channelBase + 0x20u] = 0u;
     m_ioRegisters[channelBase + 0x80u] = (originalSadr + byteCount) & 0x3FF0u;
-    completeDmacChannel(channelBase, fromScratchpad ? 8u : 9u);
+    queueCompletedDmacCause(fromScratchpad ? 8u : 9u);
     return true;
 }
 
@@ -1915,344 +1573,188 @@ bool PS2Memory::processScratchpadChain(uint32_t channelBase, uint32_t chcr)
     m_ioRegisters[channelBase + 0x10u] = madr & 0x7FFFFFF0u;
     m_ioRegisters[channelBase + 0x20u] = 0u;
     m_ioRegisters[channelBase + 0x80u] = sadr & 0x3FF0u;
-    completeDmacChannel(channelBase, fromScratchpad ? 8u : 9u);
+    queueCompletedDmacCause(fromScratchpad ? 8u : 9u);
     return true;
-}
-
-void PS2Memory::completeDmacChannel(uint32_t channelBase, uint32_t cause)
-{
-    static constexpr uint32_t kDStat = 0x1000E010u;
-    m_ioRegisters[channelBase] &= ~0x100u;
-
-    uint32_t dstat = m_ioRegisters.count(kDStat) ? m_ioRegisters[kDStat] : 0u;
-    dstat |= 1u << cause;
-    const uint32_t status = dstat & 0x3FFu;
-    const uint32_t mask = (dstat >> 16u) & 0x3FFu;
-    if ((status & mask) != 0u)
-        dstat |= 1u << 31u;
-    else
-        dstat &= ~(1u << 31u);
-    m_ioRegisters[kDStat] = dstat;
-    queueCompletedDmacCause(cause);
 }
 
 static void gsWorkerTrace(const char *what, size_t bytes);
 
-void PS2Memory::processPendingTransfers()
+// GOW-Port: native DMA data path (docs/native-port.md, step 2). Bytes of guest memory (RAM or scratchpad) in order, with
+// the RAM wrap of the former transfer loops.
+void PS2Memory::appendGuestBytes(uint32_t address, uint32_t bytes, std::vector<uint8_t> &out)
 {
-    const bool hadGif = !m_pendingGifTransfers.empty();
-    uint32_t observedGifQwc = 0u;
-    for (const auto &transfer : m_pendingGifTransfers)
-    {
-        const uint64_t transferQwc = !transfer.chainData.empty()
-                                         ? (transfer.chainData.size() / 16u)
-                                         : transfer.qwc;
-        observedGifQwc = static_cast<uint32_t>(std::min<uint64_t>(16u, static_cast<uint64_t>(observedGifQwc) + transferQwc));
-    }
-    if (observedGifQwc != 0u)
-    {
-        constexpr uint32_t kGifStat = 0x10003020u;
-        constexpr uint32_t kGifFqcMask = 0x1F000000u;
-        uint32_t &gifStat = m_ioRegisters[kGifStat];
-        gifStat = (gifStat & ~kGifFqcMask) | (observedGifQwc << 24u);
-    }
-
-    // GOW-Port: with the worker the GIF/VIF1 bytes are copied now (chains already are) and processed in
-    // order on the worker; the loops below then see empty queues.
-    GsWorkerJob workerJob;
-    auto collectForWorker = [&](std::vector<PendingTransfer> &transfers, bool vif1)
-    {
-        for (auto &p : transfers)
-        {
-            GsWorkerItem item;
-            item.vif1 = vif1;
-            if (!p.chainData.empty())
-                item.data = std::move(p.chainData);
-            else
-                appendTransferBytes(p, vif1, item.data);
-            if (!item.data.empty())
-                workerJob.items.push_back(std::move(item));
-        }
-        transfers.clear();
-    };
-    if (m_gsWorkerEnabled)
-        collectForWorker(m_pendingGifTransfers, false);
-
-    for (size_t idx = 0; idx < m_pendingGifTransfers.size(); ++idx)
-    {
-        auto &p = m_pendingGifTransfers[idx];
-        if (!p.chainData.empty())
-        {
-            m_seenGifCopy = true;
-            m_gifCopyCount.fetch_add(1, std::memory_order_relaxed);
-            submitGifPacket(GifPathId::Path3, p.chainData.data(), static_cast<uint32_t>(p.chainData.size()), false);
-        }
-        else if (p.qwc > 0)
-        {
-            const uint64_t bytes64 = static_cast<uint64_t>(p.qwc) * 16ull;
-            uint32_t sizeBytes = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
-            uint32_t srcPhys = 0;
-            try
-            {
-                srcPhys = translateAddress(p.srcAddr);
-            }
-            catch (const std::exception &)
-            {
-                continue;
-            }
-            if (p.fromScratchpad)
-            {
-                uint32_t bytesLeft = sizeBytes;
-                while (bytesLeft >= 16)
-                {
-                    if (srcPhys >= PS2_SCRATCHPAD_SIZE)
-                        srcPhys = 0;
-                    uint32_t chunk = bytesLeft;
-                    if (srcPhys + chunk > PS2_SCRATCHPAD_SIZE)
-                        chunk = PS2_SCRATCHPAD_SIZE - srcPhys;
-                    if (chunk == 0)
-                        break;
-                    m_seenGifCopy = true;
-                    m_gifCopyCount.fetch_add(1, std::memory_order_relaxed);
-                    submitGifPacket(GifPathId::Path3, m_scratchpad + srcPhys, chunk, false);
-                    bytesLeft -= chunk;
-                    srcPhys += chunk;
-                }
-            }
-            else
-            {
-                uint32_t bytesLeft = sizeBytes;
-                while (bytesLeft >= 16)
-                {
-                    if (srcPhys >= PS2_RAM_SIZE)
-                        srcPhys = 0;
-                    uint32_t chunk = bytesLeft;
-                    if (srcPhys + chunk > PS2_RAM_SIZE)
-                        chunk = PS2_RAM_SIZE - srcPhys;
-                    if (chunk == 0)
-                        break;
-                    m_seenGifCopy = true;
-                    m_gifCopyCount.fetch_add(1, std::memory_order_relaxed);
-                    submitGifPacket(GifPathId::Path3, m_rdram + srcPhys, chunk, false);
-                    bytesLeft -= chunk;
-                    srcPhys += chunk;
-                }
-            }
-        }
-    }
-    m_pendingGifTransfers.clear();
-
-    const bool hadVif0 = !m_pendingVif0Transfers.empty();
-    for (auto &p : m_pendingVif0Transfers)
-    {
-        if (!p.chainData.empty())
-        {
-            processVIF0Data(p.chainData.data(), static_cast<uint32_t>(p.chainData.size()));
-        }
-        else if (p.qwc > 0)
-        {
-            uint32_t srcPhys = 0;
-            const uint64_t bytes64 = static_cast<uint64_t>(p.qwc) * 16ull;
-            uint32_t sizeBytes = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
-            try
-            {
-                srcPhys = translateAddress(p.srcAddr);
-            }
-            catch (const std::exception &)
-            {
-                continue;
-            }
-            if (p.fromScratchpad)
-            {
-                uint32_t bytesLeft = sizeBytes;
-                while (bytesLeft > 0)
-                {
-                    if (srcPhys >= PS2_SCRATCHPAD_SIZE)
-                        srcPhys = 0;
-                    uint32_t chunk = bytesLeft;
-                    if (srcPhys + chunk > PS2_SCRATCHPAD_SIZE)
-                        chunk = PS2_SCRATCHPAD_SIZE - srcPhys;
-                    if (chunk == 0)
-                        break;
-                    processVIF0Data(m_scratchpad + srcPhys, chunk);
-                    bytesLeft -= chunk;
-                    srcPhys += chunk;
-                }
-            }
-            else
-            {
-                uint32_t bytesLeft = sizeBytes;
-                while (bytesLeft > 0)
-                {
-                    if (srcPhys >= PS2_RAM_SIZE)
-                        srcPhys = 0;
-                    uint32_t chunk = bytesLeft;
-                    if (srcPhys + chunk > PS2_RAM_SIZE)
-                        chunk = PS2_RAM_SIZE - srcPhys;
-                    if (chunk == 0)
-                        break;
-                    processVIF0Data(srcPhys, chunk);
-                    bytesLeft -= chunk;
-                    srcPhys += chunk;
-                }
-            }
-        }
-    }
-    m_pendingVif0Transfers.clear();
-
-    const bool hadVif1 = !m_pendingVif1Transfers.empty();
-    if (m_gsWorkerEnabled)
-        collectForWorker(m_pendingVif1Transfers, true);
-    for (auto &p : m_pendingVif1Transfers)
-    {
-        if (!p.chainData.empty())
-        {
-            processVIF1Data(p.chainData.data(), static_cast<uint32_t>(p.chainData.size()));
-        }
-        else if (p.qwc > 0)
-        {
-            uint32_t srcPhys = 0;
-            const uint64_t bytes64 = static_cast<uint64_t>(p.qwc) * 16ull;
-            uint32_t sizeBytes = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
-            try
-            {
-                srcPhys = translateAddress(p.srcAddr);
-            }
-            catch (const std::exception &)
-            {
-                continue;
-            }
-            if (p.fromScratchpad)
-            {
-                uint32_t bytesLeft = sizeBytes;
-                while (bytesLeft > 0)
-                {
-                    if (srcPhys >= PS2_SCRATCHPAD_SIZE)
-                        srcPhys = 0;
-                    uint32_t chunk = bytesLeft;
-                    if (srcPhys + chunk > PS2_SCRATCHPAD_SIZE)
-                        chunk = PS2_SCRATCHPAD_SIZE - srcPhys;
-                    if (chunk == 0)
-                        break;
-                    processVIF1Data(m_scratchpad + srcPhys, chunk);
-                    bytesLeft -= chunk;
-                    srcPhys += chunk;
-                }
-            }
-            else
-            {
-                uint32_t bytesLeft = sizeBytes;
-                while (bytesLeft > 0)
-                {
-                    if (srcPhys >= PS2_RAM_SIZE)
-                        srcPhys = 0;
-                    uint32_t chunk = bytesLeft;
-                    if (srcPhys + chunk > PS2_RAM_SIZE)
-                        chunk = PS2_RAM_SIZE - srcPhys;
-                    if (chunk == 0)
-                        break;
-                    processVIF1Data(srcPhys, chunk);
-                    bytesLeft -= chunk;
-                    srcPhys += chunk;
-                }
-            }
-        }
-    }
-    m_pendingVif1Transfers.clear();
-
-    if (m_gsWorkerEnabled)
-    {
-        if (!workerJob.items.empty())
-        {
-            workerJob.fbrst = m_fbrstProvider ? m_fbrstProvider() : 0u;
-            size_t traceBytes = 0;
-            for (const GsWorkerItem &item : workerJob.items)
-                traceBytes += item.data.size();
-            gsWorkerTrace("kick", traceBytes);
-            {
-                std::lock_guard<std::mutex> lock(m_gsWorkerMutex);
-                m_gsWorkerJobs.push_back(std::move(workerJob));
-            }
-            m_gsWorkerCv.notify_one();
-        }
-    }
-    else if (m_gifArbiter)
-        m_gifArbiter->drain();
-
-    static constexpr uint32_t GIF_CHANNEL = 0x1000A000;
-    static constexpr uint32_t VIF0_CHANNEL = 0x10008000;
-    static constexpr uint32_t VIF1_CHANNEL = 0x10009000;
-    static constexpr uint32_t D_STAT = 0x1000E010u;
-
-    auto raiseDStatChannel = [&](uint32_t channelBit)
-    {
-        uint32_t dstat = m_ioRegisters.count(D_STAT) ? m_ioRegisters[D_STAT] : 0u;
-        dstat |= (1u << channelBit);
-
-        const uint32_t status = dstat & 0x3FFu;
-        const uint32_t mask = (dstat >> 16) & 0x3FFu;
-        if ((status & mask) != 0u)
-            dstat |= (1u << 31);
-        else
-            dstat &= ~(1u << 31);
-
-        m_ioRegisters[D_STAT] = dstat;
-    };
-
-    if (hadGif)
-    {
-        raiseDStatChannel(2u); // GIF channel
-        queueCompletedDmacCause(2u);
-        m_ioRegisters[GIF_CHANNEL + 0x00] &= ~0x100u;
-        m_ioRegisters[GIF_CHANNEL + 0x20] = 0;
-    }
-    if (hadVif0)
-    {
-        raiseDStatChannel(0u); // VIF0 channel
-        queueCompletedDmacCause(0u);
-        m_ioRegisters[VIF0_CHANNEL + 0x00] &= ~0x100u;
-        m_ioRegisters[VIF0_CHANNEL + 0x20] = 0;
-    }
-    if (hadVif1)
-    {
-        raiseDStatChannel(1u); // VIF1 channel
-        queueCompletedDmacCause(1u);
-        m_ioRegisters[VIF1_CHANNEL + 0x00] &= ~0x100u;
-        m_ioRegisters[VIF1_CHANNEL + 0x20] = 0;
-    }
-}
-
-// GOW-Port: copy a normal-mode transfer's bytes at kick time (same wrap rules as the inline loops; GIF
-// drops a trailing partial quadword, VIF1 keeps it).
-void PS2Memory::appendTransferBytes(const PendingTransfer &transfer, bool vif1, std::vector<uint8_t> &out) const
-{
-    if (transfer.qwc == 0u)
-        return;
-    const uint64_t bytes64 = static_cast<uint64_t>(transfer.qwc) * 16ull;
-    uint32_t bytesLeft = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
-    uint32_t srcPhys = 0;
+    const bool scratch = isScratchpad(address);
+    uint32_t offset = 0u;
     try
     {
-        srcPhys = const_cast<PS2Memory *>(this)->translateAddress(transfer.srcAddr);
+        offset = translateAddress(address);
     }
     catch (const std::exception &)
     {
         return;
     }
-    const uint8_t *base = transfer.fromScratchpad ? m_scratchpad : m_rdram;
-    const uint32_t size = transfer.fromScratchpad ? PS2_SCRATCHPAD_SIZE : PS2_RAM_SIZE;
-    out.reserve(bytesLeft);
-    while (vif1 ? bytesLeft > 0u : bytesLeft >= 16u)
+    const uint8_t *base = scratch ? m_scratchpad : m_rdram;
+    const uint32_t size = scratch ? PS2_SCRATCHPAD_SIZE : PS2_RAM_SIZE;
+    while (bytes != 0u)
     {
-        if (srcPhys >= size)
-            srcPhys = 0;
-        uint32_t chunk = std::min(bytesLeft, size - srcPhys);
-        if (chunk == 0)
-            break;
-        out.insert(out.end(), base + srcPhys, base + srcPhys + chunk);
-        bytesLeft -= chunk;
-        srcPhys += chunk;
+        if (offset >= size)
+            offset = 0u;
+        const uint32_t chunk = std::min(bytes, size - offset);
+        out.insert(out.end(), base + offset, base + offset + chunk);
+        bytes -= chunk;
+        offset += chunk;
     }
+}
+
+void PS2Memory::sendDma(DmaPath path, uint32_t address, uint32_t qwc)
+{
+    std::vector<uint8_t> bytes;
+    appendGuestBytes(address, qwc * 16u, bytes);
+    deliverDma(path, std::move(bytes));
+}
+
+// The game's DMA tag list (source chain): {QWC, ID, IRQ, ADDR} tags; refe/cnt/next/ref/refs/call/ret/end, a call stack
+// of two. VIF tag lists with the tag-transfer bit (VIF1 CHCR bit 6, set by the game at boot) carry two VIFcodes in each
+// tag's upper half, which go to the VIF before the tag's data. An IRQ tag ends the list (sceDmaSend sets TIE).
+void PS2Memory::sendDmaChain(DmaPath path, uint32_t tagAddress)
+{
+    static constexpr int kMaxTags = 1 << 20;
+    const uint32_t chcr = path == DmaPath::Vif0 ? 0x10008000u : path == DmaPath::Vif1 ? 0x10009000u : 0x1000A000u;
+    const auto config = m_ioRegisters.find(chcr);
+    const bool transferTags = path != DmaPath::Gif && config != m_ioRegisters.end() && (config->second & 0x40u) != 0u;
+    uint32_t returnStack[2] = {};
+    uint32_t depth = 0u;
+    std::vector<uint8_t> bytes;
+    int tags = 0;
+    for (; tags < kMaxTags; ++tags)
+    {
+        const bool scratch = isScratchpad(tagAddress);
+        uint32_t offset = 0u;
+        try
+        {
+            offset = translateAddress(tagAddress);
+        }
+        catch (const std::exception &)
+        {
+            break;
+        }
+        const uint8_t *base = scratch ? m_scratchpad : m_rdram;
+        if (offset + 16u > (scratch ? PS2_SCRATCHPAD_SIZE : PS2_RAM_SIZE))
+            break;
+        uint64_t tag = 0u;
+        std::memcpy(&tag, base + offset, sizeof(tag));
+        const uint32_t qwc = static_cast<uint32_t>(tag & 0xFFFFu);
+        const uint32_t id = static_cast<uint32_t>((tag >> 28u) & 0x7u);
+        const bool irq = ((tag >> 31u) & 1u) != 0u;
+        const uint32_t addr = static_cast<uint32_t>((tag >> 32u) & 0x7FFFFFFFu);
+        if ((tag >> 63u) != 0u)
+        {
+            static unsigned sprTags = 0;
+            if (++sprTags <= 20u || sprTags % 100000u == 0u)
+                std::fprintf(stderr, "[dma] chain tag with SPR flag #%u path=%u id=%u addr=%08x qwc=%u\n", sprTags,
+                             static_cast<unsigned>(path), id, addr, qwc);
+        }
+
+        uint32_t data = tagAddress + 16u;
+        bool end = false;
+        switch (id)
+        {
+        case 0u: data = addr; tagAddress += 16u; end = true; break; // refe
+        case 1u: tagAddress = data + qwc * 16u; break;              // cnt
+        case 2u: tagAddress = addr; break;                          // next
+        case 3u: case 4u: data = addr; tagAddress += 16u; break;    // ref, refs
+        case 5u:                                                    // call
+            if (depth < 2u)
+                returnStack[depth++] = data + qwc * 16u;
+            tagAddress = addr;
+            break;
+        case 6u:                                                    // ret
+            if (depth > 0u)
+                tagAddress = returnStack[--depth];
+            else
+                end = true;
+            break;
+        default: end = true; break;                                 // end
+        }
+
+        {
+            static const double bigFrom = std::getenv("GOW_DMA_BIGTAGS") ? std::atof(std::getenv("GOW_DMA_BIGTAGS")) : -1.0;
+            static const auto bigT0 = std::chrono::steady_clock::now();
+            const bool bigTags = bigFrom >= 0.0 && std::chrono::duration<double>(std::chrono::steady_clock::now() - bigT0).count() >= bigFrom;
+            static unsigned bigCount = 0;
+            if (bigTags && path != DmaPath::Gif && qwc >= 200u && ++bigCount <= 400u)
+                std::fprintf(stderr, "[dma-big] path=%u id=%u data=%08x qwc=%u\n", static_cast<unsigned>(path), id, data, qwc);
+        }
+        {
+            // GOW_DMA_BLOCKDUMP=<file>:<from s>:<len s>: append [u32 addr][u32 qwc][data] of every VIF chain block.
+            static const char *spec = std::getenv("GOW_DMA_BLOCKDUMP");
+            if (spec && path != DmaPath::Gif && qwc >= 4u && qwc <= 2000u)
+            {
+                static std::string dumpPath; static double from = 0, len = 1;
+                static const auto t0 = g_gowProcStart;
+                static bool init = [&] { dumpPath = spec; size_t c2 = dumpPath.rfind(':'); size_t c1 = (c2 == std::string::npos || c2 == 0) ? std::string::npos : dumpPath.rfind(':', c2 - 1); if (c1 != std::string::npos && c1 > 1) { from = std::atof(dumpPath.c_str() + c1 + 1); len = std::atof(dumpPath.c_str() + c2 + 1); dumpPath.resize(c1); } return true; }();
+                (void)init;
+                const double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+                if (now >= from && now < from + len && !isScratchpad(data) && (data & 0x01FFFFFFu) + qwc * 16u <= PS2_RAM_SIZE)
+                    if (FILE *df = std::fopen(dumpPath.c_str(), "ab"))
+                    {
+                        const uint32_t hdr[2] = {data, qwc};
+                        std::fwrite(hdr, 4, 2, df); std::fwrite(m_rdram + (data & 0x01FFFFFFu), 16, qwc, df); std::fclose(df);
+                    }
+            }
+        }
+
+        if (transferTags)
+            bytes.insert(bytes.end(), base + offset + 8u, base + offset + 16u);
+        if (qwc != 0u)
+            appendGuestBytes(data, qwc * 16u, bytes);
+        if (end || irq)
+            break;
+    }
+    if (tags >= kMaxTags)
+        std::fprintf(stderr, "[dma] chain on path %u stopped after %d tags at 0x%08x\n", static_cast<unsigned>(path), tags,
+                     tagAddress);
+    deliverDma(path, std::move(bytes));
+}
+
+// VIF0 packets are decoded now (VU0). VIF1 and GIF packets go to the GS worker in order (PS2X_GS_WORKER=1, the play
+// configuration), or are decoded now and the GIF paths drained.
+void PS2Memory::deliverDma(DmaPath path, std::vector<uint8_t> &&bytes)
+{
+    if (bytes.empty())
+        return;
+    m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
+    const uint32_t size = static_cast<uint32_t>(bytes.size());
+    if (path == DmaPath::Vif0)
+    {
+        processVIF0Data(bytes.data(), size);
+        return;
+    }
+    if (m_gsWorkerEnabled)
+    {
+        GsWorkerJob job;
+        job.fbrst = m_fbrstProvider ? m_fbrstProvider() : 0u;
+        job.items.push_back(GsWorkerItem{path == DmaPath::Vif1, std::move(bytes)});
+        gsWorkerTrace("kick", size);
+        {
+            std::lock_guard<std::mutex> lock(m_gsWorkerMutex);
+            m_gsWorkerJobs.push_back(std::move(job));
+        }
+        m_gsWorkerCv.notify_one();
+        return;
+    }
+    if (path == DmaPath::Vif1)
+    {
+        processVIF1Data(bytes.data(), size);
+    }
+    else
+    {
+        m_seenGifCopy = true;
+        m_gifCopyCount.fetch_add(1, std::memory_order_relaxed);
+        submitGifPacket(GifPathId::Path3, bytes.data(), size, false);
+    }
+    if (m_gifArbiter)
+        m_gifArbiter->drain();
 }
 
 // GOW-Port: PS2X_GS_WORKER_TRACE (see PS2Runtime::dispatchGuestBranch): worker kick/start/done times.
@@ -2522,289 +2024,6 @@ void PS2Memory::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
         m_gifPacketCallback(data, sizeBytes);
 }
 
-bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint32_t chcr)
-{
-    syncGsWorkerIfOtherThread("nativeGifImage");
-    static constexpr uint32_t GIF_CHANNEL = 0x1000A000u;
-    static constexpr uint32_t D_STAT = 0x1000E010u;
-    static constexpr uint32_t D_CTRL = 0x1000E000u;
-
-    // GOW-Port: una etiqueta/payload pendiente debe completarse por el parser PATH3.
-    if (!m_rdram || !m_gsVRAM || m_path3Masked || gs.hasPendingGIFPacket(GifPathId::Path3))
-        return false;
-    if (m_gifArbiter && !m_gifArbiter->empty())
-        return false;
-    if ((chcr & 0x100u) == 0u || ((chcr >> 2u) & 0x3u) != 1u)
-        return false;
-    if ((chcr & (1u << 7u)) != 0u || ((chcr >> 4u) & 0x3u) != 0u)
-        return false;
-
-    const auto dctrlIt = m_ioRegisters.find(D_CTRL);
-    if (dctrlIt != m_ioRegisters.end() && ((dctrlIt->second & 0x1u) == 0u))
-        return false;
-
-    auto resolveContiguous = [&](uint32_t guestAddr, uint32_t bytes, const uint8_t *&out) -> bool
-    {
-        try
-        {
-            const bool scratch = isScratchpad(guestAddr);
-            const uint32_t phys = translateAddress(guestAddr);
-            const uint8_t *base = scratch ? m_scratchpad : m_rdram;
-            const uint32_t limit = scratch ? PS2_SCRATCHPAD_SIZE : PS2_RAM_SIZE;
-            if (!base || phys > limit || bytes > limit - phys)
-                return false;
-            out = base + phys;
-            return true;
-        }
-        catch (const std::exception &)
-        {
-            return false;
-        }
-    };
-
-    auto loadDmaTagAt = [&](uint32_t guestAddr, DmaTagView &out) -> bool
-    {
-        const uint8_t *ptr = nullptr;
-        if (!resolveContiguous(guestAddr, 16u, ptr))
-            return false;
-        out = decodeDmaTag(loadScalar<uint64_t>(ptr, 0u, 16u, "native gif dma tag", guestAddr));
-        return true;
-    };
-
-    auto decodeSetupPayload = [&](const uint8_t *payload, uint64_t (&regs)[4]) -> bool
-    {
-        const uint64_t tagLo = loadScalar<uint64_t>(payload, 0u, 80u, "native gif setup tag", 0u);
-        const uint64_t tagHi = loadScalar<uint64_t>(payload, 8u, 80u, "native gif setup regs", 0u);
-        if (gifTagNloop(tagLo) != 4u ||
-            gifTagFlg(tagLo) != GIF_FMT_PACKED ||
-            gifTagNreg(tagLo) != 1u ||
-            (tagHi & 0xFull) != 0x0Eull)
-        {
-            return false;
-        }
-
-        static constexpr uint8_t kExpectedRegs[4] = {
-            GS_REG_BITBLTBUF,
-            GS_REG_TRXPOS,
-            GS_REG_TRXREG,
-            GS_REG_TRXDIR,
-        };
-
-        uint32_t offset = 16u;
-        for (uint32_t i = 0; i < 4u; ++i)
-        {
-            regs[i] = loadScalar<uint64_t>(payload, offset, 80u, "native gif setup value", 0u);
-            const uint64_t reg = loadScalar<uint64_t>(payload, offset + 8u, 80u, "native gif setup register", 0u);
-            if ((reg & 0xFFu) != kExpectedRegs[i])
-                return false;
-            offset += 16u;
-        }
-
-        const uint32_t trxdirMode = static_cast<uint32_t>(regs[3] & 0x3ull);
-        const uint32_t rrw = static_cast<uint32_t>(regs[2] & 0xFFFull);
-        const uint32_t rrh = static_cast<uint32_t>((regs[2] >> 32u) & 0xFFFull);
-        return trxdirMode == 0u && rrw != 0u && rrh != 0u;
-    };
-
-    DmaTagView setupTag{};
-    if (!loadDmaTagAt(tadr, setupTag) ||
-        setupTag.id != 1u ||
-        setupTag.qwc != 5u ||
-        setupTag.irq)
-    {
-        return false;
-    }
-
-    const uint8_t *setupPayload = nullptr;
-    const uint32_t setupPayloadAddr = tadr + 16u;
-    if (!resolveContiguous(setupPayloadAddr, 5u * 16u, setupPayload))
-        return false;
-
-    uint64_t setupRegs[4] = {};
-    if (!decodeSetupPayload(setupPayload, setupRegs))
-        return false;
-
-    uint32_t imageTagDmaAddr = setupPayloadAddr + 5u * 16u;
-    DmaTagView imageTagDma{};
-    if (!loadDmaTagAt(imageTagDmaAddr, imageTagDma) ||
-        imageTagDma.id != 1u ||
-        imageTagDma.qwc != 1u ||
-        imageTagDma.irq)
-    {
-        return false;
-    }
-
-    const uint8_t *imageGifTag = nullptr;
-    if (!resolveContiguous(imageTagDmaAddr + 16u, 16u, imageGifTag))
-        return false;
-
-    const uint64_t imageTagLo = loadScalar<uint64_t>(imageGifTag, 0u, 16u, "native gif image tag", imageTagDmaAddr + 16u);
-    // GOW-Port: el atajo acepta los mismos formatos de imagen que el frontend.
-    if (gifTagFlg(imageTagLo) != GIF_FMT_IMAGE && gifTagFlg(imageTagLo) != GIF_FMT_IMAGE2)
-        return false;
-
-    const uint32_t imageQwc = gifTagNloop(imageTagLo);
-    if (imageQwc == 0u)
-        return false;
-
-    const uint64_t imageBytes64 = static_cast<uint64_t>(imageQwc) * 16ull;
-    if (imageBytes64 > 0xFFFFFFFFull)
-        return false;
-    const uint32_t imageBytes = static_cast<uint32_t>(imageBytes64);
-
-    const uint32_t payloadTagAddr = imageTagDmaAddr + 32u;
-    DmaTagView payloadTag{};
-    if (!loadDmaTagAt(payloadTagAddr, payloadTag) ||
-        payloadTag.qwc != imageQwc ||
-        payloadTag.irq)
-    {
-        return false;
-    }
-
-    uint32_t imageDataAddr = 0u;
-    uint32_t finalTadr = payloadTagAddr;
-    uint32_t lastTagUpper = payloadTag.upper;
-    if (payloadTag.id == 3u || payloadTag.id == 4u)
-    {
-        imageDataAddr = payloadTag.addr;
-        const uint32_t terminalTagAddr = payloadTagAddr + 16u;
-        DmaTagView terminalTag{};
-        if (!loadDmaTagAt(terminalTagAddr, terminalTag) ||
-            terminalTag.qwc != 0u ||
-            terminalTag.irq ||
-            (terminalTag.id != 0u && terminalTag.id != 7u))
-        {
-            return false;
-        }
-        finalTadr = (terminalTag.id == 0u) ? (terminalTagAddr + 16u) : terminalTagAddr;
-        lastTagUpper = terminalTag.upper;
-    }
-    else if (payloadTag.id == 7u)
-    {
-        imageDataAddr = payloadTagAddr + 16u;
-        finalTadr = payloadTagAddr;
-    }
-    else
-    {
-        return false;
-    }
-
-    const uint8_t *imageData = nullptr;
-    if (!resolveContiguous(imageDataAddr, imageBytes, imageData))
-        return false;
-
-    m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
-    m_seenGifCopy = true;
-    m_gifCopyCount.fetch_add(1, std::memory_order_relaxed);
-    // GOW-Port: mantener los efectos de la GIFtag PACKED sin perder el atajo DMA de texturas.
-    const uint64_t setupGifTag = loadScalar<uint64_t>(setupPayload, 0u, 80u, "native gif setup tag", setupPayloadAddr);
-    gs.uploadImageNative(setupRegs[0], setupRegs[1], setupRegs[2], setupRegs[3], imageData, imageBytes, setupGifTag);
-
-    m_ioRegisters[GIF_CHANNEL + 0x30u] = finalTadr;
-    m_ioRegisters[GIF_CHANNEL + 0x40u] = 0u;
-    m_ioRegisters[GIF_CHANNEL + 0x50u] = 0u;
-    m_ioRegisters[GIF_CHANNEL + 0x00u] = ((chcr & 0x0000FFFFu) | (lastTagUpper << 16u)) & ~0x100u;
-    m_ioRegisters[GIF_CHANNEL + 0x20u] = 0u;
-
-    uint32_t dstat = m_ioRegisters.count(D_STAT) ? m_ioRegisters[D_STAT] : 0u;
-    dstat |= (1u << 2u);
-    const uint32_t status = dstat & 0x3FFu;
-    const uint32_t mask = (dstat >> 16u) & 0x3FFu;
-    if ((status & mask) != 0u)
-        dstat |= (1u << 31u);
-    else
-        dstat &= ~(1u << 31u);
-    m_ioRegisters[D_STAT] = dstat;
-    queueCompletedDmacCause(2u);
-    return true;
-}
-
-bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t chcr)
-{
-    syncGsWorkerIfOtherThread("nativeGifPacked");
-    static constexpr uint32_t GIF_CHANNEL = 0x1000A000u;
-    static constexpr uint32_t D_STAT = 0x1000E010u;
-    static constexpr uint32_t D_CTRL = 0x1000E000u;
-
-    if (!m_rdram || !m_gsVRAM || m_path3Masked)
-        return false;
-    if (m_gifArbiter && !m_gifArbiter->empty())
-        return false;
-    if ((chcr & 0x100u) == 0u || ((chcr >> 2u) & 0x3u) != 1u)
-        return false;
-    if ((chcr & (1u << 7u)) != 0u || ((chcr >> 4u) & 0x3u) != 0u)
-        return false;
-
-    const auto dctrlIt = m_ioRegisters.find(D_CTRL);
-    if (dctrlIt != m_ioRegisters.end() && ((dctrlIt->second & 0x1u) == 0u))
-        return false;
-
-    auto resolveContiguous = [&](uint32_t guestAddr, uint32_t bytes, const uint8_t *&out) -> bool
-    {
-        try
-        {
-            const bool scratch = isScratchpad(guestAddr);
-            const uint32_t phys = translateAddress(guestAddr);
-            const uint8_t *base = scratch ? m_scratchpad : m_rdram;
-            const uint32_t limit = scratch ? PS2_SCRATCHPAD_SIZE : PS2_RAM_SIZE;
-            if (!base || phys > limit || bytes > limit - phys)
-                return false;
-            out = base + phys;
-            return true;
-        }
-        catch (const std::exception &)
-        {
-            return false;
-        }
-    };
-
-    const uint8_t *tagPtr = nullptr;
-    if (!resolveContiguous(tadr, 16u, tagPtr))
-        return false;
-
-    const DmaTagView tag = decodeDmaTag(loadScalar<uint64_t>(tagPtr, 0u, 16u, "native packed gif dma tag", tadr));
-    if (tag.id != 7u || tag.qwc == 0u || tag.irq)
-        return false;
-
-    const uint64_t payloadBytes64 = static_cast<uint64_t>(tag.qwc) * 16ull;
-    if (payloadBytes64 > 0xFFFFFFFFull)
-        return false;
-    const uint32_t payloadBytes = static_cast<uint32_t>(payloadBytes64);
-
-    const uint8_t *payload = nullptr;
-    if (!resolveContiguous(tadr + 16u, payloadBytes, payload))
-        return false;
-    if (!gs.processNativePackedGIFPacket(payload, payloadBytes, GifPathId::Path3))
-        return false;
-
-    m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
-    m_seenGifCopy = true;
-    m_gifCopyCount.fetch_add(1, std::memory_order_relaxed);
-
-    m_ioRegisters[GIF_CHANNEL + 0x30u] = tadr;
-    m_ioRegisters[GIF_CHANNEL + 0x40u] = 0u;
-    m_ioRegisters[GIF_CHANNEL + 0x50u] = 0u;
-    m_ioRegisters[GIF_CHANNEL + 0x00u] = ((chcr & 0x0000FFFFu) | (tag.upper << 16u)) & ~0x100u;
-    m_ioRegisters[GIF_CHANNEL + 0x20u] = 0u;
-
-    uint32_t dstat = m_ioRegisters.count(D_STAT) ? m_ioRegisters[D_STAT] : 0u;
-    dstat |= (1u << 2u);
-    const uint32_t status = dstat & 0x3FFu;
-    const uint32_t mask = (dstat >> 16u) & 0x3FFu;
-    if ((status & mask) != 0u)
-        dstat |= (1u << 31u);
-    else
-        dstat &= ~(1u << 31u);
-    m_ioRegisters[D_STAT] = dstat;
-    queueCompletedDmacCause(2u);
-    return true;
-}
-
-int PS2Memory::pollDmaRegisters()
-{
-    return 0;
-}
-
 uint32_t PS2Memory::readIORegister(uint32_t address)
 {
     syncGsWorkerFor(address);
@@ -2894,16 +2113,6 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
 
     if (address >= 0x10000000 && address < 0x10010000)
     {
-        if (address >= 0x10008000 && address < 0x1000F000)
-        {
-            if ((address & 0xFF) == 0x00)
-            {
-                uint32_t channelStatus = m_ioRegisters[address] & ~0x100u;
-                m_ioRegisters[address] = channelStatus;
-                return channelStatus;
-            }
-        }
-
         if (address >= 0x10000200 && address < 0x10000300)
         {
             return 0;

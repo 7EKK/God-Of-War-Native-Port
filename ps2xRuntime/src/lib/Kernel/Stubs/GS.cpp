@@ -656,13 +656,9 @@ namespace ps2_stubs
 
         std::memcpy(pkt + headerQwc * 16u, src, totalImageBytes);
 
-        constexpr uint32_t GIF_CHANNEL = 0x1000A000;
-        constexpr uint32_t CHCR_STR_MODE0 = 0x101u;
         auto &mem = runtime->memory();
-        mem.writeIORegister(GIF_CHANNEL + 0x10u, pktAddr);
-        mem.writeIORegister(GIF_CHANNEL + 0x20u, totalQwc & 0xFFFFu);
-        mem.writeIORegister(GIF_CHANNEL + 0x00u, CHCR_STR_MODE0);
-        mem.processPendingTransfers();
+        mem.sendDma(PS2Memory::DmaPath::Gif, pktAddr, totalQwc);
+        ps2_syscalls::dispatchDmacHandlersForCause(rdram, runtime, 2u);
         runtime->guestFree(pktAddr);
 
         setReturnS32(ctx, 0);
@@ -737,13 +733,9 @@ namespace ps2_stubs
         q[8] = 1ULL;
         q[9] = 0x53ULL;
 
-        constexpr uint32_t GIF_CHANNEL = 0x1000A000;
-        constexpr uint32_t CHCR_STR_MODE0 = 0x101u;
         auto &mem = runtime->memory();
-        mem.writeIORegister(GIF_CHANNEL + 0x10u, pktAddr);
-        mem.writeIORegister(GIF_CHANNEL + 0x20u, 5u);
-        mem.writeIORegister(GIF_CHANNEL + 0x00u, CHCR_STR_MODE0);
-        mem.processPendingTransfers();
+        mem.sendDma(PS2Memory::DmaPath::Gif, pktAddr, 5u);
+        ps2_syscalls::dispatchDmacHandlersForCause(rdram, runtime, 2u);
         mem.syncGsWorker(); // GOW-Port: the readback needs the queued transfer done
 
         ps2TraceGuestRangeWrite(rdram, dstAddr, totalImageBytes, "sceGsExecStoreImage", ctx);
@@ -835,13 +827,9 @@ namespace ps2_stubs
                         q[13] = 0x5cULL;
                         q[14] = bgcolor;
                         q[15] = 0x5fULL;
-                        constexpr uint32_t GIF_CHANNEL = 0x1000A000;
-                        constexpr uint32_t CHCR_STR_MODE0 = 0x101u;
                         auto &mem = runtime->memory();
-                        mem.writeIORegister(GIF_CHANNEL + 0x10u, pktAddr);
-                        mem.writeIORegister(GIF_CHANNEL + 0x20u, 8u);
-                        mem.writeIORegister(GIF_CHANNEL + 0x00u, CHCR_STR_MODE0);
-                        mem.processPendingTransfers();
+                        mem.sendDma(PS2Memory::DmaPath::Gif, pktAddr, 8u);
+                        ps2_syscalls::dispatchDmacHandlersForCause(rdram, runtime, 2u);
                         runtime->guestFree(pktAddr);
                     }
                     else
@@ -1215,71 +1203,12 @@ namespace ps2_stubs
         setReturnS32(ctx, static_cast<int32_t>(which ^ 1u));
     }
 
+    // GOW-Port: DMA transfers are complete when they are sent (docs/native-port.md, step 2); the paths are idle once the
+    // GS worker has consumed the queued packets.
     void sceGsSyncPath(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        int32_t mode = static_cast<int32_t>(getRegU32(ctx, 4));
-        auto &mem = runtime->memory();
-
-        if (mode == 0)
-        {
-            mem.processPendingTransfers();
-
-            uint32_t count = 0;
-            constexpr uint32_t kTimeout = 0x1000000;
-
-            while ((mem.readIORegister(0x10009000) & 0x100) != 0)
-            {
-                if (++count > kTimeout)
-                {
-                    setReturnS32(ctx, -1);
-                    return;
-                }
-            }
-
-            while ((mem.readIORegister(0x1000A000) & 0x100) != 0)
-            {
-                if (++count > kTimeout)
-                {
-                    setReturnS32(ctx, -1);
-                    return;
-                }
-            }
-
-            while ((mem.readIORegister(0x10003C00) & 0x1F000003) != 0)
-            {
-                if (++count > kTimeout)
-                {
-                    setReturnS32(ctx, -1);
-                    return;
-                }
-            }
-
-            while ((mem.readIORegister(0x10003020) & 0xC00) != 0)
-            {
-                if (++count > kTimeout)
-                {
-                    setReturnS32(ctx, -1);
-                    return;
-                }
-            }
-
-            setReturnS32(ctx, 0);
-        }
-        else
-        {
-            uint32_t result = 0;
-
-            if ((mem.readIORegister(0x10009000) & 0x100) != 0)
-                result |= 1;
-            if ((mem.readIORegister(0x1000A000) & 0x100) != 0)
-                result |= 2;
-            if ((mem.readIORegister(0x10003C00) & 0x1F000003) != 0)
-                result |= 4;
-            if ((mem.readIORegister(0x10003020) & 0xC00) != 0)
-                result |= 0x10;
-
-            setReturnS32(ctx, result);
-        }
+        runtime->memory().syncGsWorker("sceGsSyncPath");
+        setReturnS32(ctx, 0);
     }
 
     void sceGsSyncV(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)

@@ -24,6 +24,10 @@ static bool gowUsePcsx2Vu1(); // GOW_VU1_PCSX2=1, defined before PS2Runtime::ini
 #include <fstream>
 #include <algorithm>
 #include <array>
+#include <map>
+#include <mutex>
+#include <string>
+#include <tuple>
 #include <cstring>
 #include <limits>
 #include <chrono>
@@ -2198,8 +2202,36 @@ uint32_t PS2Runtime::reserveAsyncCallbackStack(uint32_t size, uint32_t alignment
     return top - 0x10u;
 }
 
+// GOW-Port: GOW_IO_HIST=<s>: hardware register accesses by (op, address, pc, ra) for <s> seconds after the first
+// access, then printed once. Shows which game code still talks to hardware (docs/native-port.md).
+static void ioHist(const char *op, uint32_t vaddr, const R5900Context *ctx)
+{
+    static const double window = [] { const char *v = std::getenv("GOW_IO_HIST"); return v ? std::atof(v) : 0.0; }();
+    if (window <= 0.0)
+        return;
+    static std::mutex mutex;
+    static std::map<std::tuple<std::string, uint32_t, uint32_t, uint32_t>, uint64_t> counts;
+    static std::chrono::steady_clock::time_point start;
+    static bool done = false;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (done)
+        return;
+    const auto now = std::chrono::steady_clock::now();
+    if (counts.empty())
+        start = now;
+    ++counts[{op, vaddr, ctx ? ctx->pc : 0u, ctx ? static_cast<uint32_t>(_mm_cvtsi128_si32(ctx->r[31])) : 0u}];
+    if (std::chrono::duration<double>(now - start).count() < window)
+        return;
+    done = true;
+    for (const auto &[key, count] : counts)
+        std::fprintf(stderr, "[io-hist] %s %08x pc=%08x ra=%08x n=%llu\n", std::get<0>(key).c_str(), std::get<1>(key),
+                     std::get<2>(key), std::get<3>(key), static_cast<unsigned long long>(count));
+    std::fflush(stderr);
+}
+
 uint8_t PS2Runtime::Load8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 {
+    ioHist("R8", vaddr, ctx);
     try
     {
         return m_memory.read8(vaddr);
@@ -2213,6 +2245,7 @@ uint8_t PS2Runtime::Load8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 
 uint16_t PS2Runtime::Load16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 {
+    ioHist("R16", vaddr, ctx);
     try
     {
         return m_memory.read16(vaddr);
@@ -2226,6 +2259,7 @@ uint16_t PS2Runtime::Load16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 
 uint32_t PS2Runtime::Load32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 {
+    ioHist("R32", vaddr, ctx);
     try
     {
         return m_memory.read32(vaddr);
@@ -2239,6 +2273,7 @@ uint32_t PS2Runtime::Load32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 
 uint64_t PS2Runtime::Load64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 {
+    ioHist("R64", vaddr, ctx);
     try
     {
         return m_memory.read64(vaddr);
@@ -2252,6 +2287,7 @@ uint64_t PS2Runtime::Load64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 
 __m128i PS2Runtime::Load128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 {
+    ioHist("R128", vaddr, ctx);
     try
     {
         return m_memory.read128(vaddr);
@@ -2265,6 +2301,7 @@ __m128i PS2Runtime::Load128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 
 void PS2Runtime::Store8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint8_t value)
 {
+    ioHist("W8", vaddr, ctx);
     ps2TraceGuestWrite(rdram, vaddr, 1u, value, 0u, "WRITE8", ctx);
     try
     {
@@ -2278,6 +2315,7 @@ void PS2Runtime::Store8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint8
 
 void PS2Runtime::Store16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint16_t value)
 {
+    ioHist("W16", vaddr, ctx);
     ps2TraceGuestWrite(rdram, vaddr, 2u, value, 0u, "WRITE16", ctx);
     try
     {
@@ -2291,6 +2329,7 @@ void PS2Runtime::Store16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint
 
 void PS2Runtime::Store32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint32_t value)
 {
+    ioHist("W32", vaddr, ctx);
     ps2TraceGuestWrite(rdram, vaddr, 4u, value, 0u, "WRITE32", ctx);
     try
     {
@@ -2305,6 +2344,7 @@ void PS2Runtime::Store32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint
 
 void PS2Runtime::Store64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint64_t value)
 {
+    ioHist("W64", vaddr, ctx);
     ps2TraceGuestWrite(rdram, vaddr, 8u, value, 0u, "WRITE64", ctx);
     try
     {
@@ -2318,6 +2358,7 @@ void PS2Runtime::Store64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint
 
 void PS2Runtime::Store128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, __m128i value)
 {
+    ioHist("W128", vaddr, ctx);
     alignas(16) uint64_t _parts[2];
     _mm_storeu_si128(reinterpret_cast<__m128i *>(_parts), value);
     ps2TraceGuestWrite(rdram, vaddr, 16u, _parts[0], _parts[1], "WRITE128", ctx);
@@ -2331,38 +2372,17 @@ void PS2Runtime::Store128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, __m
     }
 }
 
+// The recompiler turns the store sequence D_PCR, D_STAT, GIF TADR, GIF CHCR (a GIF chain kick) into this call: the chain
+// goes to the GIF path natively and its DMA-end handlers run (D_PCR / D_STAT values are not kept: there is no DMAC).
 void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
-                                         R5900Context *ctx,
-                                         uint32_t dPcrValue,
-                                         uint32_t dStatValue,
+                                         R5900Context *,
+                                         uint32_t,
+                                         uint32_t,
                                          uint32_t tadr,
-                                         uint32_t chcr)
+                                         uint32_t)
 {
-    constexpr uint32_t D_PCR = 0x1000E020u;
-    constexpr uint32_t D_STAT = 0x1000E010u;
-    constexpr uint32_t GIF_TADR = 0x1000A030u;
-    constexpr uint32_t GIF_CHCR = 0x1000A000u;
-
-    ps2TraceGuestWrite(rdram, D_PCR, 4u, dPcrValue, 0u, "WRITE32", ctx);
-    m_memory.writeIORegister(D_PCR, dPcrValue);
-    ps2TraceGuestWrite(rdram, D_STAT, 4u, dStatValue, 0u, "WRITE32", ctx);
-    m_memory.writeIORegister(D_STAT, dStatValue);
-    ps2TraceGuestWrite(rdram, GIF_TADR, 4u, tadr, 0u, "WRITE32", ctx);
-    m_memory.writeIORegister(GIF_TADR, tadr);
-    ps2TraceGuestWrite(rdram, GIF_CHCR, 4u, chcr, 0u, "WRITE32", ctx);
-    if (m_memory.tryProcessNativeGifImageUploadChain(m_gs, tadr, chcr))
-    {
-        drainCompletedDmacHandlers(rdram);
-        return;
-    }
-    if (m_memory.tryProcessNativeGifPackedChain(m_gs, tadr, chcr))
-    {
-        drainCompletedDmacHandlers(rdram);
-        return;
-    }
-    m_memory.writeIORegister(GIF_CHCR, chcr);
-    m_memory.processPendingTransfers();
-    drainCompletedDmacHandlers(rdram);
+    m_memory.sendDmaChain(PS2Memory::DmaPath::Gif, tadr);
+    ps2_syscalls::dispatchDmacHandlersForCause(rdram, this, 2u);
 }
 
 void PS2Runtime::requestStop()

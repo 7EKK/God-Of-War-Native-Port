@@ -340,13 +340,19 @@ public:
     void submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool drainImmediately = true, bool path2DirectHl = false);
     void processGIFPacket(uint32_t srcPhysAddr, uint32_t qwCount);
     void processGIFPacket(const uint8_t *data, uint32_t sizeBytes);
-    bool tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint32_t chcr);
-    bool tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t chcr);
     void processVIF0Data(uint32_t srcPhysAddr, uint32_t sizeBytes);
     void processVIF0Data(const uint8_t *data, uint32_t sizeBytes);
     void processVIF1Data(uint32_t srcPhysAddr, uint32_t sizeBytes);
     void processVIF1Data(const uint8_t *data, uint32_t sizeBytes);
-    void processPendingTransfers();
+    // GOW-Port: native DMA data path (docs/native-port.md, step 2). There is no DMA controller model: a send hands the
+    // game's packets straight to their consumer (VIF0 / VIF1 packets to the VIF decoder -> VU0 / VU1, GIF packets to
+    // the GIF paths -> GS), either a flat buffer or the game's DMA tag list walked in place, and is complete when it
+    // returns (with the GS worker the bytes are copied now and consumed on the worker, in order). The caller signals
+    // completion (DMA-end handlers): sceDmaSend dispatches them itself, game code that starts a channel through its
+    // CHCR gets them after the store (consumeCompletedDmacCauses).
+    enum class DmaPath : uint8_t { Vif0, Vif1, Gif };
+    void sendDma(DmaPath path, uint32_t address, uint32_t qwc);
+    void sendDmaChain(DmaPath path, uint32_t tagAddress);
     std::vector<uint32_t> consumeCompletedDmacCauses();
 
     // GOW-Port: PS2X_GS_WORKER=1 runs VIF1/GIF DMA processing (VIF1 -> VU1 -> PATH1/2/3 -> GS) on a worker
@@ -362,8 +368,6 @@ public:
     // Called on the worker after a job that left GS CSR SIGNAL/FINISH set, so an idle EE scheduler wakes
     // up and delivers the GS interrupt now instead of at its next timer/VBlank deadline.
     void setGsWorkerWake(std::function<void()> wake) { m_gsWorkerWake = std::move(wake); }
-
-    int pollDmaRegisters();
 
     // Track code modifications for self-modifying code
     void registerCodeRegion(uint32_t start, uint32_t end);
@@ -431,17 +435,6 @@ public:
     void submitVif1DirectPayload(const uint8_t *data, uint32_t sizeBytes, bool directHl);
     std::vector<std::vector<uint8_t>> m_path3MaskedFifo;
 
-    struct PendingTransfer
-    {
-        bool fromScratchpad = false;
-        uint32_t srcAddr = 0;
-        uint32_t qwc = 0;
-        std::vector<uint8_t> chainData;
-    };
-    std::vector<PendingTransfer> m_pendingGifTransfers;
-    std::vector<PendingTransfer> m_pendingVif0Transfers;
-    std::vector<PendingTransfer> m_pendingVif1Transfers;
-
     struct GsWorkerItem
     {
         bool vif1 = false; // false: GIF PATH3
@@ -456,7 +449,8 @@ public:
     void syncGsWorkerFor(uint32_t address);
     void syncGsWorkerIfOtherThread(const char *site);
     void waitGsWorkerIdle(const char *site, uint32_t address);
-    void appendTransferBytes(const PendingTransfer &transfer, bool zeroTailAllowed, std::vector<uint8_t> &out) const;
+    void appendGuestBytes(uint32_t address, uint32_t bytes, std::vector<uint8_t> &out);
+    void deliverDma(DmaPath path, std::vector<uint8_t> &&bytes);
     void runGsWorkerJob(GsWorkerJob &job);
     void gsWorkerLoop();
     bool m_gsWorkerEnabled = false;
@@ -513,7 +507,6 @@ public:
     uint32_t *m_gifStatSlot = nullptr;
     bool tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr);
     bool processScratchpadChain(uint32_t channelBase, uint32_t chcr); // GOW-Port
-    void completeDmacChannel(uint32_t channelBase, uint32_t cause);
     void queueCompletedDmacCause(uint32_t cause);
 };
 
