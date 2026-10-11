@@ -977,47 +977,25 @@ static inline void Ps2SetGprLow64(R5900Context *ctx, int reg, __m128i new_low)
     }
 }
 
-#define SET_GPR_U32(ctx_ptr, reg_idx, val)                                \
-    do                                                                    \
-    {                                                                     \
-        if ((reg_idx) != 0)                                               \
-        {                                                                 \
-            __m128i _newVal = _mm_cvtsi64_si128((int64_t)(int32_t)(val)); \
-                                                                          \
-            Ps2SetGprLow64(ctx_ptr, reg_idx, _newVal);                    \
-        }                                                                 \
-    } while (0)
+// Writes the low 64 bits of a GPR with one scalar store; the upper 64 bits stay untouched in memory.
+// Same result as Ps2SetGprLow64 without the 128-bit load/merge/store (and without NEON lane inserts on ARM).
+// Little-endian hosts only (x86-64, AArch64), like the rest of the runtime.
+static inline void Ps2SetGprLow64Bits(R5900Context *ctx, int reg, uint64_t new_low)
+{
+    if (reg != 0)
+    {
+        std::memcpy(reinterpret_cast<unsigned char *>(&ctx->r[reg]), &new_low, sizeof(new_low));
+    }
+}
+
+#define SET_GPR_U32(ctx_ptr, reg_idx, val) do { if ((reg_idx) != 0) Ps2SetGprLow64Bits(ctx_ptr, (reg_idx), static_cast<uint64_t>((int64_t)(int32_t)(val))); } while (0)
 
 
-#define SET_GPR_ZE32(ctx_ptr, reg_idx, val)                               \
-    do                                                                    \
-    {                                                                     \
-        if ((reg_idx) != 0)                                               \
-        {                                                                 \
-            __m128i _newVal = _mm_cvtsi64_si128((int64_t)(uint32_t)(val)); \
-            Ps2SetGprLow64(ctx_ptr, reg_idx, _newVal);                    \
-        }                                                                 \
-    } while (0)
+#define SET_GPR_ZE32(ctx_ptr, reg_idx, val) do { if ((reg_idx) != 0) Ps2SetGprLow64Bits(ctx_ptr, (reg_idx), static_cast<uint64_t>((int64_t)(uint32_t)(val))); } while (0)
 
-#define SET_GPR_S32(ctx_ptr, reg_idx, val)                                \
-    do                                                                    \
-    {                                                                     \
-        if ((reg_idx) != 0)                                               \
-        {                                                                 \
-            __m128i _newVal = _mm_cvtsi64_si128((int64_t)(int32_t)(val)); \
-            Ps2SetGprLow64(ctx_ptr, reg_idx, _newVal);                    \
-        }                                                                 \
-    } while (0)
+#define SET_GPR_S32(ctx_ptr, reg_idx, val) do { if ((reg_idx) != 0) Ps2SetGprLow64Bits(ctx_ptr, (reg_idx), static_cast<uint64_t>((int64_t)(int32_t)(val))); } while (0)
 
-#define SET_GPR_U64(ctx_ptr, reg_idx, val)                       \
-    do                                                           \
-    {                                                            \
-        if ((reg_idx) != 0)                                      \
-        {                                                        \
-            __m128i _newVal = _mm_cvtsi64_si128((int64_t)(val)); \
-            Ps2SetGprLow64(ctx_ptr, reg_idx, _newVal);           \
-        }                                                        \
-    } while (0)
+#define SET_GPR_U64(ctx_ptr, reg_idx, val) do { if ((reg_idx) != 0) Ps2SetGprLow64Bits(ctx_ptr, (reg_idx), static_cast<uint64_t>((int64_t)(val))); } while (0)
 
 #define SET_GPR_S64(ctx_ptr, reg_idx, val) SET_GPR_U64(ctx_ptr, reg_idx, val)
 

@@ -1834,6 +1834,8 @@ void EeScheduler::processDueDeadlines()
 
             if (now < pacingDeadline)
             {
+                // GOW-Port: sleeping until the host VBlank/timer deadline is waiting, not EE work (ee_ms).
+                ps2_perf::Scope waitPerf(ps2_perf::Bucket::GuestWait);
                 m_eventCv.wait_until(lock, pacingDeadline, [this]()
                                      { return !m_events.empty() ||
                                               m_stopRequested.load(std::memory_order_acquire); });
@@ -1881,6 +1883,24 @@ void EeScheduler::processDueDeadlines()
         {
             if (scheduled.event.type == EeEventType::VBlankStart)
             {
+                // GOW-Port: GOW_VBLANK_DIAG=1 prints the guest VBlank rate and how far the host deadline lags
+                // behind the wall clock (a lag means VBlanks are cycle-paced and can run faster than 60 Hz).
+                static const bool vblankDiag = std::getenv("GOW_VBLANK_DIAG") != nullptr;
+                if (vblankDiag)
+                {
+                    static uint64_t count = 0;
+                    static auto windowStart = std::chrono::steady_clock::now();
+                    ++count;
+                    const auto wall = std::chrono::steady_clock::now();
+                    const double secs = std::chrono::duration<double>(wall - windowStart).count();
+                    if (secs >= 5.0)
+                    {
+                        std::fprintf(stderr, "[vblank-diag] rate=%.2f Hz host_lag_ms=%.1f\n", count / secs,
+                                     std::chrono::duration<double, std::milli>(wall - scheduled.hostDeadline).count());
+                        count = 0;
+                        windowStart = wall;
+                    }
+                }
                 scheduleEvent(scheduled.deadlineCycle + kVBlankDurationCycles,
                               scheduled.hostDeadline + kVBlankDuration,
                               EeEvent{EeEventType::VBlankEnd, 0, m_vsyncTick + 1u});
