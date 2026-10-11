@@ -500,6 +500,14 @@ public:
     };
 
     std::array<EeTimer, 4> m_eeTimers{};
+    // EE cycles accounted since the timers were last advanced. advanceEeTimers runs at every EE checkpoint;
+    // it only does the per-timer math once the pending cycles reach m_eeTimerBudget (the cycles until the
+    // next timer interrupt), and timer register accesses flush first, so the guest sees exactly the same
+    // counts and interrupts as with per-call advancing (the tick math carries its remainder exactly).
+    uint64_t m_eeTimerPendingCycles = 0;
+    uint64_t m_eeTimerBudget = 0;
+    uint32_t stepEeTimers(uint64_t eeCycles) noexcept;
+    void flushEeTimers() noexcept;
     // GOW-Port: GIF_STAT en m_ioRegisters (los elementos de unordered_map no se mueven; solo clear() lo
     // invalida). advanceEeTimers lo usa ~1,5 millones de veces por segundo.
     uint32_t *m_gifStatSlot = nullptr;
