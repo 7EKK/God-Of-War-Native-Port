@@ -107,8 +107,9 @@ namespace GSSharedPresent
 {
     void CaptureHostContext()
     {
+        // GOW-Port: on by default; PS2X_GS_DIRECT_PRESENT=0 keeps the RAM (readback + upload) presentation.
         const char *value = std::getenv("PS2X_GS_DIRECT_PRESENT");
-        if (!value || *value != '1')
+        if (value && *value == '0')
             return;
         const HDC dc = wglGetCurrentDC();
         const HGLRC context = wglGetCurrentContext();
@@ -293,6 +294,61 @@ namespace GSGL
         slot.frame.displayFbp = displayFbp;
         slot.frame.sourceFbp = sourceFbp;
         slot.frame.usedPreferred = usedPreferred;
+        slot.frame.blank = blank;
+        slot.frame.vsyncTick = vsyncTick;
+        slot.produced = gl.FenceSync(kSyncGpuCommandsComplete, 0u);
+        gl.Flush();
+        return true;
+    }
+
+    bool PublishSharedTexture(const Api &gl, GLuint source, uint32_t width, uint32_t height, uint64_t renderSequence,
+                              uint32_t displayFbp, uint32_t sourceFbp, uint64_t vsyncTick)
+    {
+        std::lock_guard<std::mutex> lock(s_sharedMutex);
+        if (!s_sharedActive.load(std::memory_order_relaxed) || !gl.CopyImageSubData)
+            return false;
+        SharedSlot *available = nullptr;
+        for (SharedSlot &slot : s_sharedSlots)
+        {
+            if (slot.reading || !completed(gl, slot.produced) || !completed(gl, slot.consumed))
+                continue;
+            if (!available || slot.frame.sequence < available->frame.sequence)
+                available = &slot;
+        }
+        if (!available)
+            return false;
+        SharedSlot &slot = *available;
+        if (slot.produced)
+            gl.DeleteSync(slot.produced);
+        if (slot.consumed)
+            gl.DeleteSync(slot.consumed);
+        slot.produced = slot.consumed = nullptr;
+        slot.frame.hashValid = false;
+        const bool blank = source == 0u || width == 0u || height == 0u;
+        if (!blank)
+        {
+            if (!slot.frame.texture)
+                gl.GenTextures(1, &slot.frame.texture);
+            if (slot.frame.width != width || slot.frame.height != height)
+            {
+                gl.BindTexture(kTexture2D, slot.frame.texture);
+                gl.TexImage2D(kTexture2D, 0, kRgba8, width, height, 0, kRgba, kUnsignedByte, nullptr);
+                gl.TexParameteri(kTexture2D, kTextureMinFilter, kLinear);
+                gl.TexParameteri(kTexture2D, kTextureMagFilter, kLinear);
+                gl.TexParameteri(kTexture2D, kTextureWrapS, kClampToEdge);
+                gl.TexParameteri(kTexture2D, kTextureWrapT, kClampToEdge);
+                gl.BindTexture(kTexture2D, 0u);
+                slot.frame.width = width;
+                slot.frame.height = height;
+            }
+            gl.CopyImageSubData(source, kTexture2D, 0, 0, 0, 0, slot.frame.texture, kTexture2D, 0, 0, 0, 0,
+                                static_cast<GLsizei>(width), static_cast<GLsizei>(height), 1);
+        }
+        slot.frame.sequence = ++s_sharedSequence;
+        slot.frame.renderSequence = renderSequence;
+        slot.frame.displayFbp = displayFbp;
+        slot.frame.sourceFbp = sourceFbp;
+        slot.frame.usedPreferred = false;
         slot.frame.blank = blank;
         slot.frame.vsyncTick = vsyncTick;
         slot.produced = gl.FenceSync(kSyncGpuCommandsComplete, 0u);
@@ -494,6 +550,8 @@ namespace GSGL
             load(a.BlitFramebuffer, "glBlitFramebuffer", hwMissing);
             load(a.PixelStorei, "glPixelStorei", hwMissing);
             load(a.TextureBarrier, "glTextureBarrier", hwMissing);
+            std::string copyMissing;
+            load(a.CopyImageSubData, "glCopyImageSubData", copyMissing);
             a.hwRaster = graphicsMissing.empty() && hwMissing.empty();
             if (!a.hwRaster)
                 std::fprintf(stderr, "[gs-gl] classic raster entry points missing: %s (graphics=%d)\n", hwMissing.c_str(), graphicsMissing.empty() ? 1 : 0);
@@ -565,6 +623,7 @@ namespace GSGL
     bool PublishShared(const Api &, GLuint, uint32_t, uint32_t, uint64_t,
                        uint32_t, uint32_t, bool, bool, uint64_t, GLuint, GLint) { return false; }
     bool SharedAvailable(const Api &) { return false; }
+    bool PublishSharedTexture(const Api &, GLuint, uint32_t, uint32_t, uint64_t, uint32_t, uint32_t, uint64_t) { return false; }
     void DestroyShared(const Api &) {}
     Context::~Context() = default;
 

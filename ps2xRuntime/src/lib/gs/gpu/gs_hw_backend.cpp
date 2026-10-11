@@ -4,6 +4,7 @@
 #include "runtime/gs/gs_swizzle.h"
 #include "gs_gl.h"
 #include "../gs_gpu_helpers.h"
+#include "runtime/gs/gs_shared_present.h"
 
 #include <algorithm>
 #include <chrono>
@@ -1765,6 +1766,14 @@ void GSHwBackend::Initialize(uint8_t *vram, uint32_t vramSize)
     m_impl->vram = vram;
     m_impl->vramSize = vramSize;
     m_impl->cpu.Initialize(vram, vramSize);
+    // GOW-Port: create the GL context now (on the GS worker, while the host context is released) so that it can share
+    // objects with the host window and UsesSharedPresentation() is known right after Initialize.
+    m_impl->ensure();
+}
+
+bool GSHwBackend::UsesSharedPresentation() const
+{
+    return m_impl->context.Shared() && GSSharedPresent::Active();
 }
 
 void GSHwBackend::Reset()
@@ -1918,15 +1927,21 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
     uint32_t fbp1, fbw1, dbx1, dby1, w1, h1, fbp2, fbw2, dbx2, dby2, w2, h2;
     const bool ok1 = enable1 && decode(true, request.dispfb1, request.display1, fbp1, fbw1, dbx1, dby1, w1, h1);
     const bool ok2 = enable2 && decode(true, request.dispfb2, request.display2, fbp2, fbw2, dbx2, dby2, w2, h2);
+    const bool shared = !request.forceReadback && d.context.Shared() && GSSharedPresent::Active();
     if (!ok1 && !ok2)
+    {
+        if (shared)
+            GSGL::PublishSharedTexture(d.gl(), 0u, 0u, 0u, d.presentCount, 0u, 0u, request.vsyncTick);
         return frame;
+    }
     const uint32_t fbp = ok1 ? fbp1 : fbp2, w = ok1 ? w1 : w2, h = ok1 ? h1 : h2;
     frame.displayFbp = fbp;
     frame.sourceFbp = fbp;
     const uint32_t outW = static_cast<uint32_t>(std::ceil(w * d.scale)), outH = static_cast<uint32_t>(std::ceil(h * d.scale));
     frame.width = outW;
     frame.height = outH;
-    frame.pixels.assign(static_cast<size_t>(outW) * outH * 4u, 0u);
+    if (!shared)
+        frame.pixels.assign(static_cast<size_t>(outW) * outH * 4u, 0u);
     const Api &g = d.gl();
     g.PixelStorei(kPackAlignment, 1);
     static const int depthDumpAt = std::getenv("GOW_GS_HW_DEPTHDUMP") ? std::atoi(std::getenv("GOW_GS_HW_DEPTHDUMP")) : -1;
@@ -1963,6 +1978,9 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
         g.GenTextures(1, &d.presentTex);
         g.BindTexture(kTexture2D, d.presentTex);
         g.TexImage2D(kTexture2D, 0, static_cast<GLint>(kRgba8), outW, outH, 0, kRgba, kUnsignedByte, nullptr);
+        // complete without mipmaps (glCopyImageSubData refuses incomplete textures)
+        g.TexParameteri(kTexture2D, kTextureMinFilter, kLinear);
+        g.TexParameteri(kTexture2D, kTextureMagFilter, kLinear);
         g.BindFramebuffer(kFramebuffer, d.presentFbo);
         g.FramebufferTexture2D(kFramebuffer, kColorAttachment0, kTexture2D, d.presentTex, 0);
         d.presentW = outW;
@@ -2022,9 +2040,18 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
     else
         drawCircuit(fbp, ok1 ? request.dispfb1 : request.dispfb2, ok1 ? dbx1 : dbx2, ok1 ? dby1 : dby2, false);
     g.BindVertexArray(d.vao);
+    // the displayed image is opaque: force alpha to 1 on the GPU (the host draws it with blending)
+    g.ColorMask(kFalse, kFalse, kFalse, kTrue);
+    g.ClearColor(0.f, 0.f, 0.f, 1.f);
+    g.Clear(kColorBufferBit);
+    g.ColorMask(kTrue, kTrue, kTrue, kTrue);
+    if (shared)
+    {
+        // GOW-Port: zero-copy presentation: GPU copy into a texture shared with the host window, no pixels returned.
+        GSGL::PublishSharedTexture(g, d.presentTex, outW, outH, d.presentCount, fbp, fbp, request.vsyncTick);
+        return PresentationFrame{};
+    }
     g.ReadPixels(0, 0, outW, outH, kRgba, kUnsignedByte, frame.pixels.data());
-    for (size_t i = 3; i < frame.pixels.size(); i += 4)
-        frame.pixels[i] = 255;
     // the frontend packs presentation rows with a fixed 640 pixel stride
     if (frame.width < 640u)
     {

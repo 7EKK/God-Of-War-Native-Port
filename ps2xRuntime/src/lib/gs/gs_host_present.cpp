@@ -32,12 +32,19 @@ in vec4 fragColor;
 uniform sampler2D texture0;
 uniform vec2 srcSize;
 uniform float sharpen;
+uniform float plain;
 out vec4 finalColor;
 
 vec4 tex(vec2 uv) { return texture(texture0, uv); }
 
 void main()
 {
+    if (plain > 0.5)
+    {
+        // frame at least as large as its window rectangle: one bilinear tap, no bicubic / sharpen
+        finalColor = vec4(texture(texture0, fragTexCoord).rgb, 1.0);
+        return;
+    }
     vec2 pos = fragTexCoord * srcSize;
     vec2 center = floor(pos - 0.5) + 0.5;
     vec2 f = pos - center;
@@ -72,7 +79,7 @@ void main()
 )GLSL";
 
     Shader g_scaler{};
-    int g_scalerSrcSize = -1, g_scalerSharpen = -1;
+    int g_scalerSrcSize = -1, g_scalerSharpen = -1, g_scalerPlain = -1;
     bool g_scalerTried = false;
 
     bool scalerEnabled()
@@ -93,6 +100,7 @@ void main()
                 {
                     g_scalerSrcSize = GetShaderLocation(g_scaler, "srcSize");
                     g_scalerSharpen = GetShaderLocation(g_scaler, "sharpen");
+                    g_scalerPlain = GetShaderLocation(g_scaler, "plain");
                 }
                 else
                 {
@@ -111,7 +119,8 @@ void GSHostPresentation::captureHostContext()
         return;
     started = true;
     const char *setting = std::getenv("PS2X_GS_DIRECT_PRESENT");
-    captureRequested = setting && *setting == '1';
+    // GOW-Port: shared GL textures (no readback/upload) by default; PS2X_GS_DIRECT_PRESENT=0 forces RAM frames.
+    captureRequested = !(setting && *setting == '0');
     if (captureRequested)
         GSSharedPresent::CaptureHostContext();
 }
@@ -161,7 +170,7 @@ GSHostPresentation::View GSHostPresentation::prepare(GS &gs, uint64_t vsyncTick)
     const bool shared = gs.usesSharedPresentation() && GSSharedPresent::Active();
     if (!modeKnown || shared != sharedMode)
     {
-        std::fprintf(stderr, "[gs-present] host mode: %s\n", shared ? "shared texture (opt-in)" : "RAM frames");
+        std::fprintf(stderr, "[gs-present] host mode: %s\n", shared ? "shared texture" : "RAM frames");
         std::fflush(stderr);
         modeKnown = true;
         sharedMode = shared;
@@ -302,13 +311,20 @@ GSHostPresentation::View GSHostPresentation::renderFrame(GS &gs, uint64_t vsyncT
                                 (screenHeight - destinationHeight) * 0.5f,
                                 destinationWidth, destinationHeight};
     // GOW-Port: textura del PBO con filas en orden; no invertir source.height.
+    // The bicubic + sharpen pass only helps when the frame is magnified; a frame at least as large as its window
+    // rectangle (PS2X_GS_HW_SCALE high enough, or a small window) is drawn with one linear tap (same shader, "plain").
+    const bool magnified = sourceWidth < destinationWidth || sourceHeight < destinationHeight;
     Shader *scaler = scalerShader();
+    if (!scaler)
+        SetTextureFilter(selected.texture, TEXTURE_FILTER_BILINEAR);
     if (scaler)
     {
         const float size[2] = {sourceWidth, sourceHeight};
         static const float sharpen = [] { const char *v = std::getenv("GOW_SHARPEN"); return v ? static_cast<float>(std::atof(v)) : 0.5f; }();
         SetShaderValue(*scaler, g_scalerSrcSize, size, SHADER_UNIFORM_VEC2);
         SetShaderValue(*scaler, g_scalerSharpen, &sharpen, SHADER_UNIFORM_FLOAT);
+        const float plain = magnified ? 0.0f : 1.0f;
+        SetShaderValue(*scaler, g_scalerPlain, &plain, SHADER_UNIFORM_FLOAT);
         SetTextureFilter(selected.texture, TEXTURE_FILTER_BILINEAR);
         BeginShaderMode(*scaler);
     }
@@ -317,6 +333,19 @@ GSHostPresentation::View GSHostPresentation::renderFrame(GS &gs, uint64_t vsyncT
         EndShaderMode();
     if (overlay)
         overlay();
+    // GOW-Port: GOW_HOST_SHOT=<n>: at host frame n write the window's back buffer (what is about to be shown) to
+    // host_shot.png in the working directory, plus the frame / window sizes, to check presentation without a desktop grab.
+    static const long hostShotAt = [] { const char *v = std::getenv("GOW_HOST_SHOT"); return v ? std::atol(v) : -1L; }();
+    static long hostFrame = 0;
+    if (hostShotAt >= 0 && hostFrame++ == hostShotAt)
+    {
+        rlDrawRenderBatchActive();
+        Image screen = LoadImageFromScreen();
+        ExportImage(screen, "host_shot.png");
+        UnloadImage(screen);
+        std::fprintf(stderr, "[gs-present] host_shot frame=%ux%u tex=%u window=%dx%d shared=%d scaler=%d\n", selected.width, selected.height,
+                     selected.texture.id, GetScreenWidth(), GetScreenHeight(), selected.shared ? 1 : 0, scaler ? 1 : 0);
+    }
     {
         ps2_perf::Scope perf(ps2_perf::Bucket::HostWait);
         EndDrawing();

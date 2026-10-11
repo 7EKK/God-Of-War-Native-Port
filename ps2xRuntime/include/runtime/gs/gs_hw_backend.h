@@ -26,6 +26,9 @@ public:
     void TextureFlush() override;
     void Sync(GSSyncReason reason) override;
     PresentationFrame Present(const GSPresentationRequest &request) override;
+    // GOW-Port: true when the GL context shares objects with the host window: Present then publishes the composed
+    // frame as a shared texture (GPU copy) and returns no pixels; forceReadback requests (captures) still read back.
+    bool UsesSharedPresentation() const override;
 
     bool ClearFramebuffer(const GSContext &context, uint32_t rgba) override;
     uint32_t ConsumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes) override;

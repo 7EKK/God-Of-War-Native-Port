@@ -171,6 +171,7 @@ namespace GSGL
         void (*ReadPixels)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *) = nullptr;
         void (*BlitFramebuffer)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum) = nullptr;
         void (*TextureBarrier)() = nullptr;
+        void (*CopyImageSubData)(GLuint, GLenum, GLint, GLint, GLint, GLint, GLuint, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei) = nullptr;
         void (*PixelStorei)(GLenum, GLint) = nullptr;
         bool hwRaster = false;
         void (*MaxShaderCompilerThreads)(GLuint) = nullptr;
@@ -205,6 +206,10 @@ namespace GSGL
     bool PublishShared(const Api &gl, GLuint buffer, uint32_t width, uint32_t height, uint64_t renderSequence,
                        uint32_t displayFbp, uint32_t sourceFbp, bool usedPreferred, bool blank,
                        uint64_t vsyncTick, GLuint hashProgram, GLint hashLocation);
+    // GOW-Port: GPU copy of a finished presentation texture into a shared slot the host draws (no CPU round trip).
+    // source == 0 publishes a blank frame (PMODE off).
+    bool PublishSharedTexture(const Api &gl, GLuint source, uint32_t width, uint32_t height, uint64_t renderSequence,
+                              uint32_t displayFbp, uint32_t sourceFbp, uint64_t vsyncTick);
     bool SharedAvailable(const Api &gl);
     void DestroyShared(const Api &gl);
 }
