@@ -44,6 +44,9 @@ struct VU1NativeAccess
     static void callLower(VU1NativeCtx &n, uint32_t pc, uint32_t lower, uint32_t upper);
     static void callUpper(VU1NativeCtx &n, uint32_t pc, uint32_t upper);
     static void xgkick(VU1NativeCtx &n, uint32_t qwordAddress);
+    // GOW_VU1N_RECORD / GOW_VU1N_REPLAY (bit-exact A/B of generator changes, see ps2_vu1_native.inl)
+    static void recordReplay(VU1Interpreter &vu, void *context, uint32_t maxCycles);
+    static uint64_t silentNativeHash(VU1Interpreter &vu, void *context);
 };
 
 struct VU1Interpreter::NativeState
@@ -69,15 +72,23 @@ struct VU1Interpreter::NativeState
 #pragma fp_contract(off)
 #endif
 
+#if defined(_MSC_VER)
+#define VU1N_INLINE __forceinline
+#define VU1N_NOINLINE __declspec(noinline)
+#else
+#define VU1N_INLINE inline __attribute__((always_inline))
+#define VU1N_NOINLINE __attribute__((noinline))
+#endif
+
 namespace vu1n
 {
-    inline uint64_t fnv(uint64_t h, uint32_t w)
+    VU1N_INLINE uint64_t fnv(uint64_t h, uint32_t w)
     {
         for (int i = 0; i < 4; ++i)
             h = (h ^ ((w >> (i * 8)) & 0xFFu)) * 1099511628211ull;
         return h;
     }
-    inline uint64_t blockKey(uint32_t pc, const uint32_t *words, uint32_t count)
+    VU1N_INLINE uint64_t blockKey(uint32_t pc, const uint32_t *words, uint32_t count)
     {
         uint64_t h = fnv(1469598103934665603ull, pc);
         for (uint32_t i = 0; i < count; ++i)
@@ -88,10 +99,10 @@ namespace vu1n
     // lane masks: DEST field order (x = 8) -> SSE blend/movemask order (x = 1).
     constexpr int kRev4[16] = {0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15};
 
-    inline __m128 ld(const VU1State &s, int r) { return _mm_loadu_ps(s.vf[r]); }
+    VU1N_INLINE __m128 ld(const VU1State &s, int r) { return _mm_loadu_ps(s.vf[r]); }
     // Operand view of a register: Inf/NaN (exponent 255) act as +-FLT_MAX, as in the exact engine's normalizeOperand. The register
     // itself keeps its raw bits (integer data travels through VF registers).
-    inline __m128 nrm(__m128 v)
+    VU1N_INLINE __m128 nrm(__m128 v)
     {
         const __m128i b = _mm_castps_si128(v);
         const __m128i expMask = _mm_set1_epi32(0x7F800000);
@@ -99,10 +110,10 @@ namespace vu1n
         const __m128i fixed = _mm_or_si128(_mm_and_si128(b, _mm_set1_epi32(static_cast<int>(0x80000000u))), _mm_set1_epi32(0x7F7FFFFF));
         return _mm_castsi128_ps(_mm_blendv_epi8(b, fixed, bad));
     }
-    inline __m128 ldn(const VU1State &s, int r) { return nrm(_mm_loadu_ps(s.vf[r])); }
-    inline __m128 ldAcc(const VU1State &s) { return _mm_loadu_ps(s.acc); }
+    VU1N_INLINE __m128 ldn(const VU1State &s, int r) { return nrm(_mm_loadu_ps(s.vf[r])); }
+    VU1N_INLINE __m128 ldAcc(const VU1State &s) { return _mm_loadu_ps(s.acc); }
     template <int M> // M in SSE order
-    inline void stf(float *p, __m128 v)
+    VU1N_INLINE void stf(float *p, __m128 v)
     {
         if constexpr (M == 15)
             _mm_storeu_ps(p, v);
@@ -110,14 +121,14 @@ namespace vu1n
             _mm_storeu_ps(p, _mm_blend_ps(_mm_loadu_ps(p), v, M));
     }
     template <int C>
-    inline __m128 bc(__m128 v) { return _mm_shuffle_ps(v, v, _MM_SHUFFLE(C, C, C, C)); }
-    inline __m128 clampv(__m128 r)
+    VU1N_INLINE __m128 bc(__m128 v) { return _mm_shuffle_ps(v, v, _MM_SHUFFLE(C, C, C, C)); }
+    VU1N_INLINE __m128 clampv(__m128 r)
     {
         return _mm_min_ps(_mm_max_ps(r, _mm_set1_ps(-FLT_MAX)), _mm_set1_ps(FLT_MAX));
     }
     // MAC register after an FMAC: per-lane zero / sign / overflow (underflow is not tracked); lanes outside DEST are 0.
     template <int M>
-    inline void macFlags(VU1State &s, __m128 r)
+    VU1N_INLINE void macFlags(VU1State &s, __m128 r)
     {
         const __m128i b = _mm_castps_si128(r);
         const __m128i expMask = _mm_set1_epi32(0x7F800000);
@@ -127,19 +138,11 @@ namespace vu1n
         s.mac = static_cast<uint32_t>(kRev4[z] | (kRev4[sg] << 4) | (kRev4[o] << 12));
     }
     // acc +/- a*b. The exact engine evaluates it unrounded, so a product that overflows float can still cancel against ACC:
-    // when the float result is not finite the lanes are redone in double.
+    // when the float result is not finite the lanes are redone in double (out of line: rare, and keeping it out lets the
+    // fast path inline into the generated blocks; MSVC x64 passes __m128 arguments of a real call through memory).
     template <bool Sub>
-    inline __m128 madd(__m128 acc, __m128 a, __m128 b)
+    VU1N_NOINLINE __m128 maddWide(__m128 acc, __m128 a, __m128 b)
     {
-        const __m128 p = _mm_mul_ps(a, b);
-        __m128 r = Sub ? _mm_sub_ps(acc, p) : _mm_add_ps(acc, p);
-        // round-toward-zero saturates an overflowing product to FLT_MAX instead of infinity: any lane at/over FLT_MAX in the product
-        // or the sum needs the wide evaluation
-        const __m128i lim = _mm_set1_epi32(0x7F7FFFFE);
-        const __m128i hot = _mm_or_si128(_mm_cmpgt_epi32(_mm_and_si128(_mm_castps_si128(p), _mm_set1_epi32(0x7FFFFFFF)), lim),
-                                         _mm_cmpgt_epi32(_mm_and_si128(_mm_castps_si128(r), _mm_set1_epi32(0x7FFFFFFF)), lim));
-        if (_mm_movemask_epi8(hot) == 0)
-            return r;
         alignas(16) float fa[4], fb[4], fc[4], out[4];
         _mm_store_ps(fa, acc);
         _mm_store_ps(fb, a);
@@ -152,8 +155,22 @@ namespace vu1n
         }
         return _mm_load_ps(out);
     }
+    template <bool Sub>
+    VU1N_INLINE __m128 madd(__m128 acc, __m128 a, __m128 b)
+    {
+        const __m128 p = _mm_mul_ps(a, b);
+        __m128 r = Sub ? _mm_sub_ps(acc, p) : _mm_add_ps(acc, p);
+        // round-toward-zero saturates an overflowing product to FLT_MAX instead of infinity: any lane at/over FLT_MAX in the product
+        // or the sum needs the wide evaluation
+        const __m128i lim = _mm_set1_epi32(0x7F7FFFFE);
+        const __m128i hot = _mm_or_si128(_mm_cmpgt_epi32(_mm_and_si128(_mm_castps_si128(p), _mm_set1_epi32(0x7FFFFFFF)), lim),
+                                         _mm_cmpgt_epi32(_mm_and_si128(_mm_castps_si128(r), _mm_set1_epi32(0x7FFFFFFF)), lim));
+        if (_mm_movemask_epi8(hot) == 0)
+            return r;
+        return maddWide<Sub>(acc, a, b);
+    }
     template <int M>
-    inline uint32_t macVal(__m128 r)
+    VU1N_INLINE uint32_t macVal(__m128 r)
     {
         const __m128i b = _mm_castps_si128(r);
         const __m128i expMask = _mm_set1_epi32(0x7F800000);
@@ -164,7 +181,7 @@ namespace vu1n
         const int o = _mm_movemask_ps(_mm_castsi128_ps(_mm_or_si128(_mm_cmpeq_epi32(_mm_and_si128(b, expMask), expMask), big))) & M;
         return static_cast<uint32_t>(kRev4[z] | (kRev4[sg] << 4) | (kRev4[o] << 12));
     }
-    inline uint32_t clipVal(const VU1State &s, int fs, int ft, uint32_t prev)
+    VU1N_INLINE uint32_t clipVal(const VU1State &s, int fs, int ft, uint32_t prev)
     {
         alignas(16) float v[4], t[4];
         _mm_store_ps(v, ldn(s, fs));
@@ -179,33 +196,33 @@ namespace vu1n
         if (v[2] < -w) f |= 0x20u;
         return ((prev << 6) | f) & 0xFFFFFFu;
     }
-    inline float qOperand(const VU1State &s) { return s.q; }
+    VU1N_INLINE float qOperand(const VU1State &s) { return s.q; }
 
     // --- integer / memory helpers -------------------------------------------------------------------------------
-    inline uint32_t qaddr(const VU1NativeCtx &n, int32_t qw) { return (static_cast<uint32_t>(qw) * 16u) & n.mask; }
-    inline __m128 ldq(const VU1NativeCtx &n, uint32_t addr) { return _mm_loadu_ps(reinterpret_cast<const float *>(n.data + addr)); }
+    VU1N_INLINE uint32_t qaddr(const VU1NativeCtx &n, int32_t qw) { return (static_cast<uint32_t>(qw) * 16u) & n.mask; }
+    VU1N_INLINE __m128 ldq(const VU1NativeCtx &n, uint32_t addr) { return _mm_loadu_ps(reinterpret_cast<const float *>(n.data + addr)); }
     template <int M>
-    inline void stq(VU1NativeCtx &n, uint32_t addr, __m128 v) { stf<M>(reinterpret_cast<float *>(n.data + addr), v); }
-    inline int32_t sx16(int32_t v) { return static_cast<int16_t>(v); }
-    inline int32_t ldWord(const VU1NativeCtx &n, uint32_t addr, int comp)
+    VU1N_INLINE void stq(VU1NativeCtx &n, uint32_t addr, __m128 v) { stf<M>(reinterpret_cast<float *>(n.data + addr), v); }
+    VU1N_INLINE int32_t sx16(int32_t v) { return static_cast<int16_t>(v); }
+    VU1N_INLINE int32_t ldWord(const VU1NativeCtx &n, uint32_t addr, int comp)
     {
         uint32_t v;
         std::memcpy(&v, n.data + addr + comp * 4, 4);
         return static_cast<int16_t>(v & 0xFFFFu);
     }
-    inline void stWords(VU1NativeCtx &n, uint32_t addr, int32_t value, int destMask)
+    VU1N_INLINE void stWords(VU1NativeCtx &n, uint32_t addr, int32_t value, int destMask)
     {
         const uint32_t w = static_cast<uint16_t>(value & 0xFFFF);
         for (int c = 0; c < 4; ++c)
             if (destMask & (8 >> c))
                 std::memcpy(n.data + addr + c * 4, &w, 4);
     }
-    inline __m128 fromInt(int32_t v)
+    VU1N_INLINE __m128 fromInt(int32_t v)
     {
         const float f = [&] { float x; std::memcpy(&x, &v, 4); return x; }();
         return _mm_set1_ps(f);
     }
-    inline int32_t compBits(const VU1State &s, int reg, int comp)
+    VU1N_INLINE int32_t compBits(const VU1State &s, int reg, int comp)
     {
         uint32_t v;
         std::memcpy(&v, &s.vf[reg][comp], 4);
@@ -214,7 +231,7 @@ namespace vu1n
 
     // --- FMAC special ops ----------------------------------------------------------------------------------------
     template <int Shift, int M>
-    inline void itof(VU1State &s, int fs, int ft)
+    VU1N_INLINE void itof(VU1State &s, int fs, int ft)
     {
         const __m128 v = _mm_cvtepi32_ps(_mm_castps_si128(ld(s, fs))); // integer bits: raw
         __m128 r = v;
@@ -224,7 +241,7 @@ namespace vu1n
         stf<M>(s.vf[ft], r);
     }
     template <int Shift, int M>
-    inline void ftoi(VU1State &s, int fs, int ft)
+    VU1N_INLINE void ftoi(VU1State &s, int fs, int ft)
     {
         __m128 v = ldn(s, fs);
         constexpr float scale = Shift == 0 ? 1.0f : Shift == 4 ? 16.0f : Shift == 12 ? 4096.0f : 32768.0f;
@@ -236,11 +253,11 @@ namespace vu1n
         stf<M>(s.vf[ft], _mm_castsi128_ps(i));
     }
     template <int M>
-    inline void absOp(VU1State &s, int fs, int ft)
+    VU1N_INLINE void absOp(VU1State &s, int fs, int ft)
     {
         stf<M>(s.vf[ft], _mm_and_ps(ldn(s, fs), _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF))));
     }
-    inline void clipOp(VU1State &s, int fs, int ft)
+    VU1N_INLINE void clipOp(VU1State &s, int fs, int ft)
     {
         const float *v = s.vf[fs];
         const float w = std::fabs(s.vf[ft][3]);
@@ -255,7 +272,7 @@ namespace vu1n
     }
 
     // --- Q unit --------------------------------------------------------------------------------------------------
-    inline float qnorm(float x)
+    VU1N_INLINE float qnorm(float x)
     {
         uint32_t b;
         std::memcpy(&b, &x, 4);
@@ -265,7 +282,7 @@ namespace vu1n
         std::memcpy(&x, &b, 4);
         return x;
     }
-    inline float qfinish(float x)
+    VU1N_INLINE float qfinish(float x)
     {
         uint32_t b;
         std::memcpy(&b, &x, 4);
@@ -275,7 +292,7 @@ namespace vu1n
         std::memcpy(&x, &b, 4);
         return x;
     }
-    inline void divOp(VU1State &s, int fs, int fsf, int ft, int ftf)
+    VU1N_INLINE void divOp(VU1State &s, int fs, int fsf, int ft, int ftf)
     {
         const float num = qnorm(s.vf[fs][fsf]), den = qnorm(s.vf[ft][ftf]);
         float r;
@@ -285,8 +302,8 @@ namespace vu1n
             r = num / den;
         s.q = qfinish(r);
     }
-    inline void sqrtOp(VU1State &s, int ft, int ftf) { s.q = qfinish(std::sqrt(std::fabs(qnorm(s.vf[ft][ftf])))); }
-    inline void rsqrtOp(VU1State &s, int fs, int fsf, int ft, int ftf)
+    VU1N_INLINE void sqrtOp(VU1State &s, int ft, int ftf) { s.q = qfinish(std::sqrt(std::fabs(qnorm(s.vf[ft][ftf])))); }
+    VU1N_INLINE void rsqrtOp(VU1State &s, int fs, int fsf, int ft, int ftf)
     {
         const float num = qnorm(s.vf[fs][fsf]);
         const float den = std::sqrt(std::fabs(qnorm(s.vf[ft][ftf])));
@@ -296,6 +313,95 @@ namespace vu1n
         else
             r = std::signbit(num) ? -FLT_MAX : FLT_MAX;
         s.q = qfinish(r);
+    }
+
+    // --- register-file-in-locals variants (generated blocks keep VF/VI/ACC/Q/I in C++ locals; same semantics as above) ---
+    inline uint32_t qa(uint32_t mask, int32_t qw) { return (static_cast<uint32_t>(qw) * 16u) & mask; }
+    inline __m128 ldm(const uint8_t *mem, uint32_t addr) { return _mm_loadu_ps(reinterpret_cast<const float *>(mem + addr)); }
+    template <int M>
+    inline void stm(uint8_t *mem, uint32_t addr, __m128 v) { stf<M>(reinterpret_cast<float *>(mem + addr), v); }
+    inline int32_t ldWordm(const uint8_t *mem, uint32_t addr, int comp)
+    {
+        uint32_t v;
+        std::memcpy(&v, mem + addr + comp * 4, 4);
+        return static_cast<int16_t>(v & 0xFFFFu);
+    }
+    inline void stWordsm(uint8_t *mem, uint32_t addr, int32_t value, int destMask)
+    {
+        const uint32_t w = static_cast<uint16_t>(value & 0xFFFF);
+        for (int c = 0; c < 4; ++c)
+            if (destMask & (8 >> c))
+                std::memcpy(mem + addr + c * 4, &w, 4);
+    }
+    template <int C> // raw lane (bits preserved)
+    inline float lane(__m128 v)
+    {
+        uint32_t b = static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_castps_si128(_mm_shuffle_ps(v, v, _MM_SHUFFLE(C, C, C, C)))));
+        float f;
+        std::memcpy(&f, &b, 4);
+        return f;
+    }
+    template <int C>
+    inline int32_t laneBits16(__m128 v)
+    {
+        const uint32_t b = static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_castps_si128(_mm_shuffle_ps(v, v, _MM_SHUFFLE(C, C, C, C)))));
+        return static_cast<int16_t>(b & 0xFFFFu);
+    }
+    template <int Shift>
+    inline __m128 itofv(__m128 raw)
+    {
+        const __m128 v = _mm_cvtepi32_ps(_mm_castps_si128(raw));
+        if constexpr (Shift == 4) return _mm_mul_ps(v, _mm_set1_ps(1.0f / 16.0f));
+        if constexpr (Shift == 12) return _mm_mul_ps(v, _mm_set1_ps(1.0f / 4096.0f));
+        if constexpr (Shift == 15) return _mm_mul_ps(v, _mm_set1_ps(1.0f / 32768.0f));
+        return v;
+    }
+    template <int Shift>
+    inline __m128 ftoiv(__m128 normalized)
+    {
+        constexpr float scale = Shift == 0 ? 1.0f : Shift == 4 ? 16.0f : Shift == 12 ? 4096.0f : 32768.0f;
+        const __m128 v = _mm_mul_ps(clampv(normalized), _mm_set1_ps(scale));
+        const __m128 big = _mm_cmpge_ps(v, _mm_set1_ps(2147483648.0f));
+        const __m128i i = _mm_cvttps_epi32(v);
+        return _mm_blendv_ps(_mm_castsi128_ps(i), _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF)), big);
+    }
+    inline __m128 absv(__m128 normalized) { return _mm_and_ps(normalized, _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF))); }
+    inline uint32_t clipValv(__m128 vn, __m128 tn, uint32_t prev)
+    {
+        alignas(16) float v[4], t[4];
+        _mm_store_ps(v, vn);
+        _mm_store_ps(t, tn);
+        const float w = std::fabs(t[3]);
+        uint32_t f = 0;
+        if (v[0] > w) f |= 0x01u;
+        if (v[0] < -w) f |= 0x02u;
+        if (v[1] > w) f |= 0x04u;
+        if (v[1] < -w) f |= 0x08u;
+        if (v[2] > w) f |= 0x10u;
+        if (v[2] < -w) f |= 0x20u;
+        return ((prev << 6) | f) & 0xFFFFFFu;
+    }
+    inline float divv(float fsRaw, float ftRaw)
+    {
+        const float num = qnorm(fsRaw), den = qnorm(ftRaw);
+        float r;
+        if (den == 0.0f)
+            r = (std::signbit(num) != std::signbit(den)) ? -FLT_MAX : FLT_MAX;
+        else
+            r = num / den;
+        return qfinish(r);
+    }
+    inline float sqrtv(float ftRaw) { return qfinish(std::sqrt(std::fabs(qnorm(ftRaw)))); }
+    inline float rsqrtv(float fsRaw, float ftRaw)
+    {
+        const float num = qnorm(fsRaw);
+        const float den = std::sqrt(std::fabs(qnorm(ftRaw)));
+        float r;
+        if (den != 0.0f)
+            r = num / den;
+        else
+            r = std::signbit(num) ? -FLT_MAX : FLT_MAX;
+        return qfinish(r);
     }
 }
 
