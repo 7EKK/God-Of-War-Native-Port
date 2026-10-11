@@ -82,7 +82,7 @@ void GSTextureStore::Reset()
 
 // ---- CLUT ------------------------------------------------------------------------------------------------------------
 
-void GSTextureStore::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
+void GSTextureStore::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut, const ClutSource &source)
 {
     const bool fourBit = isFourBitIndexedPsm(tex0.psm);
     if (!m_vram || (!fourBit && !isEightBitIndexedPsm(tex0.psm)))
@@ -105,22 +105,34 @@ void GSTextureStore::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut
     const uint32_t destinationBase = (static_cast<uint32_t>(tex0.csa) & (sixteenBit ? 0x1Fu : 0x0Fu)) << 4u;
     // CSM1 with a 32-bit 256-colour CLUT: entries below CSA*16 keep their previous values.
     const bool loadCsm1Suffix = tex0.csm == 0u && thirtyTwoBit && !fourBit;
-    for (uint32_t entry = loadCsm1Suffix ? destinationBase : 0u; entry < entryCount; ++entry)
+    const uint32_t first = loadCsm1Suffix ? destinationBase : 0u;
+    // CSM1: 16x16 (8x2 for 16 colours) block with bits 3 and 4 of the index swapped, in a 64 px wide buffer;
+    // CSM2: one line at (COU*16, COV) of a CBW-wide buffer
+    const uint32_t sourceWidth = tex0.csm == 0u ? 1u : (texclut.cbw != 0u ? static_cast<uint32_t>(texclut.cbw) : 1u);
+    std::array<uint16_t, 512> xy{};
+    const uint32_t count = entryCount - first;
+    for (uint32_t i = 0; i < count; ++i)
     {
-        uint32_t sourceX, sourceY, sourceWidth = 1u;
-        if (tex0.csm == 0u) // CSM1: 16x16 (8x2 for 16 colours) block with bits 3 and 4 of the index swapped
+        const uint32_t entry = first + i;
+        if (tex0.csm == 0u)
         {
             const uint32_t sourceIndex = swizzleClutIndexCSM1(entry);
-            sourceX = sourceIndex & 0x0Fu;
-            sourceY = sourceIndex >> 4u;
+            xy[i * 2u] = static_cast<uint16_t>(sourceIndex & 0x0Fu);
+            xy[i * 2u + 1u] = static_cast<uint16_t>(sourceIndex >> 4u);
         }
-        else // CSM2: one line at (COU*16, COV) of a CBW-wide buffer
+        else
         {
-            sourceWidth = texclut.cbw != 0u ? static_cast<uint32_t>(texclut.cbw) : 1u;
-            sourceX = (static_cast<uint32_t>(texclut.cou) << 4u) + entry;
-            sourceY = static_cast<uint32_t>(texclut.cov);
+            xy[i * 2u] = static_cast<uint16_t>((static_cast<uint32_t>(texclut.cou) << 4u) + entry);
+            xy[i * 2u + 1u] = static_cast<uint16_t>(texclut.cov);
         }
-        const uint32_t raw = readPixel(m_vram, tex0.cpsm, tex0.cbp, sourceWidth, sourceX, sourceY);
+    }
+    std::array<uint32_t, 256> words{};
+    if (!source || !source(tex0, sourceWidth, xy.data(), count, words.data()))
+        for (uint32_t i = 0; i < count; ++i)
+            words[i] = readPixel(m_vram, tex0.cpsm, tex0.cbp, sourceWidth, xy[i * 2u], xy[i * 2u + 1u]);
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        const uint32_t entry = first + i, raw = words[i];
         const uint32_t destination = (loadCsm1Suffix ? entry : destinationBase + entry) & (sixteenBit ? 0x1FFu : 0x0FFu);
         if (sixteenBit)
             m_clut[destination] = static_cast<uint16_t>(raw);
