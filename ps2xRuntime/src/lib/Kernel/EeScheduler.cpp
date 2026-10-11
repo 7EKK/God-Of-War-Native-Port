@@ -54,6 +54,7 @@ namespace
     constexpr uint64_t kVBlankPeriodCycles = microsecondsToEeCycles(16667u);
     constexpr uint64_t kVBlankDurationCycles = microsecondsToEeCycles(500u);
     constexpr uint64_t kAlarmTickCycles = microsecondsToEeCycles(kAlarmTickMicroseconds);
+    constexpr uint64_t kPaceSteps = 16u; // pacing points per field (see VBlankStart)
 
     template <typename Map>
     int allocatePositiveId(int &nextId, const Map &objects)
@@ -1907,6 +1908,15 @@ void EeScheduler::processDueDeadlines()
                 scheduleEvent(scheduled.deadlineCycle + kVBlankPeriodCycles,
                               scheduled.hostDeadline + kVBlankPeriod,
                               EeEvent{EeEventType::VBlankStart, 0, 0});
+                // GOW-Port: pacing points on the VBlank grid (cycle and host deadline in lockstep, no-op event). The
+                // guest clock may not run ahead of the wall clock by more than 1/16 field inside a frame: recompiled
+                // busy-waits (vid::WaitForDMAComplete polling the GS-done flag) otherwise burn guest cycles ~10x
+                // faster than real time, the FINISH and the game's frame-clock read land late in guest time and its
+                // frame step (>= 1 field) ran 3 % fast at 60 fps (docs/performance.md, game speed).
+                for (uint64_t k = 1; k < kPaceSteps; ++k)
+                    scheduleEvent(scheduled.deadlineCycle + kVBlankPeriodCycles * k / kPaceSteps,
+                                  scheduled.hostDeadline + kVBlankPeriod * k / kPaceSteps,
+                                  EeEvent{EeEventType::ExternalWake, 0xFFFFFFFFu, ~0ull});
             }
             processEvent(scheduled.event);
         }
