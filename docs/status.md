@@ -644,3 +644,12 @@ texture store, (6) LAST: extracted game files instead of the ISO. Port KIexster'
 (ps2recomp-game-speed.patch, GOW_DELTA_DIAG=1) before quoting fps again.
 Debug env for the GS renderer: see the "night 2" section (GOW_GS_HW_STATS/_DUMP/_DUMPAT/_RTDUMPAT/_ONLY/_NODEPTH...).
 Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); save test: `python -I tools/savetest.py`.
+
+## 2026-10-11 (evening): step 5 started, 3 agents in parallel
+- Measured where texture data comes from (`GOW_GS_TEXSRC=1`, ext c522a80; docs/native-port.md step 5): PSMT8/CT24 textures
+  are read from CT32 uploads, nothing from render-target readbacks or local copies.
+- Agents (each in its own ext worktree, branched from c522a80, merge into gow-usa-kl after checking):
+  agent/texstore (PS2Recomp-kl-present): native texture/CLUT store replacing GSCpuBackend in the renderer;
+  agent/gsregs (PS2Recomp-kl-vu): GS privileged registers (CSR/PMODE/DISPFB/DISPLAY) as native display state;
+  agent/speedmeter (PS2Recomp-kl-ee): KIexster's game-speed meter (GOW_DELTA_DIAG) + zones.py column.
+- Zones on main (port/texsrc/20261011_203828): slot 1 60 fps, slot 3 30 fps, both ok.
