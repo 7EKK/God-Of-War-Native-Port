@@ -13,6 +13,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <initializer_list>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -94,6 +96,10 @@ uniform float uZAliasMax;
 uniform sampler2D uDest;
 uniform int uZTex;     // 16/24/32: sampling a depth buffer (Z16/Z24/Z32 texture)
 uniform float uZMax;
+)";
+
+    // Shared by the draw shader and the CLUT fetch: a texel of a texture format read from a render target's memory.
+    const char *kReinterpretSource = R"(
 uniform usampler2D uTables;
 uniform sampler2D uRtColor;
 uniform sampler2D uPalette;
@@ -147,6 +153,9 @@ vec4 reinterpretTexel(ivec2 p)
     }
     return texelFetch(uPalette, ivec2(int(value & 255u), 0), 0);
 }
+)";
+
+    const char *kFsTail = R"(
 // Paletted textures (T8/T4 and their H variants): uTex holds the indices (R8, cached per VRAM upload), the colour comes
 // from uIdxPalette (256x1, cached per CLUT); filtering is done on the looked-up colours like the GS.
 uniform int uIndexed, uLinear;
@@ -370,6 +379,20 @@ void main()
 }
 )";
 
+    // CLUT fetch: output pixel i is the raw word of CLUT source pixel i (its x, y in uCoords) as the game's GS memory holds
+    // it, read from the render target that owns that memory through the reinterpreting fetch (kind 0: the word's bytes).
+    const char *kClutFsHead = R"(#version 430 core
+out vec4 oColor;
+)";
+    const char *kClutFsMain = R"(
+uniform usampler2D uCoords;
+void main()
+{
+    uvec2 c = texelFetch(uCoords, ivec2(int(gl_FragCoord.x), 0), 0).rg;
+    oColor = reinterpretTexel(ivec2(c));
+}
+)";
+
     // GS vertex as sent to the GPU.
     struct HwVertex
     {
@@ -397,7 +420,7 @@ void main()
         uint32_t pxW = 0, pxH = 0; // size in PS2 pixels
         uint32_t glW = 0, glH = 0;
         bool depthCleared = false;
-        uint64_t version = 1, syncedVersion = 0, lastDrawSeq = 0;
+        uint64_t version = 1, lastDrawSeq = 0;
         uint32_t usedW = 0, usedH = 0; // PS2 pixels touched by draws (scissor extents)
     };
 
@@ -475,11 +498,12 @@ struct GSHwBackend::Impl
 
     const Api &gl() const { return context.gl(); }
 
-    GLuint compile(GLenum type, const char *src)
+    GLuint compile(GLenum type, const char *src) { return compile(type, {src}); }
+    GLuint compile(GLenum type, std::initializer_list<const char *> parts)
     {
         const Api &g = gl();
         const GLuint sh = g.CreateShader(type);
-        g.ShaderSource(sh, 1, &src, nullptr);
+        g.ShaderSource(sh, static_cast<GLsizei>(parts.size()), parts.begin(), nullptr);
         g.CompileShader(sh);
         GLint ok = 0;
         g.GetShaderiv(sh, kCompileStatus, &ok);
@@ -509,7 +533,7 @@ struct GSHwBackend::Impl
         }
         const Api &g = gl();
         const GLuint v = compile(GSGL::kVertexShader, kVsSource);
-        const GLuint f = compile(GSGL::kFragmentShader, kFsSource);
+        const GLuint f = compile(GSGL::kFragmentShader, {kFsSource, kReinterpretSource, kFsTail});
         if (!v || !f)
         {
             failed = true;
@@ -900,76 +924,6 @@ struct GSHwBackend::Impl
         }
     }
 
-    // ---- render target -> shadow VRAM ------------------------------------------------------------------------------
-    // Textures / CLUTs that address a render target with another layout (other format, other width, inside it) are decoded from
-    // the shadow VRAM, so the target is written back there (downsampled to PS2 resolution, swizzled into the texture store).
-    void syncTargetToVram(RenderTarget &t)
-    {
-        if (t.syncedVersion == t.version || t.usedW == 0u || t.usedH == 0u)
-            return;
-        if (texSrcDiag)
-            ++texSources["rt-readback psm=" + std::to_string(t.psm)];
-        const Api &g = gl();
-        std::vector<uint8_t> px(static_cast<size_t>(t.glW) * t.glH * 4u);
-        g.BindFramebuffer(kFramebuffer, t.fbo);
-        g.PixelStorei(kPackAlignment, 1);
-        g.ReadPixels(0, 0, t.glW, t.glH, kRgba, kUnsignedByte, px.data());
-        const uint32_t base = t.fbp * 32u;
-        const bool sixteen = t.psm == GS_PSM_CT16 || t.psm == GS_PSM_CT16S;
-        for (uint32_t y = 0; y < t.usedH; ++y)
-        {
-            const uint32_t gy = std::min<uint32_t>(static_cast<uint32_t>((y + 0.5f) * scale), t.glH - 1u);
-            for (uint32_t x = 0; x < t.usedW; ++x)
-            {
-                const uint32_t gx = std::min<uint32_t>(static_cast<uint32_t>((x + 0.5f) * scale), t.glW - 1u);
-                const uint8_t *p = &px[(static_cast<size_t>(gy) * t.glW + gx) * 4u];
-                uint32_t value = p[0] | (p[1] << 8) | (p[2] << 16) | (static_cast<uint32_t>(p[3]) << 24);
-                if (sixteen)
-                    value = ((p[3] >> 7) << 15) | ((p[2] >> 3) << 10) | ((p[1] >> 3) << 5) | (p[0] >> 3);
-                store.Write(t.psm, base, t.fbw, x, y, value);
-            }
-        }
-        t.syncedVersion = t.version;
-        invalidateBlocks(base, base + spanBlocks(t.psm, t.fbw, t.usedH));
-    }
-
-    // does the block range [lo, hi) overlap a render target? then bring that target's pixels into the shadow VRAM first
-    std::unordered_map<std::string, int> syncCounts;
-    uint32_t probeTbw = 0, probePsm = 0, probeRows = 0, probeFbp = 0, probeFbw = 0, probeFpsm = 0, probeTme = 0;
-    size_t probeVerts = 0;
-    void syncOverlapping(uint32_t lo, uint32_t hi, const RenderTarget *except)
-    {
-        for (RenderTarget &t : targets)
-        {
-            if (&t == except || t.usedW == 0u)
-                continue;
-            const uint32_t tlo = t.fbp * 32u, thi = tlo + spanBlocks(t.psm, t.fbw, t.usedH);
-            if (lo < thi && tlo < hi)
-            {
-                // VRAM is reused over time: when an upload hit this range after the target was last drawn, the data is the
-                // upload's (the target is dead there), not the target's
-                bool overwritten = false;
-                for (const UploadRecord &u : uploadLog)
-                    if (u.seq > t.lastDrawSeq && u.lo < hi && lo < u.hi)
-                    {
-                        overwritten = true;
-                        break;
-                    }
-                if (overwritten)
-                    continue;
-                if (statsEnabled)
-                {
-                    static std::unordered_map<std::string, int> &seen = syncCounts;
-                    char key[200];
-                    std::snprintf(key, sizeof(key), "tex tbp=%x tbw=%u psm=%u (%u rows) vs RT fbp=%u(blk %x) fbw=%u psm=%u used=%ux%u", lo, probeTbw, probePsm, probeRows, t.fbp, tlo, t.fbw, t.psm, t.usedW, t.usedH);
-                    if (seen[key]++ < 0)
-                        std::fprintf(stderr, "[gs-hw-reinterp] %s | draw into fbp=%u fbw=%u psm=%u tme=%d verts=%zu\n", key, probeFbp, probeFbw, probeFpsm, probeTme, probeVerts);
-                }
-                syncTargetToVram(t);
-            }
-        }
-    }
-
     // The render target whose memory range holds the texture's first block (and was not overwritten by an upload since).
     // Formats that live only in bits 24-31 (T8H, T4HL, T4HH) are never written by a 24 bit target (CT24 colour, Z24): the
     // game keeps uploaded textures there, so such a target is not their source.
@@ -1038,6 +992,109 @@ struct GSHwBackend::Impl
         g.Uniform4i(locRtFmt2, inv == inverseOffset.end() ? 0 : static_cast<GLint>(inv->second), static_cast<GLint>(rt.fbp), static_cast<GLint>(rt.fbw), 0);
         g.Uniform4i(locTex0, static_cast<GLint>(c.tex0.tbp0), c.tex0.tbw, s.textureWidth, s.textureHeight);
         g.Uniform2f(locRtPx, static_cast<float>(rt.pxW), static_cast<float>(rt.pxH));
+    }
+
+    // ---- CLUT from a render target --------------------------------------------------------------------------------
+    // A CLUT whose source memory a render target was drawn into is read from that target on the GPU: one pass writes the
+    // raw source words (reinterpreting fetch, CPSM view of the target) into a 256x1 target, the 1 KB result goes to the
+    // CLUT store. Results are cached per target version, so a target read many times per frame costs one pass.
+    GLuint clutProgram = 0, clutFbo = 0, clutTex = 0, clutCoordTex = 0;
+    GLint locClTables = -1, locClRtColor = -1, locClCoords = -1, locClTexFmt = -1, locClTexFmt2 = -1, locClRtFmt = -1, locClRtFmt2 = -1,
+          locClTex0 = -1, locClRtPx = -1;
+    std::unordered_map<uint64_t, std::vector<uint32_t>> clutCache;
+
+    bool ensureClutProgram()
+    {
+        if (clutProgram)
+            return true;
+        const Api &g = gl();
+        const GLuint v = compile(GSGL::kVertexShader, kPresentVs), f = compile(GSGL::kFragmentShader, {kClutFsHead, kReinterpretSource, kClutFsMain});
+        if (!v || !f)
+            return false;
+        clutProgram = g.CreateProgram();
+        g.AttachShader(clutProgram, v);
+        g.AttachShader(clutProgram, f);
+        g.LinkProgram(clutProgram);
+        const auto loc = [&](const char *name) { return g.GetUniformLocation(clutProgram, name); };
+        locClTables = loc("uTables"); locClRtColor = loc("uRtColor"); locClCoords = loc("uCoords"); locClTexFmt = loc("uTexFmt");
+        locClTexFmt2 = loc("uTexFmt2"); locClRtFmt = loc("uRtFmt"); locClRtFmt2 = loc("uRtFmt2"); locClTex0 = loc("uTex0"); locClRtPx = loc("uRtPx");
+        g.GenTextures(1, &clutTex);
+        g.BindTexture(kTexture2D, clutTex);
+        g.TexImage2D(kTexture2D, 0, static_cast<GLint>(kRgba8), 256, 1, 0, kRgba, kUnsignedByte, nullptr);
+        g.GenTextures(1, &clutCoordTex);
+        g.BindTexture(kTexture2D, clutCoordTex);
+        g.TexImage2D(kTexture2D, 0, 0x823A /*RG16UI*/, 256, 1, 0, 0x8228 /*RG_INTEGER*/, 0x1403 /*UNSIGNED_SHORT*/, nullptr);
+        g.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
+        g.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
+        g.GenFramebuffers(1, &clutFbo);
+        g.BindFramebuffer(kFramebuffer, clutFbo);
+        g.FramebufferTexture2D(kFramebuffer, kColorAttachment0, kTexture2D, clutTex, 0);
+        return true;
+    }
+
+    bool clutFromTarget(const GSTex0Reg &tex0, uint32_t width, const uint16_t *xy, uint32_t count, uint32_t *words)
+    {
+        RenderTarget *rt = findReinterpretSource(tex0.cbp, tex0.cpsm);
+        if (!rt || count == 0u || count > 256u || !ensureClutProgram())
+            return false;
+        uint64_t key = 1469598103934665603ull;
+        const auto mix = [&key](uint64_t v) { key = (key ^ v) * 1099511628211ull; };
+        mix(rt->fbp); mix(rt->version); mix(tex0.cbp); mix(tex0.cpsm); mix(width); mix(count);
+        for (uint32_t i = 0; i < count * 2u; ++i)
+            mix(xy[i]);
+        if (texSrcDiag)
+            ++texSources["clut-from-rt psm=" + std::to_string(rt->psm)];
+        if (const auto it = clutCache.find(key); it != clutCache.end())
+        {
+            std::memcpy(words, it->second.data(), count * sizeof(uint32_t));
+            return true;
+        }
+        const Api &g = gl();
+        const GSSwizzle::Format &tf = GSSwizzle::GetFormat(tex0.cpsm);
+        const GSSwizzle::Format &rf = GSSwizzle::GetFormat(rt->psm);
+        const auto table = tableOffset.find(tf.table);
+        const auto inv = inverseOffset.find(rt->psm);
+        if (table == tableOffset.end() || inv == inverseOffset.end())
+            return false;
+        const int texelBits = tf.kind == GSSwizzle::Kind::Bits32 ? 32 : tf.kind == GSSwizzle::Kind::Bits24 ? 24 : 16;
+        g.UseProgram(clutProgram);
+        g.ActiveTexture(kTexture0 + 1);
+        g.BindTexture(kTexture2D, rt->color);
+        g.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
+        g.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
+        g.ActiveTexture(kTexture0 + 2);
+        g.BindTexture(kTexture2D, tableTex);
+        g.ActiveTexture(kTexture0 + 3);
+        g.BindTexture(kTexture2D, clutCoordTex);
+        g.PixelStorei(kUnpackAlignment, 2);
+        g.TexSubImage2D(kTexture2D, 0, 0, 0, static_cast<GLsizei>(count), 1, 0x8228 /*RG_INTEGER*/, 0x1403 /*UNSIGNED_SHORT*/, xy);
+        g.ActiveTexture(kTexture0);
+        g.Uniform1i(locClRtColor, 1);
+        g.Uniform1i(locClTables, 2);
+        g.Uniform1i(locClCoords, 3);
+        g.Uniform4i(locClTexFmt, tf.pageShiftX, tf.pageShiftY, tf.pixelsPerPageShift, tf.unpackedShift);
+        g.Uniform4i(locClTexFmt2, tf.bitOffset, texelBits, static_cast<GLint>(table->second), 0);
+        g.Uniform4i(locClRtFmt, rf.pageShiftX, rf.pageShiftY, rf.pixelsPerPageShift, 1 << rf.unpackedShift);
+        g.Uniform4i(locClRtFmt2, static_cast<GLint>(inv->second), static_cast<GLint>(rt->fbp), static_cast<GLint>(rt->fbw), 0);
+        g.Uniform4i(locClTex0, static_cast<GLint>(tex0.cbp), static_cast<GLint>(width), 256, 256);
+        g.Uniform2f(locClRtPx, static_cast<float>(rt->pxW), static_cast<float>(rt->pxH));
+        g.BindFramebuffer(kFramebuffer, clutFbo);
+        g.Disable(kBlend);
+        g.Disable(kDepthTest);
+        g.Disable(kScissorTest);
+        g.ColorMask(kTrue, kTrue, kTrue, kTrue);
+        g.Viewport(0, 0, static_cast<GLsizei>(count), 1);
+        g.BindVertexArray(presentVao);
+        g.DrawArrays(kTriangles, 0, 3);
+        g.PixelStorei(kPackAlignment, 4);
+        g.ReadPixels(0, 0, static_cast<GLsizei>(count), 1, kRgba, kUnsignedByte, words);
+        g.BindVertexArray(vao);
+        g.UseProgram(program);
+        g.BindBuffer(kArrayBuffer, vbo);
+        if (clutCache.size() > 4096u)
+            clutCache.clear();
+        clutCache.emplace(key, std::vector<uint32_t>(words, words + count));
+        return true;
     }
 
     // ---- drawing --------------------------------------------------------------------------------------------------
@@ -1804,10 +1861,6 @@ struct GSHwBackend::Impl
                      (unsigned long long)stats.shuffles, (unsigned long long)stats.draws, (unsigned long long)stats.batches, (unsigned long long)stats.texDecodes,
                      (unsigned long long)stats.texHits, (unsigned long long)stats.skippedPsm, (unsigned long long)stats.skippedPrim,
                      (unsigned long long)stats.unsupportedBlend, textures.size());
-        for (const auto &kv : syncCounts)
-            if (kv.second > 5)
-                std::fprintf(stderr, "[gs-hw-sync] x%d %s\n", kv.second, kv.first.c_str());
-        syncCounts.clear();
         stats.shuffles = stats.draws = stats.batches = stats.texDecodes = stats.texHits = stats.skippedPsm = stats.skippedPrim = stats.unsupportedBlend = 0;
     }
 
@@ -1861,9 +1914,11 @@ void GSHwBackend::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
 {
     Impl &d = *m_impl;
     d.flushPending();
-    if (d.initialized && (tex0.psm == GS_PSM_T8 || tex0.psm == GS_PSM_T8H || tex0.psm == GS_PSM_T4 || tex0.psm == GS_PSM_T4HL || tex0.psm == GS_PSM_T4HH))
-        d.syncOverlapping(tex0.cbp, tex0.cbp + 64u, nullptr);
-    d.store.LoadClut(tex0, texclut);
+    if (d.initialized)
+        d.store.LoadClut(tex0, texclut, [&d](const GSTex0Reg &t, uint32_t width, const uint16_t *xy, uint32_t count, uint32_t *words)
+                         { return d.clutFromTarget(t, width, xy, count, words); });
+    else
+        d.store.LoadClut(tex0, texclut);
     d.clutHash = d.store.ClutHash();
 }
 

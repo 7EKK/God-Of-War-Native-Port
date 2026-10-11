@@ -10,6 +10,8 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <string>
+#include <algorithm>
 
 namespace ps2_perf
 {
@@ -100,10 +102,19 @@ namespace ps2_perf
             if (delta < minDelta) minDelta = delta;
             if (delta > maxDelta) maxDelta = delta;
         }
+        // T0 ticks the game measured since its previous frame (0x29C670), in tenths of an NTSC field (9610 ticks).
+        static uint32_t hist[24] = {};
+        int32_t ticks = 0;
+        std::memcpy(&ticks, rdram + 0x29C670u, sizeof(ticks));
+        ++hist[std::min<uint32_t>(23u, static_cast<uint32_t>(std::max(0, ticks)) / 961u)];
         ++frames;
         const uint64_t now = nowNanos();
         const double wall = static_cast<double>(now - windowStart) * 1e-9;
         if (wall < 1.0) return;
+        std::string line;
+        for (uint32_t i = 0; i < 24u; ++i)
+            if (hist[i]) line += " " + std::to_string(i) + ":" + std::to_string(hist[i]), hist[i] = 0;
+        std::fprintf(stderr, "[gow-speed-hist] field/10 counts:%s\n", line.c_str());
         std::fprintf(stderr, "[gow-speed] frames=%llu wall=%.2f game=%.3f speed=%.3f delta_min=%.4f delta_max=%.4f\n",
                      static_cast<unsigned long long>(frames), wall, gameSeconds, gameSeconds / wall,
                      frames && maxDelta > 0.0 ? minDelta : 0.0, maxDelta);
