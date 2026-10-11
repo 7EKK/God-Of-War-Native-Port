@@ -149,3 +149,31 @@ Gains per lever above are estimates from the Gemini review (gemini-work/results/
   ps2_gif_arbiter.h = full rebuild), VIF1 unpack ~13 %.
 - Build note: a fresh configure defaults PS2X_ENABLE_RUNTIME_LOGS / AGRESSIVE_LOGS / IOP_RPC_TRACE / DEBUG_UI to ON, which
   writes a GB-sized ps2_log.txt (function enter/exit) and caps the game at ~10 fps; pass them OFF like build-kl.
+
+## Presentation without readback (zero-copy, branch agent/present in ext/PS2Recomp-kl-present)
+- **Before**: GSHwBackend::Present composed the CRTC circuits into presentTex, then glReadPixels into
+  PresentationFrame::pixels; the host uploaded them again (UpdateTextureRec) and ran the bicubic scaler. The host
+  waited for the GS worker on every latch: `upload_ms` ~0.7-1.1 s per 5 s window.
+- **Now**: the GS GL context is created in GSHwBackend::Initialize (GS worker, while the host context is released)
+  and shares objects with the raylib window (wglCreateContextAttribsARB with the host HGLRC, gs_gl.cpp).
+  Present composes as before, forces alpha 1 on the GPU and copies presentTex into one of 8 shared slot textures
+  with glCopyImageSubData (`GSGL::PublishSharedTexture`, fenced). The host draws the slot texture directly
+  (`GSSharedPresent::Acquire`, gs_host_present.cpp). Present is queued (asynchronous) on the GS worker.
+  On by default; `PS2X_GS_DIRECT_PRESENT=0` restores RAM frames.
+- Zone captures (GOW_PAD_CAPTURAS) still get pixels: `copyLatchedHostPresentationFrame` sends a forceReadback
+  request, which reads back once.
+- Host scaler: the bicubic+sharpen pass only runs when the frame is magnified; a frame at least as large as its
+  4:3/16:9 rectangle (e.g. `PS2X_GS_HW_SCALE=3` at 1920x1080, or a small window) gets one bilinear tap.
+- Measured (Olympus slot 1, 1920x1080, scale 2, same build back to back, port/agent_present/r3_ram vs r3_shared):
+  upload_ms 970-1100 → 23 ms per 5 s; game fps 36-38 in both (the game thread is the limit; the host
+  thread is now idle in vsync, host_wait_ms 3.9 → 4.95 s). Captures identical (r2_ram vs r2_shared sheet.png).
+- Check the window content with `GOW_HOST_SHOT=<host frame>` (writes host_shot.png = back buffer, next to the exe).
+  Desktop grabs (tools/shot.ps1 PrintWindow, CopyFromScreen) of DEBUG_UI=OFF builds came back all white in
+  both RAM and shared modes while host_shot.png is correct; cause **not found** (DEBUG_UI=ON builds grab fine).
+- Switch: the mechanism is GL-generic (shared context + texture copy + fence sync); only context creation /
+  host-context capture is WGL (gs_gl.cpp, `_WIN32` block). The non-Windows build has no GS GL context yet;
+  an EGL/SDL version would capture eglGetCurrentContext in CaptureHostContext and pass it as share_context.
+  glCopyImageSubData needs GL 4.3 / ARB_copy_image (or a glBlitFramebuffer fallback on GL 3.3).
+- Worktree build pitfall: a fresh configure defaults to PS2X_ENABLE_AGRESSIVE_LOGS / RUNTIME_LOGS / DEBUG_UI /
+  IOP_RPC_TRACE = ON and no PS2X_VU1_MICROCODE_DIR (interpreted VU1): ~3 fps and a GB-size ps2_log.txt.
+  Copy those cache values from out/build-kl (logs/UI/trace OFF, VU1 dir port/vu1_micro + generator source).
