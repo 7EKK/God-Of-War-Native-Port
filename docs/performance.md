@@ -150,6 +150,29 @@ Gains per lever above are estimates from the Gemini review (gemini-work/results/
 - Build note: a fresh configure defaults PS2X_ENABLE_RUNTIME_LOGS / AGRESSIVE_LOGS / IOP_RPC_TRACE / DEBUG_UI to ON, which
   writes a GB-sized ps2_log.txt (function enter/exit) and caps the game at ~10 fps; pass them OFF like build-kl.
 
+## Game-speed meter (2026-10-11, ext branch agent/speedmeter 17488d4)
+- What: `GOW_DELTA_DIAG=1` (with `GOW_PERF_FRAME_PC=0x001837B8`) sums the game's own per-frame time step (float at
+  0x29C64C, seconds) at every vid::Flip entry and prints `[gow-speed] ... speed=` once per wall second: game seconds per
+  wall second. 1.00 = real time; fps can be judged only together with it (fps above 30 with speed 1.00 is real; fps
+  above 30 with speed > 1 means game time runs fast). Idea and the 0x29C64C address taken from KIexster's
+  patches/ps2recomp-game-speed.patch, folded into `ps2_perf::guestEntry` (ps2_perf.h); zero cost when off.
+- tools/zones.py sets it and reports "game speed (mean, min-max)" over the last 20 windows (warning outside 0.9-1.1).
+- Measured, zones slots 1-4 (port/zones/20261011_232420, Release, all ok, windows after gameplay start):
+
+  | slot | fps | speed in 60 fps windows | speed in 30 fps windows | overall |
+  |---|---|---|---|---|
+  | 1 Olympus | 60 (30 for ~11 s after load) | 1.031 | 0.999 | 1.027 |
+  | 2 Desert | 60 | 1.024 | - | 1.024 |
+  | 3 Cliffs | 30 (60 for ~20 s) | 1.026 | 0.999 | 1.004 |
+  | 4 Final battle | 60 | 1.018 | - | 1.018 |
+- Reading: the 60 fps is real: the game takes ~1/60 s steps (delta_min 0.0166) and game time follows wall time within
+  2-3 %; it is not a 30 fps game whose clock runs double. But at 60 fps game time runs 2-3 % fast, at 30 fps exactly
+  1.00. Unverified explanation: delta_min is pinned at 0.0166 (looks like a clamp at 1/60) while delta_max reaches
+  0.04-0.05 once a second or so, so host pacing jitter only ever adds time. Next step if it matters: per-frame delta
+  histogram at 60 fps and the code that writes 0x29C64C (0x17D778).
+- Note: runs that never log `[memory card]` (stale git-ignored iopn_*/gow_overrides.cpp in a worktree) stay in the
+  menu at 60 fps, speed 1.00; their numbers say nothing about gameplay.
+
 ## Presentation without readback (zero-copy, branch agent/present in ext/PS2Recomp-kl-present)
 - **Before**: GSHwBackend::Present composed the CRTC circuits into presentTex, then glReadPixels into
   PresentationFrame::pixels; the host uploaded them again (UpdateTextureRec) and ran the bicubic scaler. The host

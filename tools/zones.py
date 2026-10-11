@@ -6,6 +6,7 @@ For each slot (= one zone of the user's save card) the real runner is started wi
 script (load the slot, wait for gameplay, walk in the four directions, wait). Per zone it records:
   * reached gameplay (state 11) and how long that took,
   * game fps (guest_flip_hz of the last windows) against the 25 fps floor,
+  * game speed (GOW_DELTA_DIAG [gow-speed]: game seconds per wall second, 1.00 = real time; warning outside 0.9-1.1),
   * runtime errors in the log (missing recompiled functions, cut VIF packets, unhandled VIFcodes, access violations...),
   * the captured frames (PNG), flagging blank/black ones and, with --baseline, large changes against an earlier report,
   * with --diff: the EE differential tester (PS2X_EE_DIFF=all) against PCSX2's interpreter, listing functions whose
@@ -34,6 +35,7 @@ DEFAULT_CARD = os.path.join(ROOT, 'ref', 'saves', 'Mcd002.ps2')
 PLAY_ENV = {
     'PS2X_GS_WORKER': '1', 'GOW_GS_FINISH_ASINCRONO': '1', 'GOW_SKIP_FMV': '1',
     'GOW_PAD_TEST': '1', 'GOW_PERF_DIAG': '1', 'GOW_PERF_FRAME_PC': '0x001837B8', 'GOW_FAST_BOOT': '1',
+    'GOW_DELTA_DIAG': '1',
 }
 ERROR_PATTERNS = [
     (r'No exact recompiled function', 'missing recompiled function'),
@@ -162,6 +164,11 @@ def run_zone(slot, args, outdir):
     res['fps_last'] = tail
     if tail and min(tail) < args.min_fps:
         res['failures'].append(f'fps {min(tail):.1f} below {args.min_fps}')
+    # game speed (GOW_DELTA_DIAG): game seconds per wall second over the last 20 one-second windows
+    speed = [float(x) for x in re.findall(r'\[gow-speed\] .*?speed=([0-9.]+)', text)][-20:]
+    res['game_speed'] = [sum(speed) / len(speed), min(speed), max(speed)] if speed else None
+    if speed and not 0.9 <= res['game_speed'][0] <= 1.1:
+        res['warnings'].append(f"game speed {res['game_speed'][0]:.2f}x real time")
     for pattern, label in ERROR_PATTERNS:
         n = len(re.findall(pattern, text))
         if n:
@@ -271,9 +278,10 @@ def main():
         res = run_zone(slot, args, outdir)
         results.append(res)
         print('  ', 'FAIL' if res['failures'] else 'ok', res['failures'] or '', res['warnings'] or '', flush=True)
-    lines = [f'# Zone check {stamp}', '', '| slot | gameplay start | fps (last windows) | captures | result |', '|---|---|---|---|---|']
+    lines = [f'# Zone check {stamp}', '', '| slot | gameplay start | fps (last windows) | game speed (mean, min-max) | captures | result |', '|---|---|---|---|---|---|']
     for r in results:
-        lines.append(f"| {r['slot']} | {r['gameplay_start_s']} | {', '.join('%.1f' % x for x in r['fps_last'])} | {r['captures']} | "
+        lines.append(f"| {r['slot']} | {r['gameplay_start_s']} | {', '.join('%.1f' % x for x in r['fps_last'])} | "
+                     f"{'%.2f (%.2f-%.2f)' % tuple(r['game_speed']) if r['game_speed'] else '-'} | {r['captures']} | "
                      f"{'FAIL: ' + '; '.join(r['failures']) if r['failures'] else 'ok'}{' (' + '; '.join(r['warnings']) + ')' if r['warnings'] else ''} |")
     for r in results:
         if r.get('diff'):
