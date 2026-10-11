@@ -1087,6 +1087,19 @@ int EeScheduler::setAlarm(uint16_t ticks,
     return id;
 }
 
+void EeScheduler::delayCurrent(uint64_t cycles)
+{
+    assertExecutor();
+    // A wake-up event at the deadline, like the timer alarm the guest's DelayThread used. The token names this one
+    // wait (deadline + thread), so a stale event of an earlier, released delay cannot wake a later one.
+    constexpr uint32_t kDelayWaitType = 2u;
+    const uint64_t deadline = m_eeCycle + std::max<uint64_t>(1u, cycles);
+    const uint64_t token = (deadline << 8) | static_cast<uint64_t>(m_currentThreadId & 0xFF);
+    scheduleEvent(deadline, std::chrono::steady_clock::now() + eeCyclesToHostDuration(deadline - m_eeCycle),
+                  EeEvent{EeEventType::ExternalWake, kDelayWaitType, token});
+    waitExternal(EeWaitReason::External, kDelayWaitType, token);
+}
+
 int EeScheduler::cancelAlarm(int id)
 {
     assertExecutor();
