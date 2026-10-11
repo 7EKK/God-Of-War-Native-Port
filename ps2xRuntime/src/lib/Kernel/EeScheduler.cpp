@@ -298,7 +298,7 @@ void EeScheduler::run()
         {
             m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
             m_guestExecuting.store(true, std::memory_order_release);
-            ps2_perf::guestEntry(context.pc);
+            ps2_perf::guestEntry(context.pc, m_rdram);
             loadSharedVu0Random(context);
             function(m_rdram, &context, &m_runtime);
             saveSharedVu0Random(context);
