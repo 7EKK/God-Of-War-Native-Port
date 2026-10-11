@@ -66,6 +66,7 @@ def main():
     ap.add_argument('--secs', type=float, default=150)
     ap.add_argument('--keys', default='g4:r2,g7:x,g9:x,g11:arriba,g12.5:x,g20:x,g22:x')
     ap.add_argument('--exe')
+    ap.add_argument('--audio', action='store_true', help='play sound (default: silent, GOW_AUDIO=0)')
     args = ap.parse_args()
     exe = os.path.abspath(args.exe) if args.exe else zones.EXE
     exe_dir = os.path.dirname(exe)
@@ -78,6 +79,8 @@ def main():
     caps = ','.join(f'g{t}' for t in range(2, 26, 1))
     env = dict(os.environ, **zones.PLAY_ENV)
     env.update({'GOW_ISO': zones.ISO, 'GOW_MC0': card, 'GOW_PAD_GUION': script, 'GOW_PAD_CAPTURAS': caps})
+    if not args.audio:
+        env['GOW_AUDIO'] = '0'  # test runs are silent; --audio for audio tests
     for f in os.listdir(exe_dir):
         if f.startswith('gow_pad_test_') and f.endswith('.ppm'):
             os.remove(os.path.join(exe_dir, f))

@@ -135,6 +135,8 @@ def run_zone(slot, args, outdir):
     caps = ','.join(f'g{t:g}' for t in [5, 7] + [8 + 5 * i + 2.2 for i in range(len(walk))])
     env = dict(os.environ, **PLAY_ENV)
     env.update({'GOW_ISO': ISO, 'GOW_MC0': args.card_copy, 'GOW_PAD_GUION': script, 'GOW_PAD_CAPTURAS': caps})
+    if not args.audio:
+        env['GOW_AUDIO'] = '0'  # test runs are silent; --audio for audio tests
     if args.diff:
         env.update({'PS2X_EE_DIFF': 'all', 'PS2X_EE_DIFF_MAX': '12', 'PS2X_EE_DIFF_LINES': '300',
                     'PS2X_EE_DIFF_START': str(args.diff_start)})
@@ -253,6 +255,7 @@ def main():
     ap.add_argument('--exe', help='runner to test (default: the main build); captures are written next to it')
     ap.add_argument('--card', default=DEFAULT_CARD)
     ap.add_argument('--secs', type=float, default=200)
+    ap.add_argument('--audio', action='store_true', help='play sound (default: silent, GOW_AUDIO=0)')
     ap.add_argument('--min-fps', type=float, default=25.0)
     ap.add_argument('--diff', action='store_true', help='also run the EE differential tester (slow)')
     ap.add_argument('--diff-start', type=float, default=125.0)

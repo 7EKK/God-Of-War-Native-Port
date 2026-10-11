@@ -14,7 +14,7 @@ This file is the inventory and the order of work. Status per layer is measured, 
 | VU0 macro mode | recompiled inline COP2 ops | inline | keep | native |
 | VU1 microcode | native per-instruction-pair code generated ahead of time (tools/vu1/vu1n_gen.py), A/B verified | generated | later: lower to GPU compute | native |
 | VIF1 / GIF / DMA plumbing | no DMA controller: sceDmaSend hands the game's packets (its DMA tag lists walked in place) to the VIF decoder (UNPACK into VU memory) and the GIF paths | ~1k lines | becomes a thinner loader once VU1 outputs vertices directly | native (step 2) |
-| GS (graphics synthesizer) | **native render-target renderer** `GSHwBackend`, the only renderer: real render targets and textures at `PS2X_GS_HW_SCALE` (default 2), paletted textures as index + palette textures, reinterpretation passes (channel shuffles, aliased Z, CRTC merge) done natively | ~2.3k lines | remaining: replace the GSCpuBackend byte store (uploads/CLUT) with a native texture store | native |
+| GS (graphics synthesizer) | **native render-target renderer** `GSHwBackend`, the only renderer: real render targets and textures at `PS2X_GS_HW_SCALE` (default 2), paletted textures as index + palette textures, reinterpretation passes (channel shuffles, aliased Z, CRTC merge) done natively | ~2.3k lines | done: textures and CLUTs come from a small native texture/CLUT store (`GSTextureStore`, step 5); no CPU rasteriser left | native |
 | IOP (I/O CPU + IRX modules: CDVD, SIO2, 989snd) | the game's 8 IRX modules (sio2man, dbcman, sio2d, mc2_d, ds2u_d, libsd, 989nomid, smpd_iop; 52k instructions) **compiled ahead of time** to C++ (tools/iop/iopn_gen.py -> ps2xIOP/src/native); HLE kernel imports; the R3000 interpreter only runs code without a compiled form | generated | replace the hardware models below (SPU2, SIO2, CDVD) with native services | native code, in progress |
 | SPU2 | native SoundEngine driven by LIBSD's exports (docs/sound.md) | in IOP | done | native (step 3) |
 
@@ -44,16 +44,53 @@ verified on the 4 zones (images, fps, audio) before the next:
      copy or a render-target readback. So the store keeps upload words at their GS block addresses (the game's
      "upload as 32 bit, read as 8 bit" packing needs the address math), but needs no rasteriser, framebuffer or
      transfer-readback model;
+   - DONE (2026-10-11, branch agent/texstore): `GSTextureStore` (ps2xRuntime/src/lib/gs/gpu/gs_texture_store.*,
+     ~370 lines) owned by `GSHwBackend` replaces the 2.2k-line `GSCpuBackend` (CPU rasteriser, VRAM-as-framebuffer,
+     transfers, readback, presentation), which is deleted with its unit tests (ps2xTest/gs_cache) and its rasteriser
+     rule headers. The store receives the game's HOST->LOCAL uploads (CT24 pixels split across IMAGE packets kept, as
+     before) and LOCAL->LOCAL copies (none measured; a plain copy), writing the words at their GS block addresses with
+     the swizzle tables (ps2_gs_memory) because the game reads its uploads in another format; it loads the CLUT by the
+     TEX0.CLD rules (CSM1/CSM2, CSA, CBP0/1 compare) and serves BuildPalette / ClutHash / a generic point-sampled
+     DecodeTextureRgba (for formats without a direct layout; none seen). LOCAL->HOST is not modelled (the game never
+     reads GS memory back): ConsumeLocalToHostBytes returns 0. The one-page texture-cache model (stale reads until
+     TEXFLUSH) is gone: CLUT loads read the current bytes, like the renderer's own texture decode always did.
+     What still writes into the memory image besides uploads: the renderer's conservative render-target write-back
+     (`syncTargetToVram`, for CLUTs loaded from a render target, ~2.8k of 8.9k loads in Olympus) - the renderer's
+     own data, not a hardware model, but the next candidate to replace (palette straight from the GPU target).
+     `GS::setRasterBackend(nullptr)` (host shutdown) now installs a no-op backend instead of the CPU rasteriser;
+   - GS privileged registers DONE (2026-10-11, branch agent/gsregs): the game no longer touches them. The three
+     functions that did are native overrides (gow_overrides.cpp) on a small native service, `runtime/gs/gs_display.h`
+     (`ps2_gs_display::setDisplay/display/finishPending/ackFinish`, src/lib/gs/gs_display.cpp):
+     - 0x183360 (per-frame display setup, called by 0x1837B8) computes a typed `GSDisplayState` (PMODE, SMODE2,
+       DISPFB1/2, DISPLAY1/2, BGCOLOR in register bit layout) from the game's video globals (width/height 0x2FDD50/54,
+       buffer FBP/PSM 0x331074/70, PAL flag 0x331078, interlace bit 0x32F1B4, field mode 0x334F5C) and hands it to
+       `setDisplay`, which stores it in the GS state block that `GS::buildPresentationRequestUnlocked` copies into
+       every `GSHwBackend::Present` request (same GS-worker barrier as the register stores had). Same output: without
+       field mode both circuits are on, ALP 0x80, circuit 1 one line lower (DBY 1, DH-1) = the menu "Soften" merge;
+       with field mode circuit 1 is off. `GOW_GSREGS_CHECK=1` also runs the original function and prints
+       `[gsregs-check]` comparisons (defined register fields only; the original leaves stack garbage in unused bits);
+     - 0x182DD8 (GS interrupt handler, INTC 0): FINISH test/ack via `finishPending/ackFinish` on the native GS status
+       (set by the FINISH register in the game's GIF packets, delivered by `EeScheduler::pollGsInterrupt`); sets the
+       game's "GS done" flag 0x29C7D0 = 2 and its GPU-time statistic (that part still reads timer 0);
+     - 0x182E88 (installs that handler): same kernel calls (AddIntcHandler, EnableIntc, GsGetIMR/GsPutIMR unmasking
+       FINISH); its CSR store is the native ack.
+     The MMIO decode of 0x12000000-0x12001FFF in PS2Memory stays only as an unused fallback (`GOW_IO_HIST` shows any
+     access);
 6. CDVD -> extracted game files (last).
 
 ## Hardware access inventory (2026-10-11, `GOW_IO_HIST=150`, boot + Olympus)
 What the game's own code still reads or writes as hardware registers (the generated code also marks every constant-address
 access with `// MMIO:`; `tools/dis.py ADDR` disassembles the USA build):
-- GS privileged registers: CSR (VBlank handler 0x182DE0) and PMODE/DISPFB/DISPLAY/BGCOLOR (0x183748, per frame): step 5.
-- EE timers: T0 count (busy-wait 0x17A2A0 and timing, ~50k reads in 150 s), T1, T2 (libkernel 0x299xxx).
+- GS privileged registers: none since agent/gsregs (step 5 above). Before: CSR read+write per FINISH interrupt
+  (handler 0x182DD8, ~2 per frame) plus one write at install (0x182E88), and SMODE2/PMODE/DISPFB1/DISPLAY1/
+  DISPFB2/DISPLAY2/BGCOLOR stored once per frame by 0x183360.
+- EE timers: T0 count (~50k reads in 150 s: the game's 64-bit clock pattern "T0 + wrap count 0x303628, last value
+  0x2C7908" inlined at 0x179F18/54, 0x17A168, 0x17A2C8, 0x17D780/7BC (2 per frame each) and in the FINISH handler),
+  T1 count once per frame (0x179F94), T0/T1 mode once at boot (0x138984/94), T2 in libkernel's alarm code (0x2998xx-0x299Fxx,
+  ~50 accesses).
 - Scratchpad DMA (channels 8/9) in 0x117D10, 0x1188F0, 0x1590F0, 0x159C58, 0x101888 and D_STAT clears: served as copies.
 - IPU + its DMA (libmpeg 0x26F228..0x279588, 0x189BD0..0x18A5E0) and D_ENABLER/W: FMV, skipped (GOW_SKIP_FMV).
-- INTC mask (libkernel 0x2940B0/0x294140), once per DI/EI.
+- INTC mask (libkernel 0x2940B0/0x294140), once per DI/EI (not seen in the slot-1 runs of 2026-10-11 evening).
 - Not accessed: VIF/GIF registers, SIF registers, SIF DMA, VIF1/GIF channel registers (except the boot TTE setting).
 
 ## What a no-emulation port really requires
