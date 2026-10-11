@@ -631,9 +631,15 @@ set/weights (same 43 controllers of the player animator 0x74ED74 at identical ad
   SoundEngine (docs/sound.md). Desert audio matches the former model; save test ok.
 - EE and VU1 speed agents merged (ext 39379ea, 492db8f): Olympus steady 30 fps (VBlank lock; docs/performance.md).
 
+## 2026-10-11: steps 2 and 4 (ext 293d133)
+- Step 2: no DMA controller model; sceDmaSend feeds VIF/GIF directly (docs/native-port.md). 4 zones ok, save test ok.
+- Step 4: SIF was already native (direct RPC calls and copies on both sides); no SIF hardware is accessed.
+- `GOW_IO_HIST=<s>` lists the hardware registers game code still touches (inventory in docs/native-port.md).
+- tools/savetest.py default keys now confirm the overwrite prompt (it defaults to No); tools/dis.py reads the USA build.
+
 ## RESUME POINT (2026-10-11)
 State: native EE (recompiled), VU1 (compiled), IOP IRX code (compiled), GS (native renderer, only one), pad/card and sound
-native services. Order left (docs/native-port.md): (2) VIF1/GIF/DMA data path, (4) SIF, (5) GS memory image -> native
+native services. Order left (docs/native-port.md): (5) GS memory image -> native
 texture store, (6) LAST: extracted game files instead of the ISO. Port KIexster's game-speed meter
 (ps2recomp-game-speed.patch, GOW_DELTA_DIAG=1) before quoting fps again.
 Debug env for the GS renderer: see the "night 2" section (GOW_GS_HW_STATS/_DUMP/_DUMPAT/_RTDUMPAT/_ONLY/_NODEPTH...).

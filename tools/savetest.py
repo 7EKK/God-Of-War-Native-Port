@@ -1,6 +1,6 @@
 """Save regression check: load save slot 1, save at the save point it starts on, and check the card.
 
-usage: python -I tools/savetest.py [--out port/savetest] [--secs 150] [--keys "g4:r2,g7:x,g9:x,g11:x,g13:x"]
+usage: python -I tools/savetest.py [--out port/savetest] [--secs 150] [--keys "g4:r2,g7:x,g9:x,g11:arriba,g12.5:x,g20:x,g22:x"] (overwrite prompt defaults to No: up, then X)
 
 Runs the runner on a copy of ref/saves/Mcd002.ps2 with a pad script: title menu -> load game -> slot 1 (like zones.py),
 then the save keys at gameplay-relative times (default: R2 at the save point, X through the save menus). Captures a
@@ -64,7 +64,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', default=os.path.join(ROOT, 'port', 'savetest'))
     ap.add_argument('--secs', type=float, default=150)
-    ap.add_argument('--keys', default='g4:r2,g7:x,g9:x,g11:x,g13:x,g15:x')
+    ap.add_argument('--keys', default='g4:r2,g7:x,g9:x,g11:arriba,g12.5:x,g20:x,g22:x')
     ap.add_argument('--exe')
     args = ap.parse_args()
     exe = os.path.abspath(args.exe) if args.exe else zones.EXE

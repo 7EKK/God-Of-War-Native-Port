@@ -13,10 +13,10 @@ This file is the inventory and the order of work. Status per layer is measured, 
 | Kernel/syscalls/threads | HLE in the runtime (Kernel/, ~23k lines) | HLE | keep | native (HLE) |
 | VU0 macro mode | recompiled inline COP2 ops | inline | keep | native |
 | VU1 microcode | native per-instruction-pair code generated ahead of time (tools/vu1/vu1n_gen.py), A/B verified | generated | later: lower to GPU compute | native |
-| VIF1 / GIF / DMA plumbing | software model of the DMA chain, UNPACK into a 16 KB VU memory, GIF packet parser | ~1.5k lines | needed as long as the game feeds VU1/GS in PS2 formats; becomes a thin loader once VU1 outputs vertices directly | emulated plumbing |
+| VIF1 / GIF / DMA plumbing | no DMA controller: sceDmaSend hands the game's packets (its DMA tag lists walked in place) to the VIF decoder (UNPACK into VU memory) and the GIF paths | ~1k lines | becomes a thinner loader once VU1 outputs vertices directly | native (step 2) |
 | GS (graphics synthesizer) | **native render-target renderer** `GSHwBackend`, the only renderer: real render targets and textures at `PS2X_GS_HW_SCALE` (default 2), paletted textures as index + palette textures, reinterpretation passes (channel shuffles, aliased Z, CRTC merge) done natively | ~2.3k lines | remaining: replace the GSCpuBackend byte store (uploads/CLUT) with a native texture store | native |
 | IOP (I/O CPU + IRX modules: CDVD, SIO2, 989snd) | the game's 8 IRX modules (sio2man, dbcman, sio2d, mc2_d, ds2u_d, libsd, 989nomid, smpd_iop; 52k instructions) **compiled ahead of time** to C++ (tools/iop/iopn_gen.py -> ps2xIOP/src/native); HLE kernel imports; the R3000 interpreter only runs code without a compiled form | generated | replace the hardware models below (SPU2, SIO2, CDVD) with native services | native code, in progress |
-| SPU2 | software mixer driven by IOP register writes | in IOP | native mixer fed directly by a native sound engine | emulated |
+| SPU2 | native SoundEngine driven by LIBSD's exports (docs/sound.md) | in IOP | done | native (step 3) |
 
 ## Standing order (user, 2026-10-11): convert everything to native, nothing emulated
 Native now: EE game code (recompiled), VU0 macro, VU1 microprograms and the IOP IRX modules (compiled ahead of time), GS
@@ -27,11 +27,28 @@ verified on the 4 zones (images, fps, audio) before the next:
      the SIO2 chip model and the DualShock model are deleted; the pad is read natively on the EE (gow_overrides.cpp).
      Mechanism for all such cuts: IRX function overrides (IopNativeOverride, tools/iop/native_overrides.txt);
 2. VIF1 / GIF / DMA data path -> VU1 and GS fed directly from the game's packets;
+   - DONE (2026-10-11): no DMA controller model. sceDmaSend hands the game's packets (flat or its DMA tag list, walked in
+     place) straight to the VIF decoder / GIF paths (`PS2Memory::sendDma`, `sendDmaChain`) and runs the DMA-end handlers
+     at once; the few CHCR stores in game code (boot VIF0 chain 0x1838D0, scratchpad copies) are served the same way.
+     Packets are still the game's own formats (VIFcodes, GIF tags): decoding them is reading the game's data;
 3. SPU2 register-level voice mixer -> native mixer;
    - DONE (2026-10-11): LIBSD exports are native, driving SoundEngine; SPU2 model and SPU DMA removed (docs/sound.md);
 4. SIF (EE <-> IOP RPC/DMA) -> direct native calls;
+   - ALREADY NATIVE (checked 2026-10-11): the EE sceSif* functions are runtime functions (Kernel/Stubs/SIF.cpp) and the
+     IOP's sifman/sifcmd imports are native (ps2xIOP services/iop_rpc.cpp): an RPC is a direct call of the IOP server
+     function with copies in and out, SIF DMA is a copy. No SIF register or SIF DMA channel is accessed (inventory below);
 5. GS register / 4 MB memory image -> native texture and CLUT store;
 6. CDVD -> extracted game files (last).
+
+## Hardware access inventory (2026-10-11, `GOW_IO_HIST=150`, boot + Olympus)
+What the game's own code still reads or writes as hardware registers (the generated code also marks every constant-address
+access with `// MMIO:`; `tools/dis.py ADDR` disassembles the USA build):
+- GS privileged registers: CSR (VBlank handler 0x182DE0) and PMODE/DISPFB/DISPLAY/BGCOLOR (0x183748, per frame): step 5.
+- EE timers: T0 count (busy-wait 0x17A2A0 and timing, ~50k reads in 150 s), T1, T2 (libkernel 0x299xxx).
+- Scratchpad DMA (channels 8/9) in 0x117D10, 0x1188F0, 0x1590F0, 0x159C58, 0x101888 and D_STAT clears: served as copies.
+- IPU + its DMA (libmpeg 0x26F228..0x279588, 0x189BD0..0x18A5E0) and D_ENABLER/W: FMV, skipped (GOW_SKIP_FMV).
+- INTC mask (libkernel 0x2940B0/0x294140), once per DI/EI.
+- Not accessed: VIF/GIF registers, SIF registers, SIF DMA, VIF1/GIF channel registers (except the boot TTE setting).
 
 ## What a no-emulation port really requires
 
