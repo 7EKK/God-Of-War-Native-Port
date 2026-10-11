@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "memory_card.h"
-#include "spu2.h"
+#include "sound_engine.h"
 
 namespace ps2x::iop::detail
 {
@@ -142,7 +142,8 @@ namespace ps2x::iop::detail
             write8(address, value);
         }
         [[nodiscard]] std::span<const uint8_t> ram() const noexcept { return m_ram; }
-        [[nodiscard]] Spu2 &spu2() noexcept { return m_spu2; }
+        // GOW-Port: native sound engine (driven by the native LIBSD calls, see sound_engine.h)
+        [[nodiscard]] SoundEngine &sound() noexcept { return m_sound; }
         // GOW-Port: the memory cards (native card storage, see memory_card.h)
         [[nodiscard]] MemoryCardSlots &cards() noexcept { return m_cards; }
 
@@ -163,7 +164,7 @@ namespace ps2x::iop::detail
         uint32_t m_interruptMask = 0;
         uint32_t m_interruptControl = 1;
         std::optional<DmaStart> m_dmaStart;
-        Spu2 m_spu2; // GOW-Port
+        SoundEngine m_sound; // GOW-Port
         MemoryCardSlots m_cards;
     };
 }

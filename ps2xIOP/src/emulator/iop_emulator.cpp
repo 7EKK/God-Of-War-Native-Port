@@ -71,7 +71,7 @@ namespace ps2x::iop::detail
 
     }
 
-    class IopEmulator::Impl final : public IopGuestExecutor
+    class IopEmulator::Impl final : public IopGuestExecutor, public IopNativeServices
     {
     public:
         using CpuState = IopCpuState;
@@ -108,6 +108,7 @@ namespace ps2x::iop::detail
             uint32_t function = 0u;
             uint32_t gp = 0u;
             uint32_t argument = 0u;
+            uint32_t argument2 = 0u;
         };
 
         explicit Impl(IopHost &hostRef)
@@ -475,7 +476,8 @@ namespace ps2x::iop::detail
             if (!nativeOverrides.empty())
                 if (const auto found = nativeOverrides.find(physicalAddress(cpu.pc)); found != nativeOverrides.end())
                 {
-                    found->second->handler(cpu, memory, host);
+                    IopNativeCall call{cpu, memory, host, *this};
+                    found->second->handler(call);
                     cpu.gpr[0] = 0u;
                     cpu.pc = cpu.gpr[31];
                     cpu.branchPending = false;
@@ -684,37 +686,19 @@ namespace ps2x::iop::detail
             servicingDmaInterrupts = false;
         }
 
-        // GOW-Port: el SPU2 genera una muestra cada 768 ciclos del IOP; su IRQ (IRQA alcanzada) es la interrupcion 9.
-        void serviceSpu2()
+        // GOW-Port: the native sound engine produces one stereo sample every 768 IOP cycles (the game's driver uses no
+        // SPU2 interrupt; transfers complete through native LIBSD calls).
+        void serviceSound()
         {
-            // GOW_SPU2_IRQ=0 desactiva la entrega de la IRQ (para comparar si el juego cambia de comportamiento).
-            static const bool irqEnabled = []
-            {
-                const char *value = std::getenv("GOW_SPU2_IRQ");
-                return value == nullptr || value[0] != '0';
-            }();
-            Spu2 &spu = memory.spu2();
+            SoundEngine &sound = memory.sound();
             if (nativeStats)
             {
                 const auto t0 = std::chrono::steady_clock::now();
-                spu.advanceTo(totalCycles);
+                sound.advanceTo(totalCycles);
                 spuSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
             }
             else
-                spu.advanceTo(totalCycles);
-            if (!spu.takeInterrupt() || !irqEnabled || servicingSpu2Interrupt)
-                return;
-            servicingSpu2Interrupt = true;
-            try
-            {
-                (void)intrman.dispatchInterrupt(Spu2::IopInterrupt, *this);
-            }
-            catch (...)
-            {
-                servicingSpu2Interrupt = false;
-                throw;
-            }
-            servicingSpu2Interrupt = false;
+                sound.advanceTo(totalCycles);
         }
 
         void servicePendingGuestCallbacks()
@@ -742,7 +726,7 @@ namespace ps2x::iop::detail
                     {
                         (void)callFunction(callback.function,
                                            callback.argument,
-                                           0u,
+                                           callback.argument2,
                                            0u,
                                            0u,
                                            callback.gp,
@@ -777,7 +761,7 @@ namespace ps2x::iop::detail
                     std::ostringstream out;
                     out << "[IOP:native] instructions native=" << d.nativeInstructions << " interpreted=" << d.interpretedInstructions
                         << " | time total=" << static_cast<int>(d.totalSeconds * 1000.0) << " ms cpu=" << static_cast<int>(d.cpuSeconds * 1000.0)
-                        << " ms spu2=" << static_cast<int>(d.spuSeconds * 1000.0) << " ms services=" << static_cast<int>(d.serviceSeconds * 1000.0)
+                        << " ms sound=" << static_cast<int>(d.spuSeconds * 1000.0) << " ms services=" << static_cast<int>(d.serviceSeconds * 1000.0)
                         << " ms | loops busy=" << d.busyLoops << " idle=" << d.idleLoops << " runCycles calls=" << d.runCyclesCalls << " (5 s window)";
                     d.busyLoops = d.idleLoops = d.runCyclesCalls = 0;
                     d.serviceSeconds = 0.0;
@@ -792,7 +776,7 @@ namespace ps2x::iop::detail
                 const uint64_t target = totalCycles + cycles;
                 while (totalCycles < target)
                 {
-                    serviceSpu2();
+                    serviceSound();
                     const auto serviceStart = nativeStats ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
                     servicePendingDmaInterrupts();
                     servicePendingGuestCallbacks();
@@ -834,7 +818,7 @@ namespace ps2x::iop::detail
                     if (totalCycles == before)
                         ++totalCycles;
                 }
-                serviceSpu2(); // GOW-Port: al dia tambien tras saltar ciclos ociosos hasta el final
+                serviceSound(); // GOW-Port: al dia tambien tras saltar ciclos ociosos hasta el final
             }
             catch (...)
             {
@@ -1029,6 +1013,14 @@ namespace ps2x::iop::detail
         std::map<int, Module> modules;
         std::vector<NativeRange> nativeRanges;
         std::unordered_map<uint32_t, const IopNativeOverride *> nativeOverrides; // physical address -> handler
+
+        // IopNativeServices (for the native IRX overrides)
+        void callGuestLater(uint32_t function, uint32_t gp, uint32_t a0, uint32_t a1, uint64_t delayCycles) override
+        {
+            if (function != 0u)
+                pendingGuestCallbacks.emplace(totalCycles + delayCycles, ScheduledGuestCallback{function, gp, a0, a1});
+        }
+        SoundEngine &sound() override { return memory.sound(); }
         uint32_t nativeBudget = kDefaultSlice;
         uint64_t nativeInstructions = 0, interpretedInstructions = 0;
         uint64_t pendingIopCycles = 0;
@@ -1038,7 +1030,6 @@ namespace ps2x::iop::detail
         uint64_t busyLoops = 0, idleLoops = 0, runCyclesCalls = 0;
         std::chrono::steady_clock::time_point statsLast = std::chrono::steady_clock::now();
         std::map<int, uint64_t> pendingDmaInterrupts;
-        bool servicingSpu2Interrupt = false;
         std::multimap<uint64_t, ScheduledGuestCallback> pendingGuestCallbacks;
         uint32_t nextModuleId = 1;
         uint32_t moduleCursor = kModuleLoadBase;
@@ -1163,7 +1154,7 @@ namespace ps2x::iop::detail
 
     size_t IopEmulator::drainAudio(int16_t *stereo, size_t maxFrames, size_t maxLatencyFrames)
     {
-        return m_impl->memory.spu2().drainOutput(stereo, maxFrames, maxLatencyFrames);
+        return m_impl->memory.sound().drainOutput(stereo, maxFrames, maxLatencyFrames);
     }
 
     uint64_t IopEmulator::cycles() const noexcept

@@ -8,11 +8,6 @@ namespace ps2x::iop::detail
 {
     namespace
     {
-        constexpr uint32_t kDmaSpu0Chcr = 0x1F8010C8u;
-        constexpr uint32_t kDmaSpu1Chcr = 0x1F801508u;
-        constexpr uint32_t kDmaStart = 1u << 24u;
-        constexpr int kDmaSpu0Irq = 0x24;
-        constexpr int kDmaSpu1Irq = 0x28;
 
         uint32_t alignUp(uint32_t value, uint32_t alignment)
         {
@@ -38,7 +33,7 @@ namespace ps2x::iop::detail
         m_interruptMask = 0;
         m_interruptControl = 1;
         m_dmaStart.reset();
-        m_spu2.reset();
+        m_sound.reset();
         m_cards.reset();
     }
 
@@ -103,14 +98,6 @@ namespace ps2x::iop::detail
             m_scratch[phys - ScratchBase] = value;
             return;
         }
-        if (Spu2::contains(phys)) // GOW-Port: los registros del SPU2 son de 16 bits
-        {
-            const uint32_t half = phys & ~1u;
-            const uint32_t shift = (phys & 1u) * 8u;
-            const uint16_t current = m_spu2.read16(half);
-            m_spu2.write16(half, static_cast<uint16_t>((current & ~(0xFFu << shift)) | (static_cast<uint32_t>(value) << shift)));
-            return;
-        }
         const uint32_t aligned = phys & ~3u;
         uint32_t current = readHardware32(aligned);
         const uint32_t shift = (phys & 3u) * 8u;
@@ -125,11 +112,6 @@ namespace ps2x::iop::detail
         {
             std::memcpy(m_ram.data() + phys, &value, sizeof(value));
             markOwned(phys, sizeof(value));
-            return;
-        }
-        if (Spu2::contains(phys) && (phys & 1u) == 0u) // GOW-Port: una sola escritura de 16 bits (KON, puerto de datos...)
-        {
-            m_spu2.write16(phys, value);
             return;
         }
         write8(address, static_cast<uint8_t>(value));
@@ -148,12 +130,6 @@ namespace ps2x::iop::detail
         if ((phys & 3u) == 0u && phys >= ScratchBase && phys + 3u < ScratchBase + ScratchSize)
         {
             std::memcpy(m_scratch.data() + (phys - ScratchBase), &value, sizeof(value));
-            return;
-        }
-        if ((phys & 3u) == 0u && Spu2::contains(phys))
-        {
-            m_spu2.write16(phys, static_cast<uint16_t>(value));
-            m_spu2.write16(phys + 2u, static_cast<uint16_t>(value >> 16u));
             return;
         }
         if ((phys & 3u) == 0u)
@@ -230,8 +206,6 @@ namespace ps2x::iop::detail
 
     uint32_t IopMemory::readHardware32(uint32_t address) const
     {
-        if (Spu2::contains(address))
-            return m_spu2.read16(address) | (static_cast<uint32_t>(m_spu2.read16(address + 2u)) << 16u);
         const auto value = m_hardware.find(address);
         if (value != m_hardware.end())
             return value->second;
@@ -265,37 +239,7 @@ namespace ps2x::iop::detail
             break;
         }
 
-        m_hardware[address] = value;
-        if ((address != kDmaSpu0Chcr && address != kDmaSpu1Chcr) || (value & kDmaStart) == 0u)
-            return;
-
-        const bool secondCore = address == kDmaSpu1Chcr;
-        m_hardware[address] = value & ~kDmaStart;
-        const uint32_t core = secondCore ? 1u : 0u;
-
-        const uint32_t blockControlAddress = address - sizeof(uint32_t);
-        uint32_t blockControl = 0u;
-        if (const auto current = m_hardware.find(blockControlAddress); current != m_hardware.end())
-            blockControl = current->second;
-        const uint32_t wordsPerBlock = std::max<uint32_t>(blockControl & 0xFFFFu, 1u);
-        const uint32_t blockCount = std::max<uint32_t>(blockControl >> 16u, 1u);
-        const uint64_t transferWords = static_cast<uint64_t>(wordsPerBlock) * blockCount;
-
-        // GOW-Port: copiar los datos de verdad entre la RAM del IOP (MADR) y la RAM de sonido (TSA del nucleo).
-        // CHCR bit 0 = 1: de memoria al SPU2. El estado (STATX 0x80) y la interrupcion diferida no cambian.
-        uint32_t madr = 0u;
-        if (const auto current = m_hardware.find(address - 8u); current != m_hardware.end())
-            madr = physicalAddress(current->second) & (RamSize - 1u);
-        const size_t bytes = static_cast<size_t>(std::min<uint64_t>(transferWords * 4u, RamSize - madr));
-        if ((value & 1u) != 0u)
-            (void)m_spu2.dmaWrite(core, m_ram.data() + madr, bytes);
-        else if (m_spu2.dmaRead(core, m_ram.data() + madr, bytes))
-            markOwned(madr, bytes);
-        m_spu2.markDmaReady(core);
-        m_dmaStart = DmaStart{
-            secondCore ? kDmaSpu1Irq : kDmaSpu0Irq,
-            std::max<uint64_t>(transferWords * 2u, 64u),
-        };
+        m_hardware[address] = value; // GOW-Port: the SPU DMA channels are gone (LIBSD transfers are native copies)
     }
 
     std::optional<IopMemory::DmaStart> IopMemory::takeDmaStart() noexcept

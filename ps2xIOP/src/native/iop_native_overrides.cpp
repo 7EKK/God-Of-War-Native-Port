@@ -5,133 +5,270 @@
 #include "emulator/core/iop_cpu.h"
 #include "emulator/core/iop_memory.h"
 #include "emulator/core/memory_card.h"
+#include "emulator/core/sound_engine.h"
 
+#include <array>
 #include <vector>
 
 namespace ps2x::iop::detail
 {
     namespace
     {
+        constexpr uint32_t kA0 = 4, kV0 = 2, kSp = 29, kGp = 28;
+
+        uint32_t arg(IopNativeCall &c, uint32_t index) // arguments from index 4 on come from the caller's stack
+        {
+            return index < 4u ? c.cpu.gpr[kA0 + index] : c.memory.load32(c.cpu.gpr[kSp] + 16u + (index - 4u) * 4u);
+        }
+        void ret(IopNativeCall &c, uint32_t value) { c.cpu.gpr[kV0] = value; }
+
         // ---- MC2_D.IRX: the memory-card driver's card I/O (docs/memory-card.md) ----------------------------------
         // MC2_D keeps its command dispatch, buffers and replies to the EE (the card file system runs on the EE in
         // libmc2); only the routines that talked to the card through SIO2 transfers are native: they read and write
         // the card image directly. Ports 2/3 are memory-card slots 1/2.
 
-        constexpr uint32_t kA0 = 4, kA1 = 5, kA2 = 6, kA3 = 7, kV0 = 2, kSp = 29;
-
-        MemoryCard *cardFor(IopMemory &memory, uint32_t port)
+        MemoryCard *cardFor(IopNativeCall &c, uint32_t port)
         {
-            return memory.cards().card(port & 1u); // ports 2/3 -> slots 0/1
+            return c.memory.cards().card(port & 1u); // ports 2/3 -> slots 0/1
         }
 
         // 0x0c8c: int read_page(port, slot, page, size, void *iopDst /* stack +0x10 */); 1 = ok, 0 = error
-        void mcReadPage(IopCpuState &cpu, IopMemory &memory, IopHost &)
+        void mcReadPage(IopNativeCall &c)
         {
-            MemoryCard *card = cardFor(memory, cpu.gpr[kA0]);
-            const uint32_t page = cpu.gpr[kA2], size = cpu.gpr[kA3];
-            const uint32_t destination = memory.load32(cpu.gpr[kSp] + 0x10u);
+            MemoryCard *card = cardFor(c, arg(c, 0));
+            const uint32_t page = arg(c, 2), size = arg(c, 3), destination = arg(c, 4);
             if (!card || size == 0u || size > MemoryCard::RawPageSize * MemoryCard::PagesPerBlock)
-            {
-                cpu.gpr[kV0] = 0u;
-                return;
-            }
+                return ret(c, 0u);
             std::vector<uint8_t> data(size);
             card->setAddress(page);
             card->read(data.data(), size);
-            cpu.gpr[kV0] = memory.writeRam(destination, data.data(), size) ? 1u : 0u;
+            ret(c, c.memory.writeRam(destination, data.data(), size) ? 1u : 0u);
         }
 
         // 0x0fdc: int write_page(port, slot, page, const void *iopSrc, size /* stack +0x10 */)
-        void mcWritePage(IopCpuState &cpu, IopMemory &memory, IopHost &)
+        void mcWritePage(IopNativeCall &c)
         {
-            MemoryCard *card = cardFor(memory, cpu.gpr[kA0]);
-            const uint32_t page = cpu.gpr[kA2], source = cpu.gpr[kA3];
-            const uint32_t size = memory.load32(cpu.gpr[kSp] + 0x10u);
+            MemoryCard *card = cardFor(c, arg(c, 0));
+            const uint32_t page = arg(c, 2), source = arg(c, 3), size = arg(c, 4);
             std::vector<uint8_t> data(size);
             if (!card || size == 0u || size > MemoryCard::RawPageSize * MemoryCard::PagesPerBlock ||
-                !memory.readRam(source, data.data(), size))
-            {
-                cpu.gpr[kV0] = 0u;
-                return;
-            }
+                !c.memory.readRam(source, data.data(), size))
+                return ret(c, 0u);
             card->setAddress(page);
             card->write(data.data(), size); // NAND: bits only go from 1 to 0, the driver erases first
-            cpu.gpr[kV0] = 1u;
+            ret(c, 1u);
         }
 
         // 0x0a98: int erase_block(port, slot, firstPageOfBlock)
-        void mcEraseBlock(IopCpuState &cpu, IopMemory &memory, IopHost &)
+        void mcEraseBlock(IopNativeCall &c)
         {
-            MemoryCard *card = cardFor(memory, cpu.gpr[kA0]);
+            MemoryCard *card = cardFor(c, arg(c, 0));
             if (!card)
-            {
-                cpu.gpr[kV0] = 0u;
-                return;
-            }
-            card->setAddress(cpu.gpr[kA2] & ~(MemoryCard::PagesPerBlock - 1u));
+                return ret(c, 0u);
+            card->setAddress(arg(c, 2) & ~(MemoryCard::PagesPerBlock - 1u));
             card->eraseBlock();
-            cpu.gpr[kV0] = 1u;
+            ret(c, 1u);
         }
 
-        // 0x13a8: int get_specs(port, slot, u32 out[2]): page size / pages per block / page count (card command 0x26)
-        void mcGetSpecs(IopCpuState &cpu, IopMemory &memory, IopHost &)
+        // 0x13a8: int get_specs(port, slot, u32 out[2]): page size / pages per block / page count
+        void mcGetSpecs(IopNativeCall &c)
         {
-            if (!cardFor(memory, cpu.gpr[kA0]))
-            {
-                cpu.gpr[kV0] = 0u;
-                return;
-            }
+            if (!cardFor(c, arg(c, 0)))
+                return ret(c, 0u);
             const uint32_t specs[2] = {(MemoryCard::PagesPerBlock << 16) | MemoryCard::PageSize, MemoryCard::PageCount};
-            cpu.gpr[kV0] = memory.writeRam(cpu.gpr[kA2], specs, sizeof(specs)) ? 1u : 0u;
+            ret(c, c.memory.writeRam(arg(c, 2), specs, sizeof(specs)) ? 1u : 0u);
         }
 
-        // 0x0650: int init_card(port, slot): 0 = no card, 1 = ready (2 only when the card's terminator differs from
-        // the 0x55 the driver sets, which a card image never does)
-        void mcInitCard(IopCpuState &cpu, IopMemory &memory, IopHost &)
+        // 0x0650 init_card, 0x164c probe, 0x08d8 probe_f3: (port, slot) -> 1 when a card image is present
+        // (a real card echoes the 0x55 terminator the driver sets, which gives 1)
+        void mcPresent(IopNativeCall &c)
         {
-            cpu.gpr[kV0] = cardFor(memory, cpu.gpr[kA0]) ? 1u : 0u;
-        }
-
-        // 0x164c: int probe(port, slot): 0 = no card, 1 = present (terminator 0x55 echoed twice)
-        void mcProbe(IopCpuState &cpu, IopMemory &memory, IopHost &)
-        {
-            cpu.gpr[kV0] = cardFor(memory, cpu.gpr[kA0]) ? 1u : 0u;
-        }
-
-        // MC2_D 0x08d8: int probe_f3(port, slot): the card's "81 F3" presence check before connecting -> 1 if present
-        void mcProbeF3(IopCpuState &cpu, IopMemory &memory, IopHost &)
-        {
-            cpu.gpr[kV0] = cardFor(memory, cpu.gpr[kA0]) ? 1u : 0u;
+            ret(c, cardFor(c, arg(c, 0)) ? 1u : 0u);
         }
 
         // ---- SIO2D.IRX: device detection (docs/memory-card.md) -----------------------------------------------------
         // The game reads the controller on the EE natively (scePad2* in gow_overrides.cpp) and opens no pad socket on
         // the IOP, so no pad is reported: DS2U_D never connects and never polls. Memory cards are reported from the
-        // card images, which runs MC2_D's own connect path. No SIO2 transfer is issued any more.
+        // card images, which runs MC2_D's own connect path. No SIO2 transfer exists.
 
-        // 0x0978: int probe_pad(port, slot, u8 *reply) -> > 0 = connected (reply[1] = mode id)
-        void sio2dProbePad(IopCpuState &cpu, IopMemory &, IopHost &)
+        // 0x0978: int probe_pad(port, slot, u8 *reply) -> > 0 = connected
+        void sio2dProbePad(IopNativeCall &c)
         {
-            cpu.gpr[kV0] = 0u;
+            ret(c, 0u);
         }
 
         // 0x0a1c: int probe_card(port, slot) -> non-zero = memory card present (ports 2/3)
-        void sio2dProbeCard(IopCpuState &cpu, IopMemory &memory, IopHost &)
+        void sio2dProbeCard(IopNativeCall &c)
         {
-            const uint32_t port = cpu.gpr[kA0];
-            cpu.gpr[kV0] = (port == 2u || port == 3u) && cpu.gpr[kA1] == 0u && cardFor(memory, port) ? 1u : 0u;
+            const uint32_t port = arg(c, 0);
+            ret(c, (port == 2u || port == 3u) && arg(c, 1) == 0u && cardFor(c, port) ? 1u : 0u);
+        }
+
+        // ---- LIBSD.IRX: the sound library (docs/sound.md) ----------------------------------------------------------
+        // The game's sound driver (989snd) reaches the sound hardware only through these calls; they drive the native
+        // sound engine directly (no SPU2 registers, no IOP DMA). Transfers are copies that complete at once; the
+        // driver's completion handler is still called after the call returns, as the DMA interrupt did.
+
+        struct LibsdState
+        {
+            std::array<uint32_t, 2> handler{}, handlerGp{}, handlerArg{}; // sceSdSetTransIntrHandler per channel
+            std::array<bool, 2> blockActive{};
+        };
+        LibsdState g_libsd;
+
+        constexpr uint64_t kTransferCompletionCycles = 512u; // the completion handler runs shortly after the call
+
+        // #4 sceSdInit(flag): the state LIBSD's own init leaves the sound unit in (LIBSD.IRX 0x456c)
+        void sdInit(IopNativeCall &c)
+        {
+            SoundEngine &sound = c.services.sound();
+            g_libsd = {};
+            for (uint32_t core = 0; core < 2u; ++core)
+            {
+                sound.initCore(core);
+                sound.setSwitch((0x16u << 8) | core, 0xFFFFFFu); // KOFF all voices
+                for (uint32_t id : {0x18u, 0x19u, 0x1Au, 0x1Bu})  // VMIXL, VMIXEL, VMIXR, VMIXER: all voices
+                    sound.setSwitch((id << 8) | core, 0xFFFFFFu);
+                sound.setParam((0x08u << 8) | core, core == 0u ? 0x0FF0u : 0x0FFCu); // MMIX
+                for (uint32_t id = 0x09u; id <= 0x10u; ++id)                         // MVOL, EVOL, AVOL, BVOL
+                    sound.setParam((id << 8) | 0x80u | core, (core == 1u && (id == 0x0Du || id == 0x0Eu)) ? 0x7FFFu : 0u);
+                for (uint32_t voice = 0; voice < SoundEngine::VoicesPerCore; ++voice)
+                {
+                    const uint32_t v = (voice << 1) | core;
+                    sound.setParam((0x02u << 8) | v, 0x3FFFu); // PITCH
+                    sound.setAddr((0x20u << 8) | v, 0u);       // SSA
+                }
+            }
+            const uint8_t silentLoop[16] = {0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07,
+                                            0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07};
+            sound.writeSampleRam(0x5000u, silentLoop, sizeof(silentLoop)); // the default loop block
+            ret(c, 0u);
+        }
+
+        void sdSetParam(IopNativeCall &c) { c.services.sound().setParam(arg(c, 0), static_cast<uint16_t>(arg(c, 1))); }
+        void sdGetParam(IopNativeCall &c) { ret(c, c.services.sound().getParam(arg(c, 0))); }
+        void sdSetSwitch(IopNativeCall &c) { c.services.sound().setSwitch(arg(c, 0), arg(c, 1)); }
+        void sdGetSwitch(IopNativeCall &c) { ret(c, c.services.sound().getSwitch(arg(c, 0))); }
+        void sdSetAddr(IopNativeCall &c) { c.services.sound().setAddr(arg(c, 0), arg(c, 1)); }
+        void sdGetAddr(IopNativeCall &c) { ret(c, c.services.sound().getAddr(arg(c, 0))); }
+        void sdSetCoreAttr(IopNativeCall &c) { c.services.sound().setCoreAttr(arg(c, 0), arg(c, 1)); }
+
+        // #17 sceSdVoiceTrans(channel, mode, iopAddr, spuAddr, size) -> size rounded up to 64 bytes
+        void sdVoiceTrans(IopNativeCall &c)
+        {
+            const uint32_t channel = arg(c, 0) & 1u, mode = arg(c, 1), iopAddr = arg(c, 2), spuAddr = arg(c, 3), size = arg(c, 4);
+            SoundEngine &sound = c.services.sound();
+            std::vector<uint8_t> data(size);
+            if ((mode & 3u) == 0u) // write
+            {
+                (void)c.memory.readRam(iopAddr, data.data(), size);
+                sound.writeSampleRam(spuAddr, data.data(), size);
+            }
+            else // read
+            {
+                sound.readSampleRam(spuAddr, data.data(), size);
+                (void)c.memory.writeRam(iopAddr, data.data(), size);
+            }
+            // mode 0 is a DMA transfer: the driver's handler runs on completion (989snd 0x78bc releases its transfer lock
+            // and signals the waiting thread); mode 8 is synchronous and has no completion interrupt
+            if ((mode & 8u) == 0u && g_libsd.handler[channel] != 0u)
+                c.services.callGuestLater(g_libsd.handler[channel], g_libsd.handlerGp[channel], channel,
+                                          g_libsd.handlerArg[channel], kTransferCompletionCycles);
+            ret(c, (size + 63u) & ~63u);
+        }
+
+        // #19 sceSdVoiceTransStatus(channel, flag): copies complete at once
+        void sdVoiceTransStatus(IopNativeCall &c) { ret(c, 1u); }
+
+        // #20 sceSdBlockTransStatus(channel, flag): position of the input stream (0 when stopped)
+        void sdBlockTransStatus(IopNativeCall &c)
+        {
+            const uint32_t channel = arg(c, 0) & 1u;
+            ret(c, g_libsd.blockActive[channel] ? c.services.sound().streamPosition(channel) & 0xFFFFFFu : 0u);
+        }
+
+        // #18 sceSdBlockTrans(channel, mode, iopBuffer, size, startAddr): the core input stream. Mode 2 stops it;
+        // SD_BLOCK_LOOP (0x10) plays the IOP ring continuously (989snd polls the position and has no handler set);
+        // otherwise the buffer is played once.
+        void sdBlockTrans(IopNativeCall &c)
+        {
+            const uint32_t channel = arg(c, 0) & 1u, mode = arg(c, 1), iopBuffer = arg(c, 2), size = arg(c, 3);
+            SoundEngine &sound = c.services.sound();
+            if ((mode & 3u) == 2u)
+            {
+                sound.stopStream(channel);
+                g_libsd.blockActive[channel] = false;
+                return ret(c, 0u);
+            }
+            const uint32_t physical = IopMemory::physicalAddress(iopBuffer);
+            if (physical + size > IopMemory::RamSize)
+                return ret(c, static_cast<uint32_t>(-100));
+            sound.startStream(channel, c.memory.ram().data() + physical, size, (mode & 0x10u) != 0u);
+            g_libsd.blockActive[channel] = true;
+            ret(c, 0u);
+        }
+
+        // #26 sceSdSetTransIntrHandler(channel, handler, arg)
+        void sdSetTransIntrHandler(IopNativeCall &c)
+        {
+            const uint32_t channel = arg(c, 0) & 1u;
+            g_libsd.handler[channel] = arg(c, 1);
+            g_libsd.handlerArg[channel] = arg(c, 2);
+            g_libsd.handlerGp[channel] = c.cpu.gpr[kGp];
+            ret(c, 0u);
+        }
+
+        // #23 sceSdSetEffectAttr(core, attr *): reverb mode and depths (stored; reverb is not mixed yet)
+        void sdSetEffectAttr(IopNativeCall &c)
+        {
+            const uint32_t core = arg(c, 0) & 1u, attr = arg(c, 1);
+            SoundEngine &sound = c.services.sound();
+            const uint32_t mode = c.memory.load32(attr + 4u);
+            sound.setParam((0x0Bu << 8) | 0x80u | core, static_cast<uint16_t>(c.memory.load32(attr + 8u)));  // EVOLL
+            sound.setParam((0x0Cu << 8) | 0x80u | core, static_cast<uint16_t>(c.memory.load32(attr + 12u))); // EVOLR
+            sound.setCoreAttr(2u | core, mode != 0u ? 1u : 0u);
+            ret(c, 0u);
+        }
+
+        // #31 sceSdSetEffectWorkArea(core, channel, mode): reserves the reverb work area at the end of sample RAM
+        void sdSetEffectWorkArea(IopNativeCall &c)
+        {
+            static constexpr uint32_t kWorkHalfwords[10] = {0x02, 0x4D8, 0x3E8, 0x908, 0xDFC, 0x15BC, 0x1ED8, 0x3008, 0x3008, 0x780};
+            const uint32_t core = arg(c, 0) & 1u, mode = arg(c, 2);
+            SoundEngine &sound = c.services.sound();
+            const uint32_t end = 0x1FFFFFu;
+            const uint32_t start = end - kWorkHalfwords[mode < 10u ? mode : 0u] * 8u + 1u;
+            sound.setAddr((0x1Du << 8) | core, end);   // EEA
+            sound.setAddr((0x1Cu << 8) | core, start); // ESA
+            sound.clearSampleRam(start, 64u);
+            ret(c, 0u);
         }
 
         const IopNativeOverride kOverrides[] = {
-            {"mc2_d_irx", 0x08d8u, "mc2_d probe_f3", &mcProbeF3},
-            {"sio2d_irx", 0x0978u, "sio2d probe_pad", &sio2dProbePad},
-            {"sio2d_irx", 0x0a1cu, "sio2d probe_card", &sio2dProbeCard},
             {"mc2_d_irx", 0x0c8cu, "mc2_d read_page", &mcReadPage},
             {"mc2_d_irx", 0x0fdcu, "mc2_d write_page", &mcWritePage},
             {"mc2_d_irx", 0x0a98u, "mc2_d erase_block", &mcEraseBlock},
             {"mc2_d_irx", 0x13a8u, "mc2_d get_specs", &mcGetSpecs},
-            {"mc2_d_irx", 0x0650u, "mc2_d init_card", &mcInitCard},
-            {"mc2_d_irx", 0x164cu, "mc2_d probe", &mcProbe},
+            {"mc2_d_irx", 0x0650u, "mc2_d init_card", &mcPresent},
+            {"mc2_d_irx", 0x164cu, "mc2_d probe", &mcPresent},
+            {"mc2_d_irx", 0x08d8u, "mc2_d probe_f3", &mcPresent},
+            {"sio2d_irx", 0x0978u, "sio2d probe_pad", &sio2dProbePad},
+            {"sio2d_irx", 0x0a1cu, "sio2d probe_card", &sio2dProbeCard},
+            {"libsd_irx", 0x456cu, "sceSdInit", &sdInit},
+            {"libsd_irx", 0x3670u, "sceSdSetParam", &sdSetParam},
+            {"libsd_irx", 0x36ccu, "sceSdGetParam", &sdGetParam},
+            {"libsd_irx", 0x372cu, "sceSdSetSwitch", &sdSetSwitch},
+            {"libsd_irx", 0x3764u, "sceSdGetSwitch", &sdGetSwitch},
+            {"libsd_irx", 0x379cu, "sceSdSetAddr", &sdSetAddr},
+            {"libsd_irx", 0x3800u, "sceSdGetAddr", &sdGetAddr},
+            {"libsd_irx", 0x3cbcu, "sceSdSetCoreAttr", &sdSetCoreAttr},
+            {"libsd_irx", 0x18a0u, "sceSdVoiceTrans", &sdVoiceTrans},
+            {"libsd_irx", 0x1c30u, "sceSdBlockTrans", &sdBlockTrans},
+            {"libsd_irx", 0x1af0u, "sceSdVoiceTransStatus", &sdVoiceTransStatus},
+            {"libsd_irx", 0x1e4cu, "sceSdBlockTransStatus", &sdBlockTransStatus},
+            {"libsd_irx", 0x0c3cu, "sceSdSetEffectAttr", &sdSetEffectAttr},
+            {"libsd_irx", 0x3e3cu, "sceSdSetTransIntrHandler", &sdSetTransIntrHandler},
+            {"libsd_irx", 0x0984u, "sceSdSetEffectWorkArea", &sdSetEffectWorkArea},
         };
     }
 

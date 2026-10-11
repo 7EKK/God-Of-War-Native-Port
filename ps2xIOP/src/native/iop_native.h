@@ -17,6 +17,27 @@ namespace ps2x::iop::detail
     struct IopCpuState;
     class IopMemory;
 
+    class SoundEngine;
+
+    // services of the IOP runtime available to native overrides
+    class IopNativeServices
+    {
+    public:
+        virtual ~IopNativeServices() = default;
+        // runs the guest function `function(a0, a1)` (with `gp`) after `delayCycles` IOP cycles, like an interrupt
+        // handler (used to report transfer completion to the game's driver)
+        virtual void callGuestLater(uint32_t function, uint32_t gp, uint32_t a0, uint32_t a1, uint64_t delayCycles) = 0;
+        virtual SoundEngine &sound() = 0;
+    };
+
+    struct IopNativeCall
+    {
+        IopCpuState &cpu;
+        IopMemory &memory;
+        IopHost &host;
+        IopNativeServices &services;
+    };
+
     // An IRX function replaced by native C++ (tools/iop/native_overrides.txt lists the same addresses for the code
     // generator). Called like the function: arguments in $a0-$a3 (stack args at $sp+16), result in $v0; the caller
     // then returns to $ra.
@@ -25,7 +46,7 @@ namespace ps2x::iop::detail
         const char *module; // module identifier as in the dumps (e.g. "mc2_d_irx")
         uint32_t offset;    // from the module base
         const char *name;
-        void (*handler)(IopCpuState &cpu, IopMemory &memory, IopHost &host);
+        void (*handler)(IopNativeCall &call);
     };
 
     // src/native/iop_native_overrides.cpp

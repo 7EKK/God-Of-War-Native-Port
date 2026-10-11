@@ -38,7 +38,7 @@ namespace ps2x::iop::detail
         [[nodiscard]] bool zeroMemory(uint32_t address, size_t size);
         [[nodiscard]] bool isMemoryRange(uint32_t address, size_t size) const;
 
-        // GOW-Port: muestras estereo de 48 kHz que ha producido el SPU2 (ver Spu2::drainOutput).
+        // GOW-Port: 48 kHz stereo samples produced by the native sound engine (SoundEngine::drainOutput).
         size_t drainAudio(int16_t *stereo, size_t maxFrames, size_t maxLatencyFrames);
         [[nodiscard]] uint64_t cycles() const noexcept;
         [[nodiscard]] uint64_t instructions() const noexcept;
