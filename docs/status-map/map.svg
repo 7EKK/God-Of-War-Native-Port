@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="384" viewBox="0 0 900 384" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" role="img">
+<title>Status: 85% done</title>
+<style>
+  .bg { fill: #ffffff; } .line { stroke: #d0d7de; } .t1 { fill: #1f2328; } .t2 { fill: #59636e; }
+  .native { fill: #1a7f37; } .partial { fill: #d4a017; } .pending { fill: #c4c8ce; }
+  .on-native, .on-partial { fill: #ffffff; } .on-pending { fill: #1f2328; } .hatch { stroke: #7a5200; }
+  @media (prefers-color-scheme: dark) {
+    .bg { fill: #0d1117; } .line { stroke: #30363d; } .t1 { fill: #e6edf3; } .t2 { fill: #9198a1; }
+    .native { fill: #238636; } .pending { fill: #4b525c; } .on-pending { fill: #e6edf3; }
+  }
+</style>
+<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+<line class="hatch" x1="0" y1="0" x2="0" y2="6" stroke-width="1.5" stroke-opacity=".5"/></pattern></defs>
+<rect class="bg" width="900" height="384" rx="6"/>
+<text class="t1" x="16" y="32" font-size="22" font-weight="600">Status<tspan class="t2" font-size="15" font-weight="400"> · 85% overall</tspan></text>
+<line class="line" x1="16" y1="42" x2="884" y2="42" stroke-width="1"/>
+<text class="t1" x="16" y="68" font-size="15" font-weight="600">PS2 hardware → native code<tspan class="t2" font-weight="400"> · 91% done</tspan></text>
+<text class="t2" x="16" y="99.0" font-size="12.5" font-weight="600">EE</text>
+<g><title>R5900 CPU: game code recompiled to C++ (6.4k functions) (native)</title><rect class="native" x="136.0" y="80" width="273.0" height="30" rx="4"/>
+<text class="on-native" x="272.5" y="99.0" font-size="11.5" text-anchor="middle">R5900 CPU</text></g>
+<g><title>Kernel: threads, semaphores, alarms, syscalls (native HLE) (native)</title><rect class="native" x="413.0" y="80" width="136.5" height="30" rx="4"/>
+<text class="on-native" x="481.2" y="99.0" font-size="11.5" text-anchor="middle">Kernel</text></g>
+<g><title>FPU and MMI instructions (PMULTH miscompile fixed) (native)</title><rect class="native" x="553.5" y="80" width="91.0" height="30" rx="4"/>
+<text class="on-native" x="599.0" y="99.0" font-size="11.5" text-anchor="middle">FPU / MMI</text></g>
+<g><title>DMA controller: no model, the game's packets go straight to VIF/GIF (native)</title><rect class="native" x="648.5" y="80" width="91.0" height="30" rx="4"/>
+<text class="on-native" x="694.0" y="99.0" font-size="11.5" text-anchor="middle">DMA</text></g>
+<g><title>INTC: not touched by game code in gameplay (native)</title><rect class="native" x="743.5" y="80" width="45.5" height="30" rx="4"/>
+<text class="on-native" x="766.2" y="99.0" font-size="11.5" text-anchor="middle">INTC</text></g>
+<g><title>Timers T0/T1/T2: still register-level (game clock, kernel alarms); native clock in progress (partial)</title><rect class="partial" x="793.0" y="80" width="91.0" height="30" rx="4"/>
+<rect fill="url(#hatch)" x="793.0" y="80" width="91.0" height="30" rx="4"/>
+<text class="on-partial" x="838.5" y="99.0" font-size="11.5" text-anchor="middle">Timers</text></g>
+<text class="t2" x="16" y="137.0" font-size="12.5" font-weight="600">VU / GS</text>
+<g><title>VU1 microcode: ~500 microprograms compiled ahead of time to C++ (native)</title><rect class="native" x="136.0" y="118" width="111.5" height="30" rx="4"/>
+<text class="on-native" x="191.8" y="137.0" font-size="11.5" text-anchor="middle">VU1</text></g>
+<g><title>VU0 macro mode: inline recompiled COP2 (native)</title><rect class="native" x="251.5" y="118" width="31.8" height="30" rx="4"/>
+<text class="on-native" x="267.4" y="137.0" font-size="11.5" text-anchor="middle">VU0</text></g>
+<g><title>VIF1 / GIF: the game's packets decoded directly (UNPACK, GIF tags) (native)</title><rect class="native" x="287.3" y="118" width="78.0" height="30" rx="4"/>
+<text class="on-native" x="326.3" y="137.0" font-size="11.5" text-anchor="middle">VIF1 / GIF</text></g>
+<g><title>GS renderer: native OpenGL render targets, 2x internal, 16:9, mask/shuffle passes (native)</title><rect class="native" x="369.3" y="118" width="133.9" height="30" rx="4"/>
+<text class="on-native" x="436.3" y="137.0" font-size="11.5" text-anchor="middle">GS renderer</text></g>
+<g><title>GS textures and CLUT: native texture store (no VRAM model) (native)</title><rect class="native" x="507.2" y="118" width="111.0" height="30" rx="4"/>
+<text class="on-native" x="562.7" y="137.0" font-size="11.5" text-anchor="middle">Textures / CLUT</text></g>
+<g><title>Palettes loaded from render targets: still a readback into GS memory (in progress) (partial)</title><rect class="partial" x="622.2" y="118" width="91.2" height="30" rx="4"/>
+<rect fill="url(#hatch)" x="622.2" y="118" width="91.2" height="30" rx="4"/>
+<text class="on-partial" x="667.8" y="137.0" font-size="11.5" text-anchor="middle">CLUT from RT</text></g>
+<g><title>GS display registers (PMODE/DISPFB/DISPLAY/CSR): native display state (native)</title><rect class="native" x="717.4" y="118" width="91.2" height="30" rx="4"/>
+<text class="on-native" x="763.0" y="137.0" font-size="11.5" text-anchor="middle">Display regs</text></g>
+<g><title>IPU: FMV video (skipped for now) (pending)</title><rect class="pending" x="812.6" y="118" width="71.4" height="30" rx="4"/>
+<text class="on-pending" x="848.3" y="137.0" font-size="11.5" text-anchor="middle">IPU / FMV</text></g>
+<text class="t2" x="16" y="175.0" font-size="12.5" font-weight="600">IOP</text>
+<g><title>R3000A CPU: the game's 8 IRX modules compiled ahead of time to C++ (native)</title><rect class="native" x="136.0" y="156" width="216.7" height="30" rx="4"/>
+<text class="on-native" x="244.3" y="175.0" font-size="11.5" text-anchor="middle">R3000A / IRX</text></g>
+<g><title>IOP kernel imports (native HLE) (native)</title><rect class="native" x="356.7" y="156" width="78.0" height="30" rx="4"/>
+<text class="on-native" x="395.7" y="175.0" font-size="11.5" text-anchor="middle">IOP kernel</text></g>
+<g><title>SIF: RPC and DMA as direct native calls (native)</title><rect class="native" x="438.7" y="156" width="54.2" height="30" rx="4"/>
+<text class="on-native" x="465.7" y="175.0" font-size="11.5" text-anchor="middle">SIF</text></g>
+<g><title>SPU2: native sound engine driven by LIBSD's exports (native)</title><rect class="native" x="496.8" y="156" width="162.5" height="30" rx="4"/>
+<text class="on-native" x="578.1" y="175.0" font-size="11.5" text-anchor="middle">SPU2 / sound</text></g>
+<g><title>SIO2: native pad and memory-card services (chip model deleted) (native)</title><rect class="native" x="663.3" y="156" width="108.3" height="30" rx="4"/>
+<text class="on-native" x="717.5" y="175.0" font-size="11.5" text-anchor="middle">Pad / card</text></g>
+<g><title>CDVD: still reads the ISO; extracted game files are the last step (partial)</title><rect class="partial" x="775.7" y="156" width="108.3" height="30" rx="4"/>
+<rect fill="url(#hatch)" x="775.7" y="156" width="108.3" height="30" rx="4"/>
+<text class="on-partial" x="829.8" y="175.0" font-size="11.5" text-anchor="middle">CDVD</text></g>
+<text class="t1" x="16" y="224" font-size="15" font-weight="600">Game<tspan class="t2" font-weight="400"> · 73% done</tspan></text>
+<text class="t2" x="16" y="255.0" font-size="12.5" font-weight="600">Flow</text>
+<g><title>Boot, menu, new game (native)</title><rect class="native" x="136.0" y="236" width="246.7" height="30" rx="4"/>
+<text class="on-native" x="259.3" y="255.0" font-size="11.5" text-anchor="middle">Boot / menu</text></g>
+<g><title>Load and save on the memory card (save test passes) (native)</title><rect class="native" x="386.7" y="236" width="246.7" height="30" rx="4"/>
+<text class="on-native" x="510.0" y="255.0" font-size="11.5" text-anchor="middle">Load / save</text></g>
+<g><title>FMV cutscenes (skipped with GOW_SKIP_FMV) (pending)</title><rect class="pending" x="637.3" y="236" width="246.7" height="30" rx="4"/>
+<text class="on-pending" x="760.7" y="255.0" font-size="11.5" text-anchor="middle">FMV</text></g>
+<text class="t2" x="16" y="293.0" font-size="12.5" font-weight="600">Zones (save slots)</text>
+<g><title>Olympus: correct, 60 fps (native)</title><rect class="native" x="136.0" y="274" width="184.0" height="30" rx="4"/>
+<text class="on-native" x="228.0" y="293.0" font-size="11.5" text-anchor="middle">Olympus 60</text></g>
+<g><title>Desert of Lost Souls: correct, 60 fps (native)</title><rect class="native" x="324.0" y="274" width="184.0" height="30" rx="4"/>
+<text class="on-native" x="416.0" y="293.0" font-size="11.5" text-anchor="middle">Desert 60</text></g>
+<g><title>Cliffs of Madness: correct, 30 fps (partial)</title><rect class="partial" x="512.0" y="274" width="184.0" height="30" rx="4"/>
+<rect fill="url(#hatch)" x="512.0" y="274" width="184.0" height="30" rx="4"/>
+<text class="on-partial" x="604.0" y="293.0" font-size="11.5" text-anchor="middle">Cliffs 30</text></g>
+<g><title>Save slot 4: correct, 60 fps (native)</title><rect class="native" x="700.0" y="274" width="184.0" height="30" rx="4"/>
+<text class="on-native" x="792.0" y="293.0" font-size="11.5" text-anchor="middle">Slot 4 60</text></g>
+<text class="t2" x="16" y="331.0" font-size="12.5" font-weight="600">Output</text>
+<g><title>1920x1080 window, 16:9 (native)</title><rect class="native" x="136.0" y="312" width="184.0" height="30" rx="4"/>
+<text class="on-native" x="228.0" y="331.0" font-size="11.5" text-anchor="middle">1080p 16:9</text></g>
+<g><title>Audio (native mixer, 48 kHz) (native)</title><rect class="native" x="324.0" y="312" width="184.0" height="30" rx="4"/>
+<text class="on-native" x="416.0" y="331.0" font-size="11.5" text-anchor="middle">Audio</text></g>
+<g><title>Game speed: exact at 30 fps, 2-3 % fast at 60 fps (partial)</title><rect class="partial" x="512.0" y="312" width="184.0" height="30" rx="4"/>
+<rect fill="url(#hatch)" x="512.0" y="312" width="184.0" height="30" rx="4"/>
+<text class="on-partial" x="604.0" y="331.0" font-size="11.5" text-anchor="middle">Game speed</text></g>
+<g><title>Nintendo Switch build (after the PC port) (pending)</title><rect class="pending" x="700.0" y="312" width="184.0" height="30" rx="4"/>
+<text class="on-pending" x="792.0" y="331.0" font-size="11.5" text-anchor="middle">Switch</text></g>
+<rect class="native" x="16" y="358" width="12" height="12" rx="2"/>
+<text class="t2" x="33" y="368" font-size="12">native</text>
+<rect class="partial" x="96.6" y="358" width="12" height="12" rx="2"/>
+<rect fill="url(#hatch)" x="96.6" y="358" width="12" height="12" rx="2"/>
+<text class="t2" x="113.6" y="368" font-size="12">partial / in progress</text>
+<rect class="pending" x="276.2" y="358" width="12" height="12" rx="2"/>
+<text class="t2" x="293.2" y="368" font-size="12">pending</text>
+</svg>

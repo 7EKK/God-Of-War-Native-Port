@@ -1,0 +1,25 @@
+name: Status map
+on:
+  push:
+    branches: [main]
+    paths: [docs/status-map/data.toml, tools/status_map.py]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python tools/status_map.py
+      - name: Commit if changed
+        run: |
+          if git diff --quiet docs/status-map; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/status-map
+          git commit -m "Status map: regenerate"
+          git push

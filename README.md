@@ -52,6 +52,11 @@ The end goal: after the PC port is complete, the same native port running on the
 
 ## Current status
 
+<a href="docs/status-map/detail.md"><img src="docs/status-map/map.svg" alt="Port status map: PS2 hardware layers and game features, coloured by status" width="100%"></a>
+
+Per-component breakdown: [`docs/status-map/detail.md`](docs/status-map/detail.md). Regenerated from
+`docs/status-map/data.toml` by `tools/status_map.py` (and automatically on push to `main`).
+
 <p align="center">
   <img src="docs/captures/olympus.jpg" alt="Olympus" width="49%">
   <img src="docs/captures/desert.jpg" alt="Desert of Lost Souls" width="49%">

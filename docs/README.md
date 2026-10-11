@@ -30,6 +30,7 @@ The user wants the game **totally playable**; work continues until then. Game da
 | [native-port.md](native-port.md) | Inventory of every emulated layer, its native replacement, measured cost and the order of work. |
 | [sound.md](sound.md) | Native sound engine: the LIBSD API boundary, SoundEngine, what is mixed. |
 | [memory-card.md](memory-card.md) | PS2 memory card format and how the game reaches the card (for the native card service). |
+| [status-map/](status-map/detail.md) | Status map shown on the GitHub page: edit `data.toml`, run `python tools/status_map.py`. Keep it in step with status.md. |
 | [switch.md](switch.md) | Switch toolchain (WSL + devkitPro), Switch build changes, open Switch issues. |
 | [gemini-helper.md](gemini-helper.md) | Read-only helper agent (`agy`/Gemini) to offload log/dump analysis: when and how to call it. |
 
