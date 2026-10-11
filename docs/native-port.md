@@ -38,6 +38,12 @@ verified on the 4 zones (images, fps, audio) before the next:
      IOP's sifman/sifcmd imports are native (ps2xIOP services/iop_rpc.cpp): an RPC is a direct call of the IOP server
      function with copies in and out, SIF DMA is a copy. No SIF register or SIF DMA channel is accessed (inventory below);
 5. GS register / 4 MB memory image -> native texture and CLUT store;
+   - Measured (2026-10-11, `GOW_GS_TEXSRC=1`, Olympus + Cliffs, texture decodes per run): PSMT8 textures are read
+     almost only from data the game uploaded as CT32 (Olympus 27k of 27k, Cliffs 35k + 3.8k from CT16S uploads), CT24
+     textures from CT32 uploads (~4.4k), CT16S from same-format uploads (exact or a part); no texture comes from a local
+     copy or a render-target readback. So the store keeps upload words at their GS block addresses (the game's
+     "upload as 32 bit, read as 8 bit" packing needs the address math), but needs no rasteriser, framebuffer or
+     transfer-readback model;
 6. CDVD -> extracted game files (last).
 
 ## Hardware access inventory (2026-10-11, `GOW_IO_HIST=150`, boot + Olympus)
