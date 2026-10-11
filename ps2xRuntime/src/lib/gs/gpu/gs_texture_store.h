@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 class GSTextureStore
@@ -20,8 +21,12 @@ public:
     void Initialize(uint8_t *vram, uint32_t vramSize);
     void Reset();
 
-    // TEX0 with an indexed PSM: load the CLUT from GS memory when TEX0.CLD says so.
-    void LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut);
+    // Where a CLUT load reads its source pixels when they are not the uploaded bytes: the renderer, when TEX0.CBP lies in a
+    // render target. Gets the `count` source pixels as (x, y) pairs of a `width` (64 px units) wide TEX0.CPSM buffer at
+    // TEX0.CBP and writes their raw words; returns false when that memory holds no render target.
+    using ClutSource = std::function<bool(const GSTex0Reg &tex0, uint32_t width, const uint16_t *xy, uint32_t count, uint32_t *words)>;
+    // TEX0 with an indexed PSM: load the CLUT when TEX0.CLD says so, from `source` or else from the uploaded bytes.
+    void LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut, const ClutSource &source = {});
     uint64_t ClutHash() const;
     // 256-entry RGBA palette for the indexed texture described by `state` (CSA/CSM/CPSM + TEXA applied).
     void BuildPalette(const GSDrawState &state, uint32_t out[256]) const;
@@ -34,7 +39,7 @@ public:
     void Upload(const uint8_t *data, uint32_t sizeBytes);
     const GSTransferSnapshot &TransferState() const { return m_state; }
 
-    // One pixel of GS memory in the given layout (render-target write-back, debug reads).
+    // One pixel of GS memory in the given layout (debug reads/writes through the backend interface).
     uint32_t Read(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y) const;
     void Write(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y, uint32_t value);
     void Snapshot(std::vector<uint8_t> &out) const;
