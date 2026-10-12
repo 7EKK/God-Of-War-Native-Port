@@ -883,6 +883,14 @@ struct GSHwBackend::Impl
                 if (hist[i])
                     std::fprintf(stderr, " %d:%u", i, hist[i]);
             std::fprintf(stderr, "\n");
+            char name[64];
+            std::snprintf(name, sizeof(name), "gs_hw_idx_%d_tbp%x_%ux%u.pgm", idxDumped, t.tbp0, tex.width, tex.height);
+            if (FILE *f = std::fopen(name, "wb"))
+            {
+                std::fprintf(f, "P5 %u %u 255 ", tex.width, tex.height);
+                std::fwrite(indices.data(), 1, indices.size(), f);
+                std::fclose(f);
+            }
         }
         tex.blockLo = t.tbp0;
         tex.blockHi = t.tbp0 + spanBlocks(t.psm, t.tbw, tex.height);
@@ -908,6 +916,19 @@ struct GSHwBackend::Impl
         uint64_t key = clutHash;
         key = key * 1099511628211ull ^ (t.cpsm | (t.csm << 8) | (t.csa << 16) | (static_cast<uint64_t>(t.psm & 63) << 24));
         key = key * 1099511628211ull ^ (static_cast<uint64_t>(s.texa.ta0) | (static_cast<uint64_t>(s.texa.ta1) << 8) | (static_cast<uint64_t>(s.texa.aem) << 16));
+        // GOW_GS_HW_PALDUMP=<tbp hex>: debug, print the palette of the first draws textured from that block (rgba per entry)
+        static const long palDumpTbp = std::getenv("GOW_GS_HW_PALDUMP") ? std::strtol(std::getenv("GOW_GS_HW_PALDUMP"), nullptr, 16) : -1;
+        static int palDumped = 0;
+        if (palDumpTbp >= 0 && static_cast<long>(t.tbp0) == palDumpTbp && palDumped < 2)
+        {
+            ++palDumped;
+            uint32_t colors[256];
+            store.BuildPalette(s, colors);
+            std::fprintf(stderr, "[gs-hw-pal] tbp=%x cbp=%x cpsm=%u csm=%u csa=%u:", t.tbp0, t.cbp, t.cpsm, t.csm, t.csa);
+            for (int i = 0; i < 256; ++i)
+                std::fprintf(stderr, "%s%08x", (i % 16) ? " " : "\n  ", colors[i]);
+            std::fprintf(stderr, "\n");
+        }
         const auto it = palettes.find(key);
         if (it != palettes.end())
             return it->second;
@@ -920,17 +941,6 @@ struct GSHwBackend::Impl
         }
         uint32_t colors[256];
         store.BuildPalette(s, colors);
-        // GOW_GS_HW_PALDUMP=<tbp hex>: debug, print the palette of the first draw textured from that block (rgba per entry)
-        static const long palDumpTbp = std::getenv("GOW_GS_HW_PALDUMP") ? std::strtol(std::getenv("GOW_GS_HW_PALDUMP"), nullptr, 16) : -1;
-        static int palDumped = 0;
-        if (palDumpTbp >= 0 && static_cast<long>(t.tbp0) == palDumpTbp && palDumped < 2)
-        {
-            ++palDumped;
-            std::fprintf(stderr, "[gs-hw-pal] tbp=%x cbp=%x cpsm=%u csm=%u csa=%u:", t.tbp0, t.cbp, t.cpsm, t.csm, t.csa);
-            for (int i = 0; i < 256; ++i)
-                std::fprintf(stderr, "%s%08x", (i % 16) ? " " : "\n  ", colors[i]);
-            std::fprintf(stderr, "\n");
-        }
         GLuint id = 0;
         g.GenTextures(1, &id);
         g.BindTexture(kTexture2D, id);

@@ -211,6 +211,7 @@ private:
 
     uint8_t m_curR = 0x80, m_curG = 0x80, m_curB = 0x80, m_curA = 0x80;
     float m_curQ = 1.0f;
+    float m_packedStQ = 1.0f; // Q of the last PACKED ST write: becomes RGBAQ.Q only at the next PACKED RGBAQ write (GS rule)
     float m_curS = 0.0f, m_curT = 0.0f;
     uint16_t m_curU = 0, m_curV = 0;
     uint8_t m_curFog = 0;

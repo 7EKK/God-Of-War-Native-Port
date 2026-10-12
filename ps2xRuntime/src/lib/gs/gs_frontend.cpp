@@ -352,6 +352,7 @@ void GS::reset()
     m_curB = 0x80;
     m_curA = 0x80;
     m_curQ = 1.0f;
+    m_packedStQ = 1.0f;
     m_curS = 0.0f;
     m_curT = 0.0f;
     m_curU = 0;
@@ -996,6 +997,7 @@ void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes, GifPathId pat
             recordGifTagDebugEventUnlocked(sizeBytes, nloop, input.format, input.nreg);
             if (!nloop) continue; // NLOOP=0 conserva PRIM, vertices y Q.
             m_curQ = 1.0f;
+            m_packedStQ = 1.0f;
             if (input.format == GIF_FMT_PACKED && ((tagLo >> 46u) & 1u))
                 writeRegisterUnlocked(GS_REG_PRIM, (tagLo >> 47u) & 0x7FFu);
             for (uint32_t i = 0u; i < input.nreg; ++i)
@@ -1043,6 +1045,7 @@ bool GS::processNativePackedGIFPacket(const uint8_t *data, uint32_t sizeBytes, G
         if (tag.nloop == 0u)
             return true;
         m_curQ = 1.0f;
+        m_packedStQ = 1.0f;
 
         const bool pre = ((tag.lo >> 46u) & 1u) != 0u;
         if (pre)
@@ -1083,6 +1086,7 @@ void GS::uploadImageNative(uint64_t bitbltbuf,
         ((setupGifTag >> 58u) & 3u) == GIF_FMT_PACKED)
     {
         m_curQ = 1.0f;
+        m_packedStQ = 1.0f;
         if ((setupGifTag >> 46u) & 1u)
             writeRegisterUnlocked(GS_REG_PRIM, (setupGifTag >> 47u) & 0x7FFu);
     }
@@ -1176,6 +1180,7 @@ bool GS::tryProcessNativeImageUploadPacket(const uint8_t *data, uint32_t sizeByt
     // GOW-Port: el atajo conserva los efectos de las etiquetas no vacias del parser general.
     // Solo PRE del setup PACKED cambia PRIM; PRE de IMAGE no tiene efecto.
     m_curQ = 1.0f;
+    m_packedStQ = 1.0f;
     if ((setupTagLo & (1ull << 46u)) != 0u)
         writeRegisterUnlocked(GS_REG_PRIM, (setupTagLo >> 47u) & 0x7FFu);
     uploadImageNativeUnlocked(regs[0], regs[1], regs[2], regs[3], data + offset, imageBytes);
@@ -1194,6 +1199,7 @@ void GS::writeRegisterPacked(uint8_t regDesc, uint64_t lo, uint64_t hi)
         m_curG = static_cast<uint8_t>((lo >> 32) & 0xFF);
         m_curB = static_cast<uint8_t>(hi & 0xFF);
         m_curA = static_cast<uint8_t>((hi >> 32) & 0xFF);
+        m_curQ = m_packedStQ;
         break;
     case 0x02:
     {
@@ -1202,9 +1208,11 @@ void GS::writeRegisterPacked(uint8_t regDesc, uint64_t lo, uint64_t hi)
         uint32_t qBits = static_cast<uint32_t>(hi & 0xFFFFFFFF);
         std::memcpy(&m_curS, &sBits, 4);
         std::memcpy(&m_curT, &tBits, 4);
-        std::memcpy(&m_curQ, &qBits, 4);
-        if (m_curQ == 0.0f)
-            m_curQ = 1.0f;
+        // PACKED ST only latches Q; the vertex Q (RGBAQ.Q) changes at the next PACKED RGBAQ. The heat-haze fans around
+        // the torches send ST-only vertices with junk in the Q word; applying it directly scattered their samples.
+        std::memcpy(&m_packedStQ, &qBits, 4);
+        if (m_packedStQ == 0.0f)
+            m_packedStQ = 1.0f;
         break;
     }
     case 0x03:
@@ -1838,7 +1846,7 @@ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
 
 void GS::vertexKick(bool drawing)
 {
-    // GOW-Port: PS2X_GS_TRACE_TBP=<tbp0> registra los vertices que llegan con esa textura activa.
+    // GOW-Port: PS2X_GS_TRACE_TBP=<tbp0> registra los vertices que llegan con esa textura activa (-2: abanicos sin textura, -3: abanicos con textura).
     {
         static const long traceTbp = []
         {
@@ -1854,14 +1862,15 @@ void GS::vertexKick(bool drawing)
         }();
         static const auto traceStart = std::chrono::steady_clock::now();
         const GSContext &tc = m_ctx[m_prim.ctxt ? 1 : 0];
-        if (traceTbp >= 0 && m_prim.tme && static_cast<long>(tc.tex0.tbp0) == traceTbp && traced < 400 &&
+        if (((traceTbp >= 0 && m_prim.tme && static_cast<long>(tc.tex0.tbp0) == traceTbp) ||
+             (traceTbp == -2 && !m_prim.tme && m_prim.type == GS_PRIM_TRIFAN) || (traceTbp == -3 && m_prim.tme && m_prim.type == GS_PRIM_TRIFAN)) && traced < 400 &&
             std::chrono::steady_clock::now() - traceStart >= std::chrono::seconds(traceAfter))
         {
             ++traced;
             const GSVertex &v = m_vtxQueue[m_vtxCount % kMaxVerts];
             std::cerr << "[gs:trace] prim=" << static_cast<unsigned>(m_prim.type) << " draw=" << drawing
                       << " cnt=" << m_vtxCount << " xy=(" << v.x << "," << v.y << ") stq=(" << v.s << "," << v.t
-                      << "," << v.q << ") uv=(" << (v.u >> 4) << "," << (v.v >> 4) << ")" << std::endl;
+                      << "," << v.q << ") uv=(" << (v.u >> 4) << "," << (v.v >> 4) << ") a=" << static_cast<unsigned>(v.a) << " r=" << static_cast<unsigned>(v.r) << std::endl;
         }
     }
     ++m_vtxCount;
