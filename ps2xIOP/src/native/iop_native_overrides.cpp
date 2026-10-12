@@ -8,6 +8,8 @@
 #include "emulator/core/sound_engine.h"
 
 #include <array>
+#include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 namespace ps2x::iop::detail
@@ -113,6 +115,7 @@ namespace ps2x::iop::detail
         {
             std::array<uint32_t, 2> handler{}, handlerGp{}, handlerArg{}; // sceSdSetTransIntrHandler per channel
             std::array<bool, 2> blockActive{};
+            std::array<uint32_t, 2> blockBuffer{}, blockSize{}; // sceSdBlockTrans's IOP ring per channel
         };
         LibsdState g_libsd;
 
@@ -145,7 +148,16 @@ namespace ps2x::iop::detail
             ret(c, 0u);
         }
 
-        void sdSetParam(IopNativeCall &c) { c.services.sound().setParam(arg(c, 0), static_cast<uint16_t>(arg(c, 1))); }
+        // GOW_SND_DIAG=1: logs the core-input stream calls and MMIX/BVOL/MVOL writes (movie audio investigation)
+        const bool g_sndDiag = std::getenv("GOW_SND_DIAG") != nullptr;
+
+        void sdSetParam(IopNativeCall &c)
+        {
+            const uint32_t entry = arg(c, 0), id = (entry >> 8) & 0xFFu;
+            if (g_sndDiag && (id == 0x08u || (id >= 0x09u && id <= 0x10u)))
+                std::fprintf(stderr, "[snd-diag] SetParam id=%02x core=%u value=%04x\n", id, entry & 1u, arg(c, 1) & 0xFFFFu);
+            c.services.sound().setParam(entry, static_cast<uint16_t>(arg(c, 1)));
+        }
         void sdGetParam(IopNativeCall &c) { ret(c, c.services.sound().getParam(arg(c, 0))); }
         void sdSetSwitch(IopNativeCall &c) { c.services.sound().setSwitch(arg(c, 0), arg(c, 1)); }
         void sdGetSwitch(IopNativeCall &c) { ret(c, c.services.sound().getSwitch(arg(c, 0))); }
@@ -180,11 +192,17 @@ namespace ps2x::iop::detail
         // #19 sceSdVoiceTransStatus(channel, flag): copies complete at once
         void sdVoiceTransStatus(IopNativeCall &c) { ret(c, 1u); }
 
-        // #20 sceSdBlockTransStatus(channel, flag): position of the input stream (0 when stopped)
+        // #20 sceSdBlockTransStatus(channel, flag): like libsd, the IOP address the input stream is reading (bits 0-23)
+        // and the ring half being played (bit 24); 0 when stopped. 989snd hands it to the EE (command 0x40), where the
+        // movie player subtracts its ring address to get the offset it may refill up to (0x188688).
         void sdBlockTransStatus(IopNativeCall &c)
         {
             const uint32_t channel = arg(c, 0) & 1u;
-            ret(c, g_libsd.blockActive[channel] ? c.services.sound().streamPosition(channel) & 0xFFFFFFu : 0u);
+            if (!g_libsd.blockActive[channel])
+                return ret(c, 0u);
+            const uint32_t position = c.services.sound().streamPosition(channel);
+            const uint32_t side = position >= g_libsd.blockSize[channel] / 2u ? 1u : 0u;
+            ret(c, (side << 24) | ((g_libsd.blockBuffer[channel] + position) & 0xFFFFFFu));
         }
 
         // #18 sceSdBlockTrans(channel, mode, iopBuffer, size, startAddr): the core input stream. Mode 2 stops it;
@@ -194,6 +212,8 @@ namespace ps2x::iop::detail
         {
             const uint32_t channel = arg(c, 0) & 1u, mode = arg(c, 1), iopBuffer = arg(c, 2), size = arg(c, 3);
             SoundEngine &sound = c.services.sound();
+            if (g_sndDiag)
+                std::fprintf(stderr, "[snd-diag] BlockTrans core=%u mode=%x buf=%x size=%x\n", channel, mode, iopBuffer, size);
             if ((mode & 3u) == 2u)
             {
                 sound.stopStream(channel);
@@ -205,6 +225,8 @@ namespace ps2x::iop::detail
                 return ret(c, static_cast<uint32_t>(-100));
             sound.startStream(channel, c.memory.ram().data() + physical, size, (mode & 0x10u) != 0u);
             g_libsd.blockActive[channel] = true;
+            g_libsd.blockBuffer[channel] = iopBuffer;
+            g_libsd.blockSize[channel] = size;
             ret(c, 0u);
         }
 

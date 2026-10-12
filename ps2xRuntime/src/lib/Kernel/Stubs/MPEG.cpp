@@ -612,6 +612,7 @@ namespace ps2_stubs
             uint64_t pts = 0xFFFFFFFFFFFFFFFFull;
             uint64_t dts = 0xFFFFFFFFFFFFFFFFull;
             std::vector<MpegRegisteredCallback> callbacks;
+            std::vector<uint8_t> bytes; // audio: the payload, from the demuxer's own copy (see dispatchStreamCallbacks)
         };
 
         struct MpegStubState
@@ -641,8 +642,9 @@ namespace ps2_stubs
         constexpr uint32_t kStubMovieWidth = 320u;
         constexpr uint32_t kStubMovieHeight = 240u;
         constexpr uint32_t kMpegStrM2V = 0u;
-        constexpr uint32_t kMpegStrPCM = 1u;
-        constexpr uint32_t kMpegStrADPCM = 2u;
+        // libmpeg's sceMpegStr* stream types: M2V 0, IPU 1, PCM 2, ADPCM 3, DATA 4
+        constexpr uint32_t kMpegStrPCM = 2u;
+        constexpr uint32_t kMpegStrADPCM = 3u;
         constexpr uint8_t kMpegPackHeader = 0xBAu;
         constexpr uint8_t kMpegSystemHeader = 0xBBu;
         constexpr uint8_t kMpegProgramEnd = 0xB9u;
@@ -1436,22 +1438,24 @@ namespace ps2_stubs
                     const size_t payloadStart = pes.payloadOffset;
                     if (payloadStart < packetEnd && payloadStart < playback.pssGuestAddrs.size())
                     {
+                        // PSS audio: private stream 1 with a 4-byte sub-stream header (FF A0 00 00; 0xAn = PCM channel
+                        // n, otherwise ADPCM) that the game's callback skips. The PCM runs on across packets of odd
+                        // lengths (God of War: 4073 / 4059 data bytes).
+                        const uint8_t subStream = payloadStart + 1u < packetEnd ? buffer[payloadStart + 1u] : 0u;
+                        const bool pcm = streamId == kMpegPrivateStream1 && (subStream & 0xF0u) == 0xA0u;
+                        const size_t before = callbackEvents.size();
                         queueStreamCallbackEvent(
                             mpegAddr,
-                            kMpegStrPCM,
+                            pcm ? kMpegStrPCM : kMpegStrADPCM,
                             playback.pssGuestAddrs[payloadStart],
                             static_cast<uint32_t>(packetEnd - payloadStart),
                             callbackEvents,
                             pes.pts90k,
                             pes.dts90k);
-                        queueStreamCallbackEvent(
-                            mpegAddr,
-                            kMpegStrADPCM,
-                            playback.pssGuestAddrs[payloadStart],
-                            static_cast<uint32_t>(packetEnd - payloadStart),
-                            callbackEvents,
-                            pes.pts90k,
-                            pes.dts90k);
+                        // a packet can straddle two of the game's reads into the same buffer: its guest bytes are
+                        // gone by the time the callback runs, so audio is handed over from this copy
+                        if (callbackEvents.size() != before)
+                            callbackEvents.back().bytes.assign(buffer.begin() + payloadStart, buffer.begin() + packetEnd);
                     }
                 }
 
@@ -1670,26 +1674,28 @@ namespace ps2_stubs
             return true;
         }
 
-        void dispatchGuestStreamCallback(uint8_t *rdram,
-                                         R5900Context *callerCtx,
-                                         PS2Runtime *runtime,
-                                         const MpegStreamCallbackEvent &event,
-                                         const MpegRegisteredCallback &callback)
+        // Returns the callback's result (libmpeg: 0 = data not taken, demux stops there), or 1 when it could not be
+        // run nested (queued for later, or not callable).
+        int32_t dispatchGuestStreamCallback(uint8_t *rdram,
+                                            R5900Context *callerCtx,
+                                            PS2Runtime *runtime,
+                                            const MpegStreamCallbackEvent &event,
+                                            const MpegRegisteredCallback &callback)
         {
             if (!rdram || !callerCtx || !runtime || callback.func == 0u || !runtime->hasFunction(callback.func))
             {
-                return;
+                return 1;
             }
 
             const uint32_t cbDataAddr = runtime->guestMalloc(kMpegCallbackDataSize, 16u);
             if (cbDataAddr == 0u)
             {
-                return;
+                return 1;
             }
             if (!writeMpegCallbackData(rdram, cbDataAddr, event))
             {
                 runtime->guestFree(cbDataAddr);
-                return;
+                return 1;
             }
 
             static const bool s_cbDiag = std::getenv("GOW_MPEG_DIAG") != nullptr;
@@ -1725,7 +1731,7 @@ namespace ps2_stubs
                 if (nested.pc == 0u)
                 {
                     runtime->guestFree(cbDataAddr);
-                    return;
+                    return static_cast<int32_t>(getRegU32(&nested, 2));
                 }
                 std::fprintf(stderr, "[mpeg] stream callback %08x did not return (pc=%08x); queued instead\n",
                              callback.func, nested.pc);
@@ -1742,38 +1748,68 @@ namespace ps2_stubs
                 runtime->guestFree(cbDataAddr);
             };
             runtime->eeScheduler().queueInvocation(std::move(invocation));
+            return 1;
+        }
+
+        // GOW-Port: audio packets are handed to the game's callback from the demuxer's own copy of the bytes, through a
+        // guest buffer: the game reads its movie in 16 KB chunks into one buffer, so a packet that straddles two reads
+        // is no longer complete in guest memory when the callback runs. The callback returns 0 when the game's audio ring is full (God of War 0x18A8F8); libmpeg then stops demuxing at
+        // that packet and the game hands the rest in again after it drained the ring. This stub demuxes whole chunks
+        // at once, so refused packets wait here, in order, and go first on the next demux call.
+        struct PendingAudioPacket
+        {
+            MpegStreamCallbackEvent event;
+            std::vector<uint8_t> bytes;
+        };
+        std::map<uint32_t, std::deque<PendingAudioPacket>> g_pendingAudio; // per sceMpeg; demuxing thread only
+
+        uint32_t g_audioQueued = 0u, g_audioTaken = 0u, g_audioRefused = 0u; // GOW_MPEG_DIAG counters
+
+        bool isAudioStreamType(uint32_t type) { return type == kMpegStrPCM || type == kMpegStrADPCM; }
+
+        // Hands one audio packet held in host memory to its callbacks through a guest copy; false when refused.
+        bool deliverPendingAudio(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, PendingAudioPacket &packet)
+        {
+            const uint32_t copyAddr = runtime->guestMalloc(static_cast<uint32_t>(packet.bytes.size()), 16u);
+            if (copyAddr == 0u)
+                return false;
+            std::memcpy(rdram + (copyAddr & 0x1FFFFFFu), packet.bytes.data(), packet.bytes.size());
+            MpegStreamCallbackEvent event = packet.event;
+            event.dataAddr = copyAddr;
+            bool taken = true;
+            for (const MpegRegisteredCallback &callback : event.callbacks)
+                taken = dispatchGuestStreamCallback(rdram, ctx, runtime, event, callback) != 0 && taken;
+            runtime->guestFree(copyAddr);
+            ++(taken ? g_audioTaken : g_audioRefused);
+            return taken;
         }
 
         void dispatchStreamCallbacks(uint8_t *rdram,
                                      R5900Context *ctx,
                                      PS2Runtime *runtime,
+                                     uint32_t mpegAddr,
                                      const std::vector<MpegStreamCallbackEvent> &events)
         {
-            if (events.empty())
-            {
-                return;
-            }
-
+            std::deque<PendingAudioPacket> &pending = g_pendingAudio[mpegAddr];
             for (const MpegStreamCallbackEvent &event : events)
             {
-                for (const MpegRegisteredCallback &callback : event.callbacks)
-                {
-                    dispatchGuestStreamCallback(rdram, ctx, runtime, event, callback);
-                }
+                if (isAudioStreamType(event.streamType))
+                    pending.push_back(PendingAudioPacket{event, event.bytes}), ++g_audioQueued;
+                else
+                    for (const MpegRegisteredCallback &callback : event.callbacks)
+                        (void)dispatchGuestStreamCallback(rdram, ctx, runtime, event, callback);
             }
+            while (!pending.empty() && deliverPendingAudio(rdram, ctx, runtime, pending.front()))
+                pending.pop_front();
         }
 
         void dispatchStreamCallbacksUnlocked(uint8_t *rdram,
                                              R5900Context *ctx,
                                              PS2Runtime *runtime,
+                                             uint32_t mpegAddr,
                                              const std::vector<MpegStreamCallbackEvent> &events)
         {
-            if (events.empty())
-            {
-                return;
-            }
-
-            dispatchStreamCallbacks(rdram, ctx, runtime, events);
+            dispatchStreamCallbacks(rdram, ctx, runtime, mpegAddr, events);
         }
 
         // GOW-Port: like libmpeg, at most `capacity` bytes (mbcount macroblocks of 16x16 RGB32 = 1024 bytes) are written:
@@ -2158,6 +2194,10 @@ namespace ps2_stubs
                                           existing.cdStreamGeneration == g_mpeg_stub_state.cdStreamGeneration;
             if (!keepPendingInput)
                 existing = makeFreshPlaybackState();
+            // libmpeg's sceMpegCreate initialises the sceMpeg, callback table included. God of War registers its
+            // stream callbacks for the first demux before Create and again after it; keeping both delivered every
+            // audio packet twice into its ring (repeated, byte-shifted PCM: the movie sound was noise).
+            g_mpeg_stub_state.callbacksByMpeg.erase(param_1);
         }
 
         const uint32_t puVar4 = uVar3 + 0x108u;
@@ -2230,6 +2270,7 @@ namespace ps2_stubs
             g_mpeg_stub_state.callbacksByMpeg.erase(mpegAddr);
             g_mpeg_stub_state.playbackByMpeg.erase(mpegAddr);
         }
+        g_pendingAudio.erase(mpegAddr);
         runtime->eeScheduler().completeExternalWait(kMpegPictureWaitType, mpegAddr, KE_WAIT_DELETE);
         setReturnU32(ctx, 0u);
     }
@@ -2299,7 +2340,7 @@ namespace ps2_stubs
             });
         }
 
-        dispatchStreamCallbacksUnlocked(rdram, ctx, runtime, callbackEvents);
+        dispatchStreamCallbacksUnlocked(rdram, ctx, runtime, mpegAddr, callbackEvents);
         setReturnS32(ctx, static_cast<int32_t>(consumed));
     }
 
@@ -2394,7 +2435,7 @@ namespace ps2_stubs
             });
         }
 
-        dispatchStreamCallbacksUnlocked(rdram, ctx, runtime, callbackEvents);
+        dispatchStreamCallbacksUnlocked(rdram, ctx, runtime, mpegAddr, callbackEvents);
         setReturnS32(ctx, static_cast<int32_t>(consumed));
     }
 
@@ -2677,6 +2718,29 @@ namespace ps2_stubs
             std::cerr << "[MPEG:diag] GetPicture mpeg=0x" << std::hex << mpegAddr << " image=0x" << imageAddr
                       << " mbcount=0x" << entryMbCount << std::dec << " have=" << haveFrame << " frame=" << frameCount
                       << " size=" << width << "x" << height << " pts=" << frame.pts90k << " sum=" << sum << std::endl;
+            // the game's movie audio state (USA): sound-stream globals 0x304CEC.. and the movie struct's audio ring
+            const auto word = [rdram](uint32_t a) { return *reinterpret_cast<const uint32_t *>(rdram + (a & 0x1FFFFFFu)); };
+            const uint32_t movie = word(0x304F20u);
+            std::cerr << "[MPEG:diag] audio mode=" << word(0x304D08u) << " iopBuf=0x" << std::hex << word(0x304CECu) << std::dec
+                      << " size=" << word(0x304CF0u) << " started=" << word(0x304CF4u) << " sent=" << word(0x304CF8u)
+                      << " wpos=" << word(0x304CFCu);
+            if (movie != 0u)
+                std::cerr << " ring.mode=" << word(movie + 0x144u) << " ring.size=" << word(movie + 0x100u)
+                          << " ring.rd=" << word(movie + 0x104u) << " ring.fill=" << word(movie + 0x108u)
+                          << " full=" << word(movie + 0x134u);
+            std::cerr << std::endl;
+            if ((s_mpegDiagCount % 50u) == 0u)
+            {
+                std::cerr << "[MPEG:diag] audio packets queued=" << g_audioQueued << " taken=" << g_audioTaken
+                          << " refused=" << g_audioRefused << std::endl;
+            }
+            if (movie != 0u && s_mpegDiagCount == 40u) // the audio stream header the callback kept (+0x10C, 0x28 bytes)
+            {
+                std::cerr << "[MPEG:diag] audio header";
+                for (uint32_t i = 0; i < 0x28u; i += 4u)
+                    std::cerr << ' ' << std::hex << word(movie + 0x10Cu + i) << std::dec;
+                std::cerr << std::endl;
+            }
         }
         if (haveFrame)
         {
