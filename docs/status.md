@@ -779,3 +779,7 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   speed 1.00, savetest ok. zones.py slot 0 = new game (ship start). Merged GS debug tools (611993b) and the rand
   fix (runner sub_0028C0C8 regenerated as the game's own function; port/usa/recomp*.toml: rand stub commented out);
   gate running. New fork: agent/pipeline (ship start 43 fps: VU1 + GS frontend serial in one worker job).
+- 12:4x VERIFIED rand fix + GS debug tools (port/merged14/20261012_122017, ext 611993b + runner sub_0028C0C8):
+  slots 0-4 60 fps, speed 1.00, savetest ok. Slot 0's last capture differs (43 > 40) only because the fight plays
+  out differently with the game's own rand (both frames render correctly). docs: runtime-changes/elf: rand no
+  longer stubbed.
