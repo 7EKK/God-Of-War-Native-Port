@@ -423,6 +423,7 @@ void main()
         uint32_t glW = 0, glH = 0;
         bool depthCleared = false;
         uint64_t version = 1, lastDrawSeq = 0;
+        uint64_t lastDepthSeq = 0; // writeSeq of the last draw that wrote this target's depth (memory at zbp)
         uint32_t usedW = 0, usedH = 0; // PS2 pixels touched by draws (scissor extents)
     };
 
@@ -447,6 +448,7 @@ void main()
 
 struct GSHwBackend::Impl
 {
+    bool xferWatchHit = false; // GOW_GS_HW_XFERWATCH: log the next upload's first bytes
     GSTextureStore store; // uploaded texture bytes + CLUT (no rasteriser, no framebuffer)
     GSGL::Context context;
     bool initialized = false, failed = false;
@@ -673,6 +675,9 @@ struct GSHwBackend::Impl
         for (RenderTarget &t : targets)
             if (t.fbp == fbp && t.fbw >= fbw)
                 return t;
+        static const bool rtLog = std::getenv("GOW_GS_HW_RTLOG") != nullptr;
+        if (rtLog)
+            std::fprintf(stderr, "[gs-hw-rt] new/grow fbp=%u fbw=%u\n", fbp, fbw);
         for (RenderTarget &t : targets) // grow an existing one
             if (t.fbp == fbp)
             {
@@ -872,13 +877,18 @@ struct GSHwBackend::Impl
                                 indices.data() + static_cast<size_t>(y) * tex.width);
         static const long idxDumpTbp = std::getenv("GOW_GS_HW_PALDUMP") ? std::strtol(std::getenv("GOW_GS_HW_PALDUMP"), nullptr, 16) : -1;
         static int idxDumped = 0;
-        if (idxDumpTbp >= 0 && static_cast<long>(t.tbp0) == idxDumpTbp && idxDumped < 2)
+        // GOW_GS_HW_PALDUMPMAX=<n>: dump the first n decodes of that block's index texture (default 2)
+        static const int idxDumpMax = std::getenv("GOW_GS_HW_PALDUMPMAX") ? std::atoi(std::getenv("GOW_GS_HW_PALDUMPMAX")) : 2;
+        if (idxDumpTbp >= 0 && static_cast<long>(t.tbp0) == idxDumpTbp && idxDumped < idxDumpMax)
         {
             ++idxDumped;
             uint32_t hist[256] = {};
             for (uint8_t i : indices)
                 ++hist[i];
-            std::fprintf(stderr, "[gs-hw-idx] tbp=%x %ux%u psm=%u tbw=%u (index:count)", t.tbp0, tex.width, tex.height, t.psm, t.tbw);
+            uint32_t pageHash = 2166136261u;
+            for (uint32_t i = 0; i < 8192u; ++i)
+                pageHash = (pageHash ^ vram[static_cast<size_t>(t.tbp0) * 256u + i]) * 16777619u;
+            std::fprintf(stderr, "[gs-hw-idx] tbp=%x page hash %08x %ux%u psm=%u tbw=%u (index:count)", t.tbp0, pageHash, tex.width, tex.height, t.psm, t.tbw);
             for (int i = 0; i < 256; ++i)
                 if (hist[i])
                     std::fprintf(stderr, " %d:%u", i, hist[i]);
@@ -986,7 +996,7 @@ struct GSHwBackend::Impl
         const bool highByte = tpsm == GS_PSM_T8H || tpsm == GS_PSM_T4HL || tpsm == GS_PSM_T4HH;
         for (RenderTarget &t : targets)
         {
-            if (t.usedW == 0u || (highByte && t.psm == GS_PSM_CT24))
+            if (t.usedW == 0u || (highByte && t.psm == GS_PSM_CT24) || overwrittenByDepth(t))
                 continue;
             const uint32_t tlo = t.fbp * 32u, thi = tlo + spanBlocks(t.psm, t.fbw, t.usedH);
             if (tbp < tlo || tbp >= thi)
@@ -1000,6 +1010,18 @@ struct GSHwBackend::Impl
     // True when the game uploaded new pixels at `tbp` after the target's last draw: the memory then holds the upload,
     // not the target's picture (e.g. FMV frames uploaded where a temporary target lived), so the texture comes from
     // the store.
+    // True when another target's depth buffer lives in this target's memory (ZBP == its FBP) and was written after this
+    // target's last colour draw: the memory then holds Z, not the colour picture. Example: the movie player draws its
+    // pictures into fbp 104, which is the gameplay Z buffer; after the movie the depth writes replace them, and the
+    // game's passes that read the Z memory as PSMCT24 (fog/DOF strips into fbp 320) must not see the old movie frame.
+    bool overwrittenByDepth(const RenderTarget &t) const
+    {
+        for (const RenderTarget &o : targets)
+            if (&o != &t && o.depth && o.zbp == t.fbp && o.lastDepthSeq > t.lastDrawSeq)
+                return true;
+        return false;
+    }
+
     bool uploadedSinceDraw(const RenderTarget &t, uint32_t tbp) const
     {
         for (const UploadRecord &u : uploadLog)
@@ -1739,6 +1761,8 @@ struct GSHwBackend::Impl
                 invertedZ.push_back(c.zbuf.zbp);
         }
         const bool zwrite = !c.zbuf.zmask && !zAlias;
+        if (zwrite && ((c.test >> 16) & 1u) != 0u)
+            rt.lastDepthSeq = rt.lastDrawSeq;
         const bool zAliasWrite = zAlias && !c.zbuf.zmask;
 
         // colour mask
@@ -1798,7 +1822,8 @@ struct GSHwBackend::Impl
             const auto family = [](uint8_t psm) { return (psm == GS_PSM_CT16 || psm == GS_PSM_CT16S) ? 16 : (psm == GS_PSM_CT32 || psm == GS_PSM_CT24) ? 32 : 0; };
             if (family(c.tex0.psm) != 0 && (c.tex0.tbp0 % 32u) == 0u)
                 if (RenderTarget *candidate = findTarget(c.tex0.tbp0 / 32u))
-                    if (family(candidate->psm) == family(c.tex0.psm) && !uploadedSinceDraw(*candidate, c.tex0.tbp0))
+                    if (family(candidate->psm) == family(c.tex0.psm) && !uploadedSinceDraw(*candidate, c.tex0.tbp0) &&
+                        !overwrittenByDepth(*candidate))
                         src = candidate;
             if (src == &rt)
                 g.TextureBarrier();
@@ -2084,6 +2109,19 @@ void GSHwBackend::BeginTransfer(const GSTransferCommand &command)
         const uint32_t rows = static_cast<uint32_t>(command.trxpos.dsay) + command.trxreg.rrh;
         const uint32_t lo = command.bitbltbuf.dbp, hi = lo + spanBlocks(command.bitbltbuf.dpsm, command.bitbltbuf.dbw, rows);
         d.invalidateBlocks(lo, hi);
+        // GOW_GS_HW_XFERWATCH=<hex block>: debug, log the transfers whose block range holds that block
+        static const long xferWatch = std::getenv("GOW_GS_HW_XFERWATCH") ? std::strtol(std::getenv("GOW_GS_HW_XFERWATCH"), nullptr, 16) : -1;
+        // GOW_GS_HW_XFERRANGE=<lo hex>-<hi hex>: also log every transfer whose destination block lies in [lo, hi)
+        static const char *xferRange = std::getenv("GOW_GS_HW_XFERRANGE");
+        static const long rangeLo = xferRange ? std::strtol(xferRange, nullptr, 16) : -1;
+        static const long rangeHi = xferRange && std::strchr(xferRange, '-') ? std::strtol(std::strchr(xferRange, '-') + 1, nullptr, 16) : -1;
+        if (rangeLo >= 0 && static_cast<long>(lo) >= rangeLo && static_cast<long>(lo) < rangeHi && command.bitbltbuf.dbp != 0x2800u)
+            std::fprintf(stderr, "[gs-hw-xfer-range] dir=%u dbp=%x dbw=%u dpsm=%u rr=%ux%u\n", command.direction, command.bitbltbuf.dbp,
+                         command.bitbltbuf.dbw, command.bitbltbuf.dpsm, command.trxreg.rrw, command.trxreg.rrh);
+        if (xferWatch >= 0 && lo <= static_cast<uint32_t>(xferWatch) && static_cast<uint32_t>(xferWatch) < hi)
+            d.xferWatchHit = true, std::fprintf(stderr, "[gs-hw-xfer] dir=%u dbp=%x dbw=%u dpsm=%u dsa=%u,%u rr=%ux%u\n", command.direction,
+                         command.bitbltbuf.dbp, command.bitbltbuf.dbw, command.bitbltbuf.dpsm, command.trxpos.dsax,
+                         command.trxpos.dsay, command.trxreg.rrw, command.trxreg.rrh);
         if (d.uploadLog.size() > 4096u)
             d.uploadLog.erase(d.uploadLog.begin(), d.uploadLog.begin() + 2048);
         d.uploadLog.push_back({lo, hi, ++d.writeSeq});
@@ -2092,7 +2130,25 @@ void GSHwBackend::BeginTransfer(const GSTransferCommand &command)
 
 void GSHwBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
 {
-    m_impl->store.Upload(data, sizeBytes);
+    Impl &d = *m_impl;
+    if (d.xferWatchHit && sizeBytes >= 32u)
+    {
+        std::fprintf(stderr, "[gs-hw-xfer] data %u bytes:", sizeBytes);
+        for (uint32_t i = 0; i < 32u; ++i)
+            std::fprintf(stderr, " %02x", data[i]);
+        std::fprintf(stderr, "\n");
+    }
+    const bool watched = d.xferWatchHit;
+    d.xferWatchHit = false;
+    d.store.Upload(data, sizeBytes);
+    if (watched && d.vram)
+    {
+        static const long block = std::strtol(std::getenv("GOW_GS_HW_XFERWATCH"), nullptr, 16);
+        uint32_t h = 2166136261u;
+        for (uint32_t i = 0; i < 8192u; ++i)
+            h = (h ^ d.vram[static_cast<size_t>(block) * 256u + i]) * 16777619u;
+        std::fprintf(stderr, "[gs-hw-xfer] page hash after upload %08x\n", h);
+    }
 }
 
 void GSHwBackend::Flush()
