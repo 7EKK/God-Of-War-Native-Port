@@ -313,6 +313,15 @@ public:
     // EE timers advance from the scheduler's emulated EE-cycle clock. The
     // returned mask uses bits 0..3 for newly raised TIM0..TIM3 interrupts.
     uint32_t advanceEeTimers(uint64_t eeCycles) noexcept;
+    // GOW-Port: native EE clock. A timer without compare/overflow events (no CMPE/OVFE/ZRET, e.g. the game's
+    // T0 = BUSCLK/256 and T1 = H-BLNK counters) is not stepped: its count is computed when read, from the guest
+    // EE cycle count since its epoch (the last COUNT write or clock change). Timers with events keep the stepping
+    // model below. The recompiler emits constant-address timer loads/stores as direct calls to these (no
+    // hardware-register path); readIORegister/writeIORegister use the same functions.
+    // `address` may be physical or a KSEG0/KSEG1 alias; isEeTimerRegister tells whether it names a timer register.
+    static bool isEeTimerRegister(uint32_t address) noexcept;
+    uint32_t eeTimerLoad(uint32_t address) noexcept;
+    bool eeTimerStore(uint32_t address, uint32_t value) noexcept;
     [[nodiscard]] uint64_t cyclesUntilNextEeTimerInterrupt() const noexcept;
     void resetEeTimers() noexcept;
 
@@ -491,6 +500,7 @@ public:
         uint32_t compare = 0;
         uint32_t hold = 0;
         uint64_t clockRemainder = 0;
+        uint64_t epoch = 0; // clock-only timers: guest EE cycle at which `count` was exact (zero remainder)
     };
 
     std::array<EeTimer, 4> m_eeTimers{};
@@ -500,6 +510,8 @@ public:
     // counts and interrupts as with per-call advancing (the tick math carries its remainder exactly).
     uint64_t m_eeTimerPendingCycles = 0;
     uint64_t m_eeTimerBudget = 0;
+    uint64_t m_eeCycleTotal = 0; // guest EE cycles seen by advanceEeTimers (the scheduler's EE cycle count)
+    uint32_t eeTimerCount(const EeTimer &timer) const noexcept;
     uint32_t stepEeTimers(uint64_t eeCycles) noexcept;
     void flushEeTimers() noexcept;
     // GOW-Port: GIF_STAT en m_ioRegisters (los elementos de unordered_map no se mueven; solo clear() lo
