@@ -845,6 +845,20 @@ struct GSHwBackend::Impl
         for (uint32_t y = 0; y < tex.height; ++y)
             GSMem::ReadIndexRun(vram, t.psm, t.tbp0, t.tbw, 0u, y, tex.width,
                                 indices.data() + static_cast<size_t>(y) * tex.width);
+        static const long idxDumpTbp = std::getenv("GOW_GS_HW_PALDUMP") ? std::strtol(std::getenv("GOW_GS_HW_PALDUMP"), nullptr, 16) : -1;
+        static int idxDumped = 0;
+        if (idxDumpTbp >= 0 && static_cast<long>(t.tbp0) == idxDumpTbp && idxDumped < 2)
+        {
+            ++idxDumped;
+            uint32_t hist[256] = {};
+            for (uint8_t i : indices)
+                ++hist[i];
+            std::fprintf(stderr, "[gs-hw-idx] tbp=%x %ux%u psm=%u tbw=%u (index:count)", t.tbp0, tex.width, tex.height, t.psm, t.tbw);
+            for (int i = 0; i < 256; ++i)
+                if (hist[i])
+                    std::fprintf(stderr, " %d:%u", i, hist[i]);
+            std::fprintf(stderr, "\n");
+        }
         tex.blockLo = t.tbp0;
         tex.blockHi = t.tbp0 + spanBlocks(t.psm, t.tbw, tex.height);
         const Api &g = gl();
@@ -881,6 +895,17 @@ struct GSHwBackend::Impl
         }
         uint32_t colors[256];
         store.BuildPalette(s, colors);
+        // GOW_GS_HW_PALDUMP=<tbp hex>: debug, print the palette of the first draw textured from that block (rgba per entry)
+        static const long palDumpTbp = std::getenv("GOW_GS_HW_PALDUMP") ? std::strtol(std::getenv("GOW_GS_HW_PALDUMP"), nullptr, 16) : -1;
+        static int palDumped = 0;
+        if (palDumpTbp >= 0 && static_cast<long>(t.tbp0) == palDumpTbp && palDumped < 2)
+        {
+            ++palDumped;
+            std::fprintf(stderr, "[gs-hw-pal] tbp=%x cbp=%x cpsm=%u csm=%u csa=%u:", t.tbp0, t.cbp, t.cpsm, t.csm, t.csa);
+            for (int i = 0; i < 256; ++i)
+                std::fprintf(stderr, "%s%08x", (i % 16) ? " " : "\n  ", colors[i]);
+            std::fprintf(stderr, "\n");
+        }
         GLuint id = 0;
         g.GenTextures(1, &id);
         g.BindTexture(kTexture2D, id);
@@ -1601,15 +1626,17 @@ struct GSHwBackend::Impl
         {
             ++dumped;
             const HwVertex &v0 = verts[0];
-            float bx0 = 1e9f, by0 = 1e9f, bx1 = -1e9f, by1 = -1e9f, cmax = 0.0f, amax = 0.0f;
+            float bx0 = 1e9f, by0 = 1e9f, bx1 = -1e9f, by1 = -1e9f, cmax = 0.0f, amax = 0.0f, zlo = 2.0f, zhi = -1.0f;
             for (const HwVertex &v : verts)
             {
                 bx0 = std::min(bx0, v.x), by0 = std::min(by0, v.y), bx1 = std::max(bx1, v.x), by1 = std::max(by1, v.y);
-                cmax = std::max({cmax, v.r, v.g, v.b}), amax = std::max(amax, v.a);
+                cmax = std::max({cmax, v.r, v.g, v.b}), amax = std::max(amax, v.a), zlo = std::min(zlo, v.z), zhi = std::max(zhi, v.z);
             }
-            std::fprintf(stderr, "[gs-hw-dump-bb] #%d %.0f-%.0f,%.0f-%.0f ta0=%x ta1=%x aem=%d fge=%d tfx=%u tcc=%u iip=%d cmax=%.0f amax=%.0f prim=%u\n",
+            const float zscale = zMaxFor(c.zbuf.psm) < 4294967295.0f ? zMaxFor(c.zbuf.psm) : 16777215.0f;
+            std::fprintf(stderr, "[gs-hw-dump-bb] #%d %.0f-%.0f,%.0f-%.0f ta0=%x ta1=%x aem=%d fge=%d tfx=%u tcc=%u iip=%d cmax=%.0f amax=%.0f prim=%u z=%x-%x\n",
                          dumped, bx0, bx1, by0, by1, s.texa.ta0, s.texa.ta1, s.texa.aem ? 1 : 0, s.prim.fge ? 1 : 0,
-                         c.tex0.tfx, c.tex0.tcc, s.prim.iip ? 1 : 0, cmax, amax, static_cast<unsigned>(s.prim.type));
+                         c.tex0.tfx, c.tex0.tcc, s.prim.iip ? 1 : 0, cmax, amax, static_cast<unsigned>(s.prim.type),
+                         static_cast<unsigned>(zlo * zscale + 0.5f), static_cast<unsigned>(zhi * zscale + 0.5f));
             std::fprintf(stderr,
                          "[gs-hw-dump] #%d fb=%d verts=%zu fbp=%u fbw=%u fpsm=%u zbp=%x zpsm=%x zmsk=%d tme=%d tbp=%x tbw=%u tpsm=%u %ux%u cbp=%x test=%llx alpha=%llx abe=%d fbmsk=%x rawz=%.0f v0=(%.1f,%.1f z=%.3f col=%.0f,%.0f,%.0f,%.0f uv=%.1f,%.1f) scis=%u-%u,%u-%u\n",
                          dumped, frameBatch, verts.size(), c.frame.fbp, c.frame.fbw, c.frame.psm, c.zbuf.zbp, c.zbuf.psm, c.zbuf.zmask ? 1 : 0, s.prim.tme ? 1 : 0,
