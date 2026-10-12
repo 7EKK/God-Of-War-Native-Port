@@ -1778,6 +1778,46 @@ struct GSHwBackend::Impl
         GLenum sf, df, equation;
         float fixScale, constant;
         blendState(s, blend, sf, df, fixScale, constant, equation, softBlend);
+        // COLCLAMP=0 with Cs*FIX + Cd and one flat untextured colour (the shadow-volume counting passes: G += 255, then
+        // G += 1, modulo 256): every fragment adds the same constant modulo 256, and additions commute, so the fixed-function
+        // blend does it in one draw: adding v < 128 is an add, adding v >= 128 is subtracting 256 - v. Exact while the
+        // count stays inside 0..255 (it starts at 127). Drawing such passes per triangle through the shader blend stalled
+        // the renderer for seconds in fights with many shadow casters.
+        float wrapAmount[3] = {0.0f, 0.0f, 0.0f};
+        bool wrapCount = false;
+        if (softBlend && !zAliasWrite && (s.colclamp & 1u) == 0u && !s.prim.tme && !verts.empty())
+        {
+            const uint64_t al = c.alpha;
+            const uint32_t a = al & 3u, b = (al >> 2) & 3u, cc = (al >> 4) & 3u, d = (al >> 6) & 3u, fix = static_cast<uint32_t>((al >> 32) & 0xFFu);
+            if (a == 0u && b == 2u && cc == 2u && d == 1u)
+            {
+                const float col[3] = {verts[0].r, verts[0].g, verts[0].b};
+                const GLboolean written[3] = {mr, mg, mb};
+                bool flat = true;
+                for (const HwVertex &v : verts)
+                    flat = flat && v.r == col[0] && v.g == col[1] && v.b == col[2];
+                int direction = 0; // +1 add, -1 subtract, 2 mixed
+                for (int ch = 0; ch < 3 && flat; ++ch)
+                {
+                    if (!written[ch])
+                        continue;
+                    const uint32_t v = std::min<uint32_t>(255u, (static_cast<uint32_t>(col[ch]) * fix) >> 7);
+                    const int dir = v >= 128u ? -1 : 1;
+                    direction = direction == 0 || direction == dir ? dir : 2;
+                    // the blend multiplies the constant by the source colour (Cs / 255): factor = amount / source
+                    wrapAmount[ch] = col[ch] > 0.0f ? static_cast<float>(dir < 0 ? 256u - v : v) / col[ch] : 0.0f;
+                }
+                if (flat && (direction == 1 || direction == -1))
+                {
+                    wrapCount = true;
+                    softBlend = false;
+                    blend = true;
+                    sf = kConstantColor;
+                    df = kOne;
+                    equation = direction < 0 ? kFuncReverseSubtract : kFuncAdd;
+                }
+            }
+        }
         if (softBlend || zAliasWrite) // the shader produces the final colour (a Z write replaces the colour word)
             blend = false;
         if (blend)
@@ -1785,7 +1825,10 @@ struct GSHwBackend::Impl
             g.Enable(kBlend);
             g.BlendEquationSeparate(equation, kFuncAdd);
             g.BlendFuncSeparate(sf, df, kOne, kZero);
-            g.BlendColor(constant, constant, constant, constant);
+            if (wrapCount)
+                g.BlendColor(wrapAmount[0], wrapAmount[1], wrapAmount[2], 0.0f);
+            else
+                g.BlendColor(constant, constant, constant, constant);
         }
         else
             g.Disable(kBlend);
