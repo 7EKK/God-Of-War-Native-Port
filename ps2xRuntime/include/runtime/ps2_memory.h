@@ -322,6 +322,14 @@ public:
     static bool isEeTimerRegister(uint32_t address) noexcept;
     uint32_t eeTimerLoad(uint32_t address) noexcept;
     bool eeTimerStore(uint32_t address, uint32_t value) noexcept;
+    // GOW-Port: native DMA request service. The game's own stores to DMA channel registers (0x10008000-0x1000EFFF:
+    // its scratchpad copies on channels 8/9, the boot VIF0 chain, D_STAT/D_PCR) are requests for a copy: a CHCR store
+    // with STR runs the transfer at once (scratchpad copy or VIF/GIF packet) and queues its DMA-end handler; no DMA
+    // controller state is kept. The recompiler emits constant-address 32-bit accesses to these registers as direct
+    // calls (no hardware-register path); readIORegister/writeIORegister use the same functions.
+    static bool isEeDmaRegister(uint32_t address) noexcept;
+    uint32_t eeDmaLoad(uint32_t address) noexcept;
+    bool eeDmaStore(uint32_t address, uint32_t value);
     [[nodiscard]] uint64_t cyclesUntilNextEeTimerInterrupt() const noexcept;
     void resetEeTimers() noexcept;
 

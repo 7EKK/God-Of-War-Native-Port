@@ -1,8 +1,13 @@
 #include "iop_memory.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <mutex>
+#include <utility>
 
 namespace ps2x::iop::detail
 {
@@ -12,6 +17,33 @@ namespace ps2x::iop::detail
         uint32_t alignUp(uint32_t value, uint32_t alignment)
         {
             return (value + alignment - 1u) & ~(alignment - 1u);
+        }
+
+        // GOW-Port: GOW_IOP_IO_HIST=<s>: IOP hardware register accesses (op, address) for <s> seconds after the first
+        // one, then printed once; each new register is also reported when first touched. The IOP counterpart of GOW_IO_HIST (docs/native-port.md, hardware access inventory).
+        void iopIoHist(char op, uint32_t address)
+        {
+            static const double window = [] { const char *v = std::getenv("GOW_IOP_IO_HIST"); return v ? std::atof(v) : 0.0; }();
+            if (window <= 0.0)
+                return;
+            static std::mutex mutex;
+            static std::map<std::pair<char, uint32_t>, uint64_t> counts;
+            static std::chrono::steady_clock::time_point start;
+            static bool done = false;
+            std::lock_guard<std::mutex> lock(mutex);
+            if (done)
+                return;
+            const auto now = std::chrono::steady_clock::now();
+            if (counts.empty())
+                start = now;
+            if (++counts[{op, address}] == 1u) // each new register at once, so sparse accesses are seen too
+                std::fprintf(stderr, "[iop-io-first] %c %08x\n", op, address);
+            if (std::chrono::duration<double>(now - start).count() < window)
+                return;
+            done = true;
+            for (const auto &[key, count] : counts)
+                std::fprintf(stderr, "[iop-io-hist] %c %08x n=%llu\n", key.first, key.second, static_cast<unsigned long long>(count));
+            std::fflush(stderr);
         }
     }
 
@@ -206,6 +238,7 @@ namespace ps2x::iop::detail
 
     uint32_t IopMemory::readHardware32(uint32_t address) const
     {
+        iopIoHist('R', address);
         const auto value = m_hardware.find(address);
         if (value != m_hardware.end())
             return value->second;
@@ -224,6 +257,7 @@ namespace ps2x::iop::detail
 
     void IopMemory::writeHardware32(uint32_t address, uint32_t value)
     {
+        iopIoHist('W', address);
         switch (address)
         {
         case 0x1F801070u:
