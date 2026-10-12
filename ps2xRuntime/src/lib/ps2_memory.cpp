@@ -191,6 +191,24 @@ namespace
         return false;
     }
 
+    // No compare/overflow events and no zero-return: the count is a pure function of elapsed guest cycles.
+    constexpr bool isClockOnlyEeTimer(uint32_t mode)
+    {
+        return (mode & (kEeTimerModeCmpe | kEeTimerModeOvfe | kEeTimerModeZret)) == 0u;
+    }
+
+    // Whole timer ticks in `cycles` guest EE cycles at `clockHz` (exact, no 64-bit overflow).
+    constexpr uint64_t eeTimerTicks(uint64_t cycles, uint64_t clockHz)
+    {
+        return (cycles / kEeClockHz) * clockHz + (cycles % kEeClockHz) * clockHz / kEeClockHz;
+    }
+
+    // Fraction of a tick left over after eeTimerTicks, in the stepping model's clockRemainder units.
+    constexpr uint64_t eeTimerRemainder(uint64_t cycles, uint64_t clockHz)
+    {
+        return (cycles % kEeClockHz) * clockHz % kEeClockHz;
+    }
+
     constexpr uint64_t ticksUntilMatch(uint32_t count, uint32_t target)
     {
         const uint32_t distance = (target - count) & 0xFFFFu;
@@ -383,6 +401,7 @@ void PS2Memory::resetEeTimers() noexcept
     m_eeTimers = {};
     m_eeTimerPendingCycles = 0;
     m_eeTimerBudget = 0;
+    m_eeCycleTotal = 0;
 }
 
 void PS2Memory::flushEeTimers() noexcept
@@ -396,6 +415,119 @@ void PS2Memory::flushEeTimers() noexcept
     }
 }
 
+uint32_t PS2Memory::eeTimerCount(const EeTimer &timer) const noexcept
+{
+    if (!isClockOnlyEeTimer(timer.mode) || (timer.mode & kEeTimerModeCue) == 0u)
+        return timer.count & 0xFFFFu; // stepping model (flushed by the caller) or stopped
+    const uint64_t clockHz = kEeTimerClockHz[timer.mode & kEeTimerModeClksMask];
+    return static_cast<uint32_t>(timer.count + eeTimerTicks(m_eeCycleTotal - timer.epoch, clockHz)) & 0xFFFFu;
+}
+
+namespace
+{
+    inline uint32_t eeTimerPhysical(uint32_t address)
+    {
+        return (address >= 0x80000000u && address < 0xC0000000u) ? (address & 0x1FFFFFFFu) : address;
+    }
+}
+
+bool PS2Memory::isEeTimerRegister(uint32_t address) noexcept
+{
+    size_t index = 0u;
+    uint32_t offset = 0u;
+    return decodeEeTimerRegister(eeTimerPhysical(address), index, offset);
+}
+
+uint32_t PS2Memory::eeTimerLoad(uint32_t address) noexcept
+{
+    size_t index = 0u;
+    uint32_t offset = 0u;
+    if (!decodeEeTimerRegister(eeTimerPhysical(address), index, offset))
+        return 0u;
+    flushEeTimers();
+    const EeTimer &timer = m_eeTimers[index];
+    switch (offset)
+    {
+    case kEeTimerCountOffset:
+    {
+        const uint32_t count = eeTimerCount(timer);
+        // GOW-Port: PS2X_TIMER_DIAG=1 prints the first count reads of each timer with its mode (clock source).
+        static const bool diag = std::getenv("PS2X_TIMER_DIAG") != nullptr;
+        static unsigned reads[4] = {};
+        if (diag && (++reads[index] <= 3u || reads[index] % 20000u == 0u))
+            std::fprintf(stderr, "[timer] T%zu read #%u count=%04x mode=%03x\n", index, reads[index], count,
+                         timer.mode & 0x3FFu);
+        return count;
+    }
+    case kEeTimerModeOffset:
+        return timer.mode & (kEeTimerModeConfigMask | kEeTimerModeStatusMask);
+    case kEeTimerCompareOffset:
+        return timer.compare & 0xFFFFu;
+    case kEeTimerHoldOffset:
+        return timer.hold & 0xFFFFu;
+    default:
+        return 0u;
+    }
+}
+
+bool PS2Memory::eeTimerStore(uint32_t address, uint32_t value) noexcept
+{
+    size_t index = 0u;
+    uint32_t offset = 0u;
+    if (!decodeEeTimerRegister(eeTimerPhysical(address), index, offset))
+        return false;
+    flushEeTimers();
+    m_eeTimerBudget = 0; // recompute the distance to the next interrupt at the next advance
+    EeTimer &timer = m_eeTimers[index];
+    switch (offset)
+    {
+    case kEeTimerCountOffset:
+        timer.count = value & 0xFFFFu;
+        timer.clockRemainder = 0u;
+        timer.epoch = m_eeCycleTotal;
+        break;
+    case kEeTimerModeOffset:
+    {
+        const uint32_t previousMode = timer.mode;
+        const uint32_t status = (previousMode & kEeTimerModeStatusMask) & ~(value & kEeTimerModeStatusMask);
+        const uint32_t mode = (value & kEeTimerModeConfigMask) | status;
+        const bool clockChanged = ((previousMode ^ mode) & (kEeTimerModeClksMask | kEeTimerModeCue)) != 0u;
+        const bool wasClockOnly = isClockOnlyEeTimer(previousMode) && (previousMode & kEeTimerModeCue) != 0u;
+        if (wasClockOnly && (clockChanged || !isClockOnlyEeTimer(mode)))
+        {
+            // Leave the computed form: materialise the count; the stepping model continues with the exact
+            // fraction of a tick when the clock is unchanged (what it would hold had it stepped all along).
+            const uint64_t clockHz = kEeTimerClockHz[previousMode & kEeTimerModeClksMask];
+            const uint64_t elapsed = m_eeCycleTotal - timer.epoch;
+            timer.count = eeTimerCount(timer);
+            timer.clockRemainder = clockChanged ? 0u : eeTimerRemainder(elapsed, clockHz);
+            timer.epoch = m_eeCycleTotal;
+        }
+        else if (!wasClockOnly && isClockOnlyEeTimer(mode))
+        {
+            // Enter the computed form at the current count; a fraction of a tick of a running clock is dropped.
+            timer.clockRemainder = 0u;
+            timer.epoch = m_eeCycleTotal;
+        }
+        else if (clockChanged)
+        {
+            timer.clockRemainder = 0u;
+        }
+        timer.mode = mode;
+        break;
+    }
+    case kEeTimerCompareOffset:
+        timer.compare = value & 0xFFFFu;
+        break;
+    case kEeTimerHoldOffset:
+        timer.hold = value & 0xFFFFu;
+        break;
+    default:
+        return false;
+    }
+    return true;
+}
+
 uint32_t PS2Memory::advanceEeTimers(uint64_t eeCycles) noexcept
 {
     if (eeCycles == 0u)
@@ -403,6 +535,7 @@ uint32_t PS2Memory::advanceEeTimers(uint64_t eeCycles) noexcept
         return 0u;
     }
 
+    m_eeCycleTotal += eeCycles;
     m_eeTimerPendingCycles += eeCycles;
     if (m_eeTimerPendingCycles < m_eeTimerBudget)
     {
@@ -422,9 +555,9 @@ uint32_t PS2Memory::stepEeTimers(uint64_t eeCycles) noexcept
     for (size_t index = 0; index < m_eeTimers.size(); ++index)
     {
         EeTimer &timer = m_eeTimers[index];
-        if ((timer.mode & kEeTimerModeCue) == 0u)
+        if ((timer.mode & kEeTimerModeCue) == 0u || isClockOnlyEeTimer(timer.mode))
         {
-            continue;
+            continue; // stopped, or a clock-only timer whose count is computed when read (eeTimerCount)
         }
 
         const uint64_t clockHz = kEeTimerClockHz[timer.mode & kEeTimerModeClksMask];
@@ -1145,36 +1278,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
     uint32_t timerOffset = 0u;
     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
     {
-        flushEeTimers();
-        m_eeTimerBudget = 0; // recompute the distance to the next interrupt at the next advance
-        EeTimer &timer = m_eeTimers[timerIndex];
-        switch (timerOffset)
-        {
-        case kEeTimerCountOffset:
-            timer.count = value & 0xFFFFu;
-            timer.clockRemainder = 0u;
-            break;
-        case kEeTimerModeOffset:
-        {
-            const uint32_t previousMode = timer.mode;
-            const uint32_t status = (previousMode & kEeTimerModeStatusMask) & ~(value & kEeTimerModeStatusMask);
-            timer.mode = (value & kEeTimerModeConfigMask) | status;
-            if (((previousMode ^ timer.mode) & (kEeTimerModeClksMask | kEeTimerModeCue)) != 0u)
-            {
-                timer.clockRemainder = 0u;
-            }
-            break;
-        }
-        case kEeTimerCompareOffset:
-            timer.compare = value & 0xFFFFu;
-            break;
-        case kEeTimerHoldOffset:
-            timer.hold = value & 0xFFFFu;
-            break;
-        default:
-            return false;
-        }
-        return true;
+        return eeTimerStore(address, value);
     }
 
     if (isGsPrivReg(address))
@@ -2031,29 +2135,7 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
     uint32_t timerOffset = 0u;
     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
     {
-        flushEeTimers();
-        const EeTimer &timer = m_eeTimers[timerIndex];
-        switch (timerOffset)
-        {
-        case kEeTimerCountOffset:
-        {
-            // GOW-Port: PS2X_TIMER_DIAG=1 prints the first count reads of each timer with its mode (clock source).
-            static const bool diag = std::getenv("PS2X_TIMER_DIAG") != nullptr;
-            static unsigned reads[4] = {};
-            if (diag && timerIndex < 4u && (++reads[timerIndex] <= 3u || reads[timerIndex] % 20000u == 0u))
-                std::fprintf(stderr, "[timer] T%zu read #%u count=%04x mode=%03x\n", timerIndex, reads[timerIndex],
-                             timer.count & 0xFFFFu, timer.mode & 0x3FFu);
-            return timer.count & 0xFFFFu;
-        }
-        case kEeTimerModeOffset:
-            return timer.mode & (kEeTimerModeConfigMask | kEeTimerModeStatusMask);
-        case kEeTimerCompareOffset:
-            return timer.compare & 0xFFFFu;
-        case kEeTimerHoldOffset:
-            return timer.hold & 0xFFFFu;
-        default:
-            return 0u;
-        }
+        return eeTimerLoad(address);
     }
 
     if (isGsPrivReg(address))
