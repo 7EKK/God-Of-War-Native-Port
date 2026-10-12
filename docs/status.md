@@ -786,3 +786,7 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
 - 13:5x VERIFIED movie audio (port/merged15/20261012_131851, ext 0ad6d2a): zones 0-4 60 fps, speed 1.00 (slot 3
   1.01 mean), savetest ok; Desert audio A/B before/after (BVOL change touches all sound): 195 s each, mean RMS
   4971 vs 4980, correlation 1.0, no silent windows. The intro movie plays to the end with sound.
+- 15:0x: agent/pipeline (ee6ed82): GS frontend on its own stage thread, pipelined with VU1; ship start (new game)
+  36-42 -> 60 fps; PS2X_GS_PIPELINE=0 = old path. Merged as 832a7b4, full rebuild + gate running. Movies with the
+  pipeline are checked by the movies fork. tools/run.sh and port/newgame/run.sh killed every runner by image name
+  (taskkill /IM), which killed other tests' runs; now they end only their own process.
