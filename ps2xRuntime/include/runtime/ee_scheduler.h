@@ -315,6 +315,8 @@ public:
 
     int setAlarm(uint16_t ticks, uint32_t handler, uint32_t argument, uint32_t gp, uint32_t sp);
     int cancelAlarm(int id);
+    // Blocks the current thread for `cycles` EE cycles of guest time, then resumes it with KE_OK (native DelayThread).
+    [[noreturn]] void delayCurrent(uint64_t cycles);
     void queueInvocation(GuestInvocation invocation);
     [[noreturn]] void invokeCurrent(GuestInvocation invocation);
     [[noreturn]] void invokeCurrentSequence(std::vector<GuestInvocation> invocations);
