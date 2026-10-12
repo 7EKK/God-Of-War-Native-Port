@@ -325,11 +325,20 @@ public:
     // GOW-Port: native DMA request service. The game's own stores to DMA channel registers (0x10008000-0x1000EFFF:
     // its scratchpad copies on channels 8/9, the boot VIF0 chain, D_STAT/D_PCR) are requests for a copy: a CHCR store
     // with STR runs the transfer at once (scratchpad copy or VIF/GIF packet) and queues its DMA-end handler; no DMA
-    // controller state is kept. The recompiler emits constant-address 32-bit accesses to these registers as direct
-    // calls (no hardware-register path); readIORegister/writeIORegister use the same functions.
+    // controller state is kept; the IPU channels have nothing to move (the native MPEG decoder takes the movie data
+    // from the demuxed PSS). D_ENABLEW/D_ENABLER (0x1000F590/0x1000F520) belong to it too: DMA is never suspended.
+    // The recompiler emits constant-address 32-bit accesses to these registers as direct calls (no hardware-register
+    // path; run-time checked where the address is computed); readIORegister/writeIORegister use the same functions.
     static bool isEeDmaRegister(uint32_t address) noexcept;
     uint32_t eeDmaLoad(uint32_t address) noexcept;
     bool eeDmaStore(uint32_t address, uint32_t value);
+    // GOW-Port: native display service entry for game code (runtime/gs/gs_display.h). The recompiler emits 64-bit
+    // stores to the GS display registers (PMODE, SMODE2, DISPFB1/2, DISPLAY1/2, BGCOLOR) as gsDisplayStore and 64-bit
+    // CSR loads as gsStatusLoad (no hardware-register path). `address` may be physical or a KSEG0/KSEG1 alias.
+    static bool isGsDisplayRegister(uint32_t address) noexcept;
+    static bool isGsStatusRegister(uint32_t address) noexcept;
+    void gsDisplayStore(uint32_t address, uint64_t value);
+    uint64_t gsStatusLoad();
     [[nodiscard]] uint64_t cyclesUntilNextEeTimerInterrupt() const noexcept;
     void resetEeTimers() noexcept;
 
