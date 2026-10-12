@@ -1997,7 +1997,6 @@ void GSHwBackend::BeginTransfer(const GSTransferCommand &command)
     d.flushPending();
     d.store.BeginTransfer(command);
     d.noteTransfer(command);
-    }
     if (command.direction == 0u || command.direction == 2u)
     {
         const uint32_t rows = static_cast<uint32_t>(command.trxpos.dsay) + command.trxreg.rrh;
