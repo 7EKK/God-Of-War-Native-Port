@@ -1,5 +1,6 @@
 #include "runtime/ps2_memory.h"
 #include "runtime/gs/gs_stage.h"
+#include "runtime/gs/gs_display.h"
 #include <chrono>
 #include <map>
 #include <string>
@@ -1423,11 +1424,13 @@ bool PS2Memory::isEeDmaRegister(uint32_t address) noexcept
     if (address >= 0xC0000000u || (address >= 0x20000000u && address < 0x80000000u))
         return false; // KSEG2/3, scratchpad and the uncached RAM mirror are never DMA registers
     const uint32_t phys = address & 0x1FFFFFFFu;
-    return phys >= 0x10008000u && phys < 0x1000F000u;
+    return (phys >= 0x10008000u && phys < 0x1000F000u) || phys == 0x1000F520u || phys == 0x1000F590u;
 }
 
 uint32_t PS2Memory::eeDmaLoad(uint32_t address) noexcept
 {
+    if ((address & 0x1FFFFFFFu) == 0x1000F520u)
+        return 0u; // D_ENABLER: DMA is never suspended (see eeDmaStore)
     const auto it = m_ioRegisters.find(address & 0x1FFFFFFFu);
     return it != m_ioRegisters.end() ? it->second : 0u;
 }
@@ -1438,6 +1441,10 @@ bool PS2Memory::eeDmaStore(uint32_t address, uint32_t value)
     // D_STAT: the game clears its DMA-end bits after its scratchpad copies; no DMA status is kept, transfers are
     // complete when the store that starts them returns (docs/native-port.md, step 2).
     if (address == 0x1000E010u)
+        return true;
+    // D_ENABLEW: libdma and the movie player suspend DMA (CPND) around channel setup. No transfer runs in the
+    // background, so there is nothing to suspend: the store is dropped and D_ENABLER reads 0 (never suspended).
+    if (address == 0x1000F590u || address == 0x1000F520u)
         return true;
     m_ioRegisters[address] = value;
     // DMA channel registers written by game code (the boot VIF0 chain 0x1838D0, the scratchpad copies, VIF1's
@@ -1479,6 +1486,11 @@ bool PS2Memory::eeDmaStore(uint32_t address, uint32_t value)
         case 0x10008000u: path = DmaPath::Vif0; cause = 0u; break;
         case 0x10009000u: path = DmaPath::Vif1; cause = 1u; break;
         case 0x1000A000u: path = DmaPath::Gif; cause = 2u; break;
+        case 0x1000B000u:
+        case 0x1000B400u:
+            // fromIPU / toIPU: the movie player feeds its bitstream to the IPU this way; the native MPEG decoder
+            // (Stubs/MPEG.cpp) takes the video from the PSS data the game demuxes (sceMpegDemuxPss): nothing to move.
+            return true;
         default:
         {
             static unsigned reports = 0u;
@@ -1494,6 +1506,49 @@ bool PS2Memory::eeDmaStore(uint32_t address, uint32_t value)
         queueCompletedDmacCause(cause);
         return true;
     }
+}
+
+// GOW-Port: native display service entry (see ps2_memory.h, runtime/gs/gs_display.h).
+bool PS2Memory::isGsDisplayRegister(uint32_t address) noexcept
+{
+    if (address >= 0xC0000000u || (address >= 0x20000000u && address < 0x80000000u))
+        return false;
+    switch (address & 0x1FFFFFFFu)
+    {
+    case 0x12000000u: case 0x12000020u: case 0x12000070u: case 0x12000080u:
+    case 0x12000090u: case 0x120000A0u: case 0x120000E0u:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool PS2Memory::isGsStatusRegister(uint32_t address) noexcept
+{
+    return address < 0xC0000000u && !(address >= 0x20000000u && address < 0x80000000u) &&
+           (address & 0x1FFFFFFFu) == 0x12001000u;
+}
+
+void PS2Memory::gsDisplayStore(uint32_t address, uint64_t value)
+{
+    GSDisplayState state = ps2_gs_display::display(*this);
+    switch (address & 0x1FFFFFFFu)
+    {
+    case 0x12000000u: state.pmode = value; break;
+    case 0x12000020u: state.smode2 = value; break;
+    case 0x12000070u: state.dispfb1 = value; break;
+    case 0x12000080u: state.display1 = value; break;
+    case 0x12000090u: state.dispfb2 = value; break;
+    case 0x120000A0u: state.display2 = value; break;
+    case 0x120000E0u: state.bgcolor = value; break;
+    default: return;
+    }
+    ps2_gs_display::setDisplay(*this, state);
+}
+
+uint64_t PS2Memory::gsStatusLoad()
+{
+    return ps2_gs_display::status(*this);
 }
 
 bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)

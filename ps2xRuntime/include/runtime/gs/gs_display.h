@@ -28,6 +28,9 @@ namespace ps2_gs_display
     void setDisplay(PS2Memory &memory, const GSDisplayState &state);
     GSDisplayState display(const PS2Memory &memory);
 
+    // GS status (CSR: FIELD, FINISH, ...), as the game's display code reads it.
+    uint64_t status(PS2Memory &memory);
+
     // GS FINISH event (raised by the FINISH register in the game's GIF packets; delivered as INTC 0 while
     // unmasked in IMR): pending test and acknowledge.
     bool finishPending(PS2Memory &memory);

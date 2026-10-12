@@ -39,6 +39,12 @@ namespace ps2_gs_display
         return state;
     }
 
+    uint64_t status(PS2Memory &memory)
+    {
+        memory.syncGsWorkerFor(kStatusSite);
+        return memory.gs().csr.load(std::memory_order_acquire);
+    }
+
     bool finishPending(PS2Memory &memory)
     {
         memory.syncGsWorkerFor(kStatusSite);
