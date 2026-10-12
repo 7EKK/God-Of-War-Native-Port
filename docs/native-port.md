@@ -136,10 +136,12 @@ read or wrote as hardware registers (the generated code also marks every constan
   ~60 accesses).
 - Scratchpad DMA (channels 8/9) in 0x117D10, 0x1188F0, 0x1590F0, 0x159C58, 0x101888 and D_STAT clears: served as copies;
   since agent/residual direct calls of the native DMA request service (above).
-- IPU + its DMA (libmpeg 0x26F228..0x279588, 0x189BD0..0x18A5E0) and D_ENABLER/W: the movie code still stores to
-  them, nothing models them; pictures come from the native libmpeg2 decoder (intro plays without GOW_SKIP_FMV, movie
-  audio still silent; docs/fmv.md).
-  FMV work in progress: libmpeg2 replaces FFmpeg, movie path and blocker in docs/fmv.md.
+- Movies: none since agent/movies2. The player's display/DMA layer (0x26CB90..0x26EDE0) and open/close code
+  (0x189BD0, 0x18A170) stored per picture SMODE2/DISPLAY1/DISPLAY2 (+ PMODE, DISPFB1/2, a CSR read) and kicked VIF1/GIF
+  sends with D_STAT clears, plus D_ENABLEW and the IPU channels at open/close, through the generic path. The
+  recompiler now emits them as calls of the native display service (`gsDisplayStore/gsStatusLoad`) and the native DMA
+  request service (D_ENABLE never suspends; IPU starts have nothing to move: the libmpeg2 decoder reads the demuxed
+  PSS). `GOW_IO_HIST` during a 148 s bonus movie: 0 accesses (docs/fmv.md, docs/runtime-changes.md).
 - INTC mask (libkernel 0x2940B0/0x294140), once per DI/EI (not seen in the slot-1 runs of 2026-10-11 evening).
 - Not accessed: VIF/GIF registers, SIF registers, SIF DMA, VIF1/GIF channel registers (except the boot TTE setting).
 

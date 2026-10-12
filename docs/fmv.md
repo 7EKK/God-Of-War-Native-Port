@@ -1,8 +1,9 @@
 # FMV (movies)
 
 Status: **movies play natively, at real speed, with their sound, and end; the game then continues.** Checked: the
-intro (Semo01), Semo02 and Semo05 (through `GOW_MOVIE_OVERRIDE`), and the new-game path (the intro, then the ship level
-preloads a01mp05 and waits for its trigger while gameplay runs at 60 fps). `play.cmd` plays the movies; zone and save
+intro (Semo01), Semo02 and Semo05 (through `GOW_MOVIE_OVERRIDE`), the new-game path (the intro, then the ship level
+preloads a01mp05 and waits for its trigger while gameplay runs at 60 fps), and all 14 BONUS movies through the
+Treasures-menu path (below). No hardware register is touched while a movie plays (`GOW_IO_HIST`). `play.cmd` plays the movies; zone and save
 tests still set `GOW_SKIP_FMV=1` (it replaces the movie API: 0x188CA0 load, 0x188E80/ED8/EF0/F20, so the game
 continues at once) to keep the runs short.
 
@@ -32,8 +33,16 @@ continues at once) to keep the runs short.
   `[MPEG:sync]` line every 30 pictures (PTS, wall time, audio device position played/produced, time spent in the
   decoder stubs) plus each stream's first audio packet PTS. `GOW_SND_DIAG=1` adds the device position to the LIBSD
   stream start (`BlockTrans ... mode=13`).
-- `GOW_MOVIE_OVERRIDE=<name>` (debug): the first movie the game loads is replaced by that one (e.g. `Semo05`); the name
-  must fit the game's buffer (the intro's holds 6 characters: Semo02..Semo13 work, 7-character names do not).
+- `GOW_MOVIE_OVERRIDE=<name>` (debug): the first movie the game loads is replaced by that one (e.g. `Semo05`,
+  `BONUS03`); the name is put on the guest stack and passed to the load function 0x188CA0 (which copies it into the
+  movie struct), so any length up to 31 characters works.
+- `GOW_BONUS_MOVIE=<NN>` (debug): plays bonus movie NN from the title menu exactly as the Treasures menu does, without
+  unlocking it (`GOW_BONUS_MOVIE_DELAY`, default 10 s after the menu update first runs; give a pad script, e.g.
+  `GOW_PAD_GUION=900:select`, so the default test presses do not start a new game). The menu's command handler
+  0x1BA2C8 writes the two digits into the game's "BonusXX" buffer (0x29CC00) and sets the menu object's movie name
+  (+0x1518) and +0x1520; the menu update 0x1BA4F8 then calls 0x1B2D20(name, 3, 1) (the scripted movie request,
+  played by 0x1B2958 -> 0x188CA0) and returns to the menu when it ends. Logs `[gow-fmv] menu sees movie state a -> b`
+  (0x29C838) for the test scripts.
 
 ## How the game plays a movie (USA build)
 - Movie thread 0x189020, state in 0x29C838: 3..9 load, **10** = loaded, waiting; **11** = playing. 0x188E80 (start
@@ -80,7 +89,25 @@ continues at once) to keep the runs short.
   movie; the device buffer adds ~20 ms and the picture is shown 1-2 VBlanks after it is handed over, so what is heard
   trails what is seen by roughly 0.1 s.
 
+## BONUS movies (Treasures menu, port/movies2)
+The disc has 14: BONUS01, 03, 06, 10, 12, 14, 16, 17, 18, 19, 20 (the credits), 21, 24, 25 (01/19/20/21 on layer 1).
+Each was played with `GOW_BONUS_MOVIE` from the title menu, with sound and a `GOW_AUDIO_PCM` dump
+(`port/movies2/run_bonus_all.sh`, results in `bonus_all.txt`, contact sheet `bonus_sheet.png`):
+- pictures at 30.00 per wall second in every movie (14 s for BONUS19 up to 812 s for BONUS03);
+- sound for the whole movie: produced audio = picture time, RMS 3.6k-13k, smooth (first difference / RMS 0.01-0.83,
+  noise measures 1.3-1.4), at most 5 silent one-second windows (fades);
+- every movie ends (movie thread 11 -> 0) and the game is back at the title menu; no runtime errors.
+
+## Hardware registers (none while a movie plays)
+The player's own display/DMA layer (0x26CF20 VBlank handler -> 0x26D048, 0x26E798 display setup, 0x26ED68 / 0x26EDE0
+normal / chain DMA sends, 0x26ED20 D_SQWC, 0x26CB90) and the open/close code (0x189BD0, 0x18A170: D_ENABLEW and the
+IPU channels) used to go through the generic hardware path: per picture ~3 GS display stores (SMODE2, DISPLAY1/2,
+PMODE, DISPFB1/2), a CSR read and 3 DMA sends (VIF1, GIF x2) with their D_STAT clears. Now (docs/runtime-changes.md
+"Movie path without hardware registers"): display stores are `gsDisplayStore` calls on the native display service,
+the CSR read is `gsStatusLoad`, the DMA stores go to the native DMA request service (VIF1/GIF packets sent at once;
+D_ENABLEW dropped; fromIPU/toIPU starts have nothing to move). `GOW_IO_HIST` during BONUS17: 0 accesses (before, during
+BONUS03: ~11k each of SMODE2/DISPLAY1/DISPLAY2 per 400 s, plus the DMA registers).
+
 ## Open
-- The movie code still stores to IPU / DMA channel 3/4 registers (they reach no device; no IPU model exists).
-- In-level movies (a01mp05...) and the BONUS movies are not checked while playing (the 7-character names do not fit
-  the override; the level trigger was not reached by the scripted walk).
+- In-level movies (a01mp05...) are checked only through `GOW_MOVIE_OVERRIDE` (same player); the level trigger was not
+  reached by the scripted walk.
