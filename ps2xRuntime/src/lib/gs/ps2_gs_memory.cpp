@@ -395,6 +395,32 @@ namespace GSMem
         }
     }
 
+    namespace
+    {
+        template<PixelStorageMode psm, typename Table>
+        void readColorRunT(const Table& table, const u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 count, u32* out)
+        {
+            for (u32 i = 0; i < count; ++i)
+                out[i] = static_cast<u32>(PixelStorageTraits<psm>::Read(table, data, bp, bw, x + i, y));
+        }
+    }
+
+    bool ReadColorRun(const u8* data, u32 psm, u32 bp, u32 bw, u32 x, u32 y, u32 count, u32* out)
+    {
+        switch (static_cast<PixelStorageMode>(psm & 0x3Fu))
+        {
+        case C32: readColorRunT<C32>(PageTableC32, data, bp, bw, x, y, count, out); return true;
+        case Z32: readColorRunT<Z32>(PageTableZ32, data, bp, bw, x, y, count, out); return true;
+        case C24: readColorRunT<C24>(PageTableC32, data, bp, bw, x, y, count, out); return true;
+        case Z24: readColorRunT<Z24>(PageTableZ32, data, bp, bw, x, y, count, out); return true;
+        case C16: readColorRunT<C16>(PageTableC16, data, bp, bw, x, y, count, out); return true;
+        case C16S: readColorRunT<C16S>(PageTableC16S, data, bp, bw, x, y, count, out); return true;
+        case Z16: readColorRunT<Z16>(PageTableZ16, data, bp, bw, x, y, count, out); return true;
+        case Z16S: readColorRunT<Z16S>(PageTableZ16S, data, bp, bw, x, y, count, out); return true;
+        default: return false;
+        }
+    }
+
     void WriteRun(u8* data, u32 psm, u32 bp, u32 bw, u32 x, u32 y, const u8* src, u32 srcPixel, u32 count)
     {
         auto f32 = [src, srcPixel](u32 i) { u32 v; std::memcpy(&v, src + (srcPixel + i) * 4u, 4u); return v; };
