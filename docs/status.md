@@ -753,3 +753,11 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   no errors. Open: ship start ~43 fps (worker job VU1+GS serial, docs/performance.md "Aegean Sea").
 - 10:4x VERIFIED scratchpad fast path (port/merged11/20261012_101724, ext 61497cb): 60/60/60/60, speed 1.00 x4,
   savetest ok. Merged FMV video (e21f2f2 = agent/fmv 1a7b5fe; libmpeg2 vendored, FFmpeg off by default); gate running.
+- ~10:50-11:00: the account's usage limit stopped all three forks (movie audio, Kratos tint, new-game test) mid-task;
+  resumed at 11:00 after the reset. Movie audio finding so far: the audio data is noise-like (wrong format/layout).
+- 11:1x: Kratos tint is not a GS bug: vs PCSX2 GS dumps the draw state and palette match, but our depth/geometry
+  differ (world Z 0x803D-0x831B vs PS2 0x8008-0x8026; the dust lands in front of Kratos) -> camera/projection
+  upstream of the GS. New fork on it. Side bug found: `rand` (0x28C0C8) is stubbed with std::rand() & 0x7FFF
+  (15 bits) instead of the game's own 31-bit rand; fix = drop the stub, regenerate that function
+  (port/output-usa-rand); to be merged with the camera fix or alone after its gate.
+- 12:0x VERIFIED FMV video (port/merged12/20261012_114149, ext e21f2f2): 60 x4, speed 1.00 x4, savetest ok.

@@ -15,14 +15,14 @@
 [[library]]
 name = "libmpeg"
 functions = 103
-state = "pending"
-note = "FMV decoder; cutscenes are skipped (GOW_SKIP_FMV) for now"
+state = "partial"
+note = "Intro movie plays (native libmpeg2 decoder); movie audio still silent"
 
 [[library]]
 name = "libipu"
 functions = 5
-state = "pending"
-note = "IPU driver for FMV; skipped with the cutscenes"
+state = "partial"
+note = "Served by the native decoder; movie audio open"
 
 [[library]]
 name = "libgraph"
@@ -174,8 +174,8 @@ group = "GS / VU"
   weight = 2
   [[hardware.item]]
   short = "IPU"
-  name = "IPU: FMV video (skipped for now)"
-  state = "pending"
+  name = "IPU: replaced by the native MPEG-2 decoder (libmpeg2); movie audio still silent"
+  state = "partial"
   weight = 2
 
 [[hardware]]

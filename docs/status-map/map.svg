@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="424" viewBox="0 0 900 424" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" role="img">
-<title>Status: libraries* 83.0%, hardware 95.3%</title>
+<title>Status: libraries* 91.3%, hardware 97.7%</title>
 <style>
   .bg { fill: #ffffff; } .line { stroke: #d0d7de; } .t1 { fill: #1f2328; } .t2 { fill: #59636e; }
   .ok { fill: #0ca30c; } .partial { fill: #fab219; } .pending { fill: #c4c8ce; } .gap { stroke: #ffffff; }
@@ -19,13 +19,13 @@
 <rect class="bk" x="16" y="56" width="92" height="22" rx="3"/>
 <text class="bt" x="62.0" y="71" font-size="12.5" text-anchor="middle">libraries*</text>
 <rect class="partial" x="108.0" y="56" width="53" height="22" rx="3"/>
-<text class="t1" x="134.5" y="71" font-size="12.5" text-anchor="middle">83.0%</text>
+<text class="t1" x="134.5" y="71" font-size="12.5" text-anchor="middle">91.3%</text>
 <rect class="bk" x="171.0" y="56" width="78" height="22" rx="3"/>
 <text class="bt" x="210.0" y="71" font-size="12.5" text-anchor="middle">hardware</text>
 <rect class="partial" x="249.0" y="56" width="53" height="22" rx="3"/>
-<text class="t1" x="275.5" y="71" font-size="12.5" text-anchor="middle">95.3%</text>
-<text class="t1" x="16" y="103" font-size="14">Sony SDK libraries*: 83.0% (537/647)</text>
-<text class="t1" x="460" y="103" font-size="14">PS2 hardware → native: 95.3%</text>
+<text class="t1" x="275.5" y="71" font-size="12.5" text-anchor="middle">97.7%</text>
+<text class="t1" x="16" y="103" font-size="14">Sony SDK libraries*: 91.3% (537/647)</text>
+<text class="t1" x="460" y="103" font-size="14">PS2 hardware → native: 97.7%</text>
 <g><title>libc: 150 functions, ok</title>
 <rect class="ok gap" x="16.0" y="112.0" width="12.8" height="12.7" stroke-width="1.0"/>
 <rect class="ok gap" x="28.8" y="112.0" width="12.8" height="12.7" stroke-width="1.0"/>
@@ -178,110 +178,213 @@
 <rect class="ok gap" x="79.8" y="252.2" width="12.8" height="12.7" stroke-width="1.0"/>
 <rect class="ok gap" x="92.5" y="252.2" width="12.8" height="12.7" stroke-width="1.0"/>
 </g>
-<g><title>libmpeg: 103 functions, pending - FMV decoder; cutscenes are skipped (GOW_SKIP_FMV) for now</title>
-<rect class="pending gap" x="16.0" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="28.8" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="41.5" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="54.3" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="67.0" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="79.8" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="92.5" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="105.3" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="118.0" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="130.8" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="143.5" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="156.3" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="169.0" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="16.0" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="28.8" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="41.5" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="54.3" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="67.0" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="79.8" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="92.5" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="105.3" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="118.0" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="130.8" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="143.5" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="156.3" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="169.0" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="16.0" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="28.8" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="41.5" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="54.3" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="67.0" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="79.8" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="92.5" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="105.3" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="118.0" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="130.8" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="143.5" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="156.3" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="169.0" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="16.0" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="28.8" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="41.5" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="54.3" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="67.0" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="79.8" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="92.5" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="105.3" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="118.0" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="130.8" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="143.5" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="156.3" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="169.0" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="16.0" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="28.8" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="41.5" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="54.3" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="67.0" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="79.8" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="92.5" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="105.3" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="118.0" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="130.8" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="143.5" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="156.3" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="169.0" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="16.0" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="28.8" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="41.5" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="54.3" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="67.0" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="79.8" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="92.5" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="105.3" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="118.0" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="130.8" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="143.5" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="156.3" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="169.0" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="16.0" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="28.8" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="41.5" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="54.3" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="67.0" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="79.8" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="92.5" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="105.3" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="118.0" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="130.8" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="143.5" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="156.3" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="169.0" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="16.0" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="28.8" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="41.5" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="54.3" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="67.0" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="79.8" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="92.5" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="105.3" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="118.0" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="130.8" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="143.5" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
-<rect class="pending gap" x="156.3" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
+<g><title>libmpeg: 103 functions, partial - Intro movie plays (native libmpeg2 decoder); movie audio still silent</title>
+<rect class="partial gap" x="16.0" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="16.0" y="265.0" width="12.8" height="13.1"/>
+<rect class="partial gap" x="28.8" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="28.8" y="265.0" width="12.8" height="13.1"/>
+<rect class="partial gap" x="41.5" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="41.5" y="265.0" width="12.8" height="13.1"/>
+<rect class="partial gap" x="54.3" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="54.3" y="265.0" width="12.8" height="13.1"/>
+<rect class="partial gap" x="67.0" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="67.0" y="265.0" width="12.8" height="13.1"/>
+<rect class="partial gap" x="79.8" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="79.8" y="265.0" width="12.8" height="13.1"/>
+<rect class="partial gap" x="92.5" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="92.5" y="265.0" width="12.8" height="13.1"/>
+<rect class="partial gap" x="105.3" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="105.3" y="265.0" width="12.8" height="13.1"/>
+<rect class="partial gap" x="118.0" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="118.0" y="265.0" width="12.8" height="13.1"/>
+<rect class="partial gap" x="130.8" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="130.8" y="265.0" width="12.8" height="13.1"/>
+<rect class="partial gap" x="143.5" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="143.5" y="265.0" width="12.8" height="13.1"/>
+<rect class="partial gap" x="156.3" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="156.3" y="265.0" width="12.8" height="13.1"/>
+<rect class="partial gap" x="169.0" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="169.0" y="265.0" width="12.8" height="13.1"/>
+<rect class="partial gap" x="16.0" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="16.0" y="278.1" width="12.8" height="13.1"/>
+<rect class="partial gap" x="28.8" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="28.8" y="278.1" width="12.8" height="13.1"/>
+<rect class="partial gap" x="41.5" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="41.5" y="278.1" width="12.8" height="13.1"/>
+<rect class="partial gap" x="54.3" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="54.3" y="278.1" width="12.8" height="13.1"/>
+<rect class="partial gap" x="67.0" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="67.0" y="278.1" width="12.8" height="13.1"/>
+<rect class="partial gap" x="79.8" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="79.8" y="278.1" width="12.8" height="13.1"/>
+<rect class="partial gap" x="92.5" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="92.5" y="278.1" width="12.8" height="13.1"/>
+<rect class="partial gap" x="105.3" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="105.3" y="278.1" width="12.8" height="13.1"/>
+<rect class="partial gap" x="118.0" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="118.0" y="278.1" width="12.8" height="13.1"/>
+<rect class="partial gap" x="130.8" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="130.8" y="278.1" width="12.8" height="13.1"/>
+<rect class="partial gap" x="143.5" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="143.5" y="278.1" width="12.8" height="13.1"/>
+<rect class="partial gap" x="156.3" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="156.3" y="278.1" width="12.8" height="13.1"/>
+<rect class="partial gap" x="169.0" y="278.1" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="169.0" y="278.1" width="12.8" height="13.1"/>
+<rect class="partial gap" x="16.0" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="16.0" y="291.2" width="12.8" height="13.1"/>
+<rect class="partial gap" x="28.8" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="28.8" y="291.2" width="12.8" height="13.1"/>
+<rect class="partial gap" x="41.5" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="41.5" y="291.2" width="12.8" height="13.1"/>
+<rect class="partial gap" x="54.3" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="54.3" y="291.2" width="12.8" height="13.1"/>
+<rect class="partial gap" x="67.0" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="67.0" y="291.2" width="12.8" height="13.1"/>
+<rect class="partial gap" x="79.8" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="79.8" y="291.2" width="12.8" height="13.1"/>
+<rect class="partial gap" x="92.5" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="92.5" y="291.2" width="12.8" height="13.1"/>
+<rect class="partial gap" x="105.3" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="105.3" y="291.2" width="12.8" height="13.1"/>
+<rect class="partial gap" x="118.0" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="118.0" y="291.2" width="12.8" height="13.1"/>
+<rect class="partial gap" x="130.8" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="130.8" y="291.2" width="12.8" height="13.1"/>
+<rect class="partial gap" x="143.5" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="143.5" y="291.2" width="12.8" height="13.1"/>
+<rect class="partial gap" x="156.3" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="156.3" y="291.2" width="12.8" height="13.1"/>
+<rect class="partial gap" x="169.0" y="291.2" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="169.0" y="291.2" width="12.8" height="13.1"/>
+<rect class="partial gap" x="16.0" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="16.0" y="304.4" width="12.8" height="13.1"/>
+<rect class="partial gap" x="28.8" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="28.8" y="304.4" width="12.8" height="13.1"/>
+<rect class="partial gap" x="41.5" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="41.5" y="304.4" width="12.8" height="13.1"/>
+<rect class="partial gap" x="54.3" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="54.3" y="304.4" width="12.8" height="13.1"/>
+<rect class="partial gap" x="67.0" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="67.0" y="304.4" width="12.8" height="13.1"/>
+<rect class="partial gap" x="79.8" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="79.8" y="304.4" width="12.8" height="13.1"/>
+<rect class="partial gap" x="92.5" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="92.5" y="304.4" width="12.8" height="13.1"/>
+<rect class="partial gap" x="105.3" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="105.3" y="304.4" width="12.8" height="13.1"/>
+<rect class="partial gap" x="118.0" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="118.0" y="304.4" width="12.8" height="13.1"/>
+<rect class="partial gap" x="130.8" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="130.8" y="304.4" width="12.8" height="13.1"/>
+<rect class="partial gap" x="143.5" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="143.5" y="304.4" width="12.8" height="13.1"/>
+<rect class="partial gap" x="156.3" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="156.3" y="304.4" width="12.8" height="13.1"/>
+<rect class="partial gap" x="169.0" y="304.4" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="169.0" y="304.4" width="12.8" height="13.1"/>
+<rect class="partial gap" x="16.0" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="16.0" y="317.5" width="12.8" height="13.1"/>
+<rect class="partial gap" x="28.8" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="28.8" y="317.5" width="12.8" height="13.1"/>
+<rect class="partial gap" x="41.5" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="41.5" y="317.5" width="12.8" height="13.1"/>
+<rect class="partial gap" x="54.3" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="54.3" y="317.5" width="12.8" height="13.1"/>
+<rect class="partial gap" x="67.0" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="67.0" y="317.5" width="12.8" height="13.1"/>
+<rect class="partial gap" x="79.8" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="79.8" y="317.5" width="12.8" height="13.1"/>
+<rect class="partial gap" x="92.5" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="92.5" y="317.5" width="12.8" height="13.1"/>
+<rect class="partial gap" x="105.3" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="105.3" y="317.5" width="12.8" height="13.1"/>
+<rect class="partial gap" x="118.0" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="118.0" y="317.5" width="12.8" height="13.1"/>
+<rect class="partial gap" x="130.8" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="130.8" y="317.5" width="12.8" height="13.1"/>
+<rect class="partial gap" x="143.5" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="143.5" y="317.5" width="12.8" height="13.1"/>
+<rect class="partial gap" x="156.3" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="156.3" y="317.5" width="12.8" height="13.1"/>
+<rect class="partial gap" x="169.0" y="317.5" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="169.0" y="317.5" width="12.8" height="13.1"/>
+<rect class="partial gap" x="16.0" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="16.0" y="330.6" width="12.8" height="13.1"/>
+<rect class="partial gap" x="28.8" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="28.8" y="330.6" width="12.8" height="13.1"/>
+<rect class="partial gap" x="41.5" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="41.5" y="330.6" width="12.8" height="13.1"/>
+<rect class="partial gap" x="54.3" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="54.3" y="330.6" width="12.8" height="13.1"/>
+<rect class="partial gap" x="67.0" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="67.0" y="330.6" width="12.8" height="13.1"/>
+<rect class="partial gap" x="79.8" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="79.8" y="330.6" width="12.8" height="13.1"/>
+<rect class="partial gap" x="92.5" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="92.5" y="330.6" width="12.8" height="13.1"/>
+<rect class="partial gap" x="105.3" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="105.3" y="330.6" width="12.8" height="13.1"/>
+<rect class="partial gap" x="118.0" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="118.0" y="330.6" width="12.8" height="13.1"/>
+<rect class="partial gap" x="130.8" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="130.8" y="330.6" width="12.8" height="13.1"/>
+<rect class="partial gap" x="143.5" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="143.5" y="330.6" width="12.8" height="13.1"/>
+<rect class="partial gap" x="156.3" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="156.3" y="330.6" width="12.8" height="13.1"/>
+<rect class="partial gap" x="169.0" y="330.6" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="169.0" y="330.6" width="12.8" height="13.1"/>
+<rect class="partial gap" x="16.0" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="16.0" y="343.7" width="12.8" height="13.1"/>
+<rect class="partial gap" x="28.8" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="28.8" y="343.7" width="12.8" height="13.1"/>
+<rect class="partial gap" x="41.5" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="41.5" y="343.7" width="12.8" height="13.1"/>
+<rect class="partial gap" x="54.3" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="54.3" y="343.7" width="12.8" height="13.1"/>
+<rect class="partial gap" x="67.0" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="67.0" y="343.7" width="12.8" height="13.1"/>
+<rect class="partial gap" x="79.8" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="79.8" y="343.7" width="12.8" height="13.1"/>
+<rect class="partial gap" x="92.5" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="92.5" y="343.7" width="12.8" height="13.1"/>
+<rect class="partial gap" x="105.3" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="105.3" y="343.7" width="12.8" height="13.1"/>
+<rect class="partial gap" x="118.0" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="118.0" y="343.7" width="12.8" height="13.1"/>
+<rect class="partial gap" x="130.8" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="130.8" y="343.7" width="12.8" height="13.1"/>
+<rect class="partial gap" x="143.5" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="143.5" y="343.7" width="12.8" height="13.1"/>
+<rect class="partial gap" x="156.3" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="156.3" y="343.7" width="12.8" height="13.1"/>
+<rect class="partial gap" x="169.0" y="343.7" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="169.0" y="343.7" width="12.8" height="13.1"/>
+<rect class="partial gap" x="16.0" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="16.0" y="356.9" width="12.8" height="13.1"/>
+<rect class="partial gap" x="28.8" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="28.8" y="356.9" width="12.8" height="13.1"/>
+<rect class="partial gap" x="41.5" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="41.5" y="356.9" width="12.8" height="13.1"/>
+<rect class="partial gap" x="54.3" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="54.3" y="356.9" width="12.8" height="13.1"/>
+<rect class="partial gap" x="67.0" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="67.0" y="356.9" width="12.8" height="13.1"/>
+<rect class="partial gap" x="79.8" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="79.8" y="356.9" width="12.8" height="13.1"/>
+<rect class="partial gap" x="92.5" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="92.5" y="356.9" width="12.8" height="13.1"/>
+<rect class="partial gap" x="105.3" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="105.3" y="356.9" width="12.8" height="13.1"/>
+<rect class="partial gap" x="118.0" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="118.0" y="356.9" width="12.8" height="13.1"/>
+<rect class="partial gap" x="130.8" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="130.8" y="356.9" width="12.8" height="13.1"/>
+<rect class="partial gap" x="143.5" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="143.5" y="356.9" width="12.8" height="13.1"/>
+<rect class="partial gap" x="156.3" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="156.3" y="356.9" width="12.8" height="13.1"/>
 </g>
 <g><title>libkernel: 101 functions, ok - Runs natively; DelayThread on the scheduler, no timer register access</title>
 <rect class="ok gap" x="181.8" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
@@ -698,12 +801,17 @@
 <rect class="ok gap" x="428.9" y="310.7" width="11.1" height="11.9" stroke-width="1.0"/>
 <rect class="ok gap" x="406.7" y="322.6" width="11.1" height="11.9" stroke-width="1.0"/>
 </g>
-<g><title>libipu: 5 functions, pending - IPU driver for FMV; skipped with the cutscenes</title>
-<rect class="pending gap" x="406.7" y="334.4" width="11.1" height="12.7" stroke-width="1.0"/>
-<rect class="pending gap" x="417.8" y="334.4" width="11.1" height="12.7" stroke-width="1.0"/>
-<rect class="pending gap" x="428.9" y="334.4" width="11.1" height="12.7" stroke-width="1.0"/>
-<rect class="pending gap" x="406.7" y="347.1" width="11.1" height="12.7" stroke-width="1.0"/>
-<rect class="pending gap" x="417.8" y="347.1" width="11.1" height="12.7" stroke-width="1.0"/>
+<g><title>libipu: 5 functions, partial - Served by the native decoder; movie audio open</title>
+<rect class="partial gap" x="406.7" y="334.4" width="11.1" height="12.7" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="406.7" y="334.4" width="11.1" height="12.7"/>
+<rect class="partial gap" x="417.8" y="334.4" width="11.1" height="12.7" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="417.8" y="334.4" width="11.1" height="12.7"/>
+<rect class="partial gap" x="428.9" y="334.4" width="11.1" height="12.7" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="428.9" y="334.4" width="11.1" height="12.7"/>
+<rect class="partial gap" x="406.7" y="347.1" width="11.1" height="12.7" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="406.7" y="347.1" width="11.1" height="12.7"/>
+<rect class="partial gap" x="417.8" y="347.1" width="11.1" height="12.7" stroke-width="1.0"/>
+<rect fill="url(#hatch)" x="417.8" y="347.1" width="11.1" height="12.7"/>
 </g>
 <g><title>libvib: 2 functions, pending - Vibration not implemented</title>
 <rect class="pending gap" x="406.7" y="359.8" width="11.1" height="10.2" stroke-width="1.0"/>
@@ -809,9 +917,10 @@
 <rect class="ok gap" x="824.8" y="241.0" width="57.2" height="84.7" stroke-width="1.5"/>
 <text class="on-ok" x="853.4" y="287.3" font-size="12" text-anchor="middle">GIF</text>
 </g>
-<g><title>IPU: FMV video (skipped for now) (pending)</title>
-<rect class="pending gap" x="767.7" y="325.7" width="114.3" height="42.3" stroke-width="1.5"/>
-<text class="on-pending" x="824.8" y="350.8" font-size="12" text-anchor="middle">IPU</text>
+<g><title>IPU: replaced by the native MPEG-2 decoder (libmpeg2); movie audio still silent (partial)</title>
+<rect class="partial gap" x="767.7" y="325.7" width="114.3" height="42.3" stroke-width="1.5"/>
+<rect fill="url(#hatch)" x="767.7" y="325.7" width="114.3" height="42.3"/>
+<text class="on-partial" x="824.8" y="350.8" font-size="12" text-anchor="middle">IPU</text>
 </g>
 <rect class="chip" x="768.7" y="115.0" width="56.2" height="16" rx="3"/>
 <text class="chip-t" x="773.7" y="127.0" font-size="11.5">GS / VU</text>

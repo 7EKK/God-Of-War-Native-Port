@@ -82,7 +82,7 @@ Native Windows build, 1920x1080 window, captured by the automatic zone test (`to
 | 60 fps in all four tested zones (Olympus, Desert, Cliffs, slot 4) | ✅ |
 | Game speed exact (1.00) at 30 and 60 fps, matching PCSX2 | ✅ |
 | Game data from the extracted disc files (no ISO reads) | ✅ |
-| FMV (currently skipped) | ⏳ |
+| FMV: intro movie plays natively (libmpeg2); movie audio still silent | 🔧 in progress |
 | Nintendo Switch build | ⏳ after the PC port |
 
 Latest zone check (4 save slots, ~2 minutes each): all zones reach gameplay with no runtime errors, fps

@@ -2,12 +2,12 @@
 
 Generated from `data.toml` by `tools/status_map.py`; do not edit by hand.
 
-## Sony SDK libraries (83.0%, 647 functions)
+## Sony SDK libraries (91.3%, 647 functions)
 
 | Library | Functions | State | Note |
 |---|---:|---|---|
-| libmpeg | 103 | ⏳ pending | FMV decoder; cutscenes are skipped (GOW_SKIP_FMV) for now |
-| libipu | 5 | ⏳ pending | IPU driver for FMV; skipped with the cutscenes |
+| libmpeg | 103 | 🔧 partial | Intro movie plays (native libmpeg2 decoder); movie audio still silent |
+| libipu | 5 | 🔧 partial | Served by the native decoder; movie audio open |
 | libgraph | 7 | ✅ ok | Display setup is a native override (GS display state, no GS register access) |
 | libdma | 8 | ✅ ok | sceDmaSend feeds VIF/GIF directly; no DMA controller model |
 | libcdvd | 10 | ✅ ok | CD reads served from the extracted game files (disc-usa/); the ISO only with GOW_ISO |
@@ -25,7 +25,7 @@ Generated from `data.toml` by `tools/status_map.py`; do not edit by hand.
 | fileio | 15 | ✅ ok |  |
 | loadfile | 14 | ✅ ok |  |
 
-## PS2 hardware (95.3%)
+## PS2 hardware (97.7%)
 
 | Group | Component | Weight | State |
 |---|---|---:|---|
@@ -39,7 +39,7 @@ Generated from `data.toml` by `tools/status_map.py`; do not edit by hand.
 | GS / VU | VIF1 decoded directly; VU1 microprograms compiled ahead of time to C++ | 3 | ✅ ok |
 | GS / VU | Textures and CLUT: native texture store; palettes from render targets read on the GPU | 2 | ✅ ok |
 | GS / VU | GIF (PATH1-3): the game's GIF tags fed to the renderer | 2 | ✅ ok |
-| GS / VU | IPU: FMV video (skipped for now) | 2 | ⏳ pending |
+| GS / VU | IPU: replaced by the native MPEG-2 decoder (libmpeg2); movie audio still silent | 2 | 🔧 partial |
 | IOP | R3000A CPU: no interpreter on the hot path | 3 | ✅ ok |
 | IOP | SPU2: native sound engine driven by LIBSD's exports | 3 | ✅ ok |
 | IOP | The game's 8 IRX modules compiled ahead of time to C++ | 2 | ✅ ok |
