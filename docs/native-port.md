@@ -105,9 +105,28 @@ EE timers (no-emulation order, after step 5):
    - DONE (2026-10-12): the game reads `disc-usa/` (files extracted with their original LSNs, docs/disc.md); the
      ISO is only opened when `GOW_ISO` is set explicitly. smpd's raw sector reads are host file reads (DiscSource).
 
-## Hardware access inventory (2026-10-11, `GOW_IO_HIST=150`, boot + Olympus)
-What the game's own code still reads or writes as hardware registers (the generated code also marks every constant-address
-access with `// MMIO:`; `tools/dis.py ADDR` disassembles the USA build):
+## Hardware access inventory (2026-10-12, `GOW_IO_HIST=170 GOW_IOP_IO_HIST=170`, boot + each of the 4 zones)
+Measured on agent/residual (main + disc files + native clock + native DMA requests), port/residual_ver/20261012_063312:
+- **EE game code: one access left per boot.** 0x13F6B8 (after sceDmaReset/sceDmaGetChan) sets VIF1's tag-transfer
+  bit with `lw/sw 0($a0)` on CHCR 0x10009000: the address arrives in a register, so it goes through the generic
+  path, which dispatches to the same native DMA request service. Nothing else in 170 s of any zone.
+- **DMA registers: no hardware path since agent/residual.** Before: in 170 s per zone ~35k D_STAT clears and
+  ~13-18k register stores per scratchpad channel (8 fromSPR at 0x1590F0/0x159C58, 9 toSPR at 0x101888/0x117D10/
+  0x1188F0, QWC/MADR/SADR/CHCR each), plus the boot VIF0 chain (0x1838D0) and D_PCR. The recompiler now emits every
+  32-bit access to 0x10008000-0x1000EFFF as a call of `PS2Memory::eeDmaStore/eeDmaLoad` (87 stores, 16 loads in 27
+  functions, most of them libdma/libipu); a CHCR store with STR runs the copy or VIF/GIF transfer at once. No DMA
+  controller state exists (registers are latched values).
+- **IOP (compiled IRX code): 9 configuration stores at module start, none afterwards**: sio2man writes SIO2_CTRL
+  (0x1F808268); libsd's start writes the SSBUS/SPU delay registers (0x1F801014/1404/140C/1414) and read-modify-writes
+  DPCR/DPCR2 (0x1F8010F0/0x1F801570). These registers have no model behind them (stored in a map, never read
+  back by anything); converting them would only remove dead stores, so they are left.
+- **Scratchpad memory** (not hardware): ~40 M accesses per 170 s (Desert ~37 M, slot 4 ~156 M) used to go through
+  `runtime->Load/Store`; since ext agent/scratchpad the access macros read and write it directly (aligned
+  accesses), see docs/performance.md "Scratchpad fast path".
+
+Earlier state (2026-10-11, `GOW_IO_HIST=150`, boot + Olympus) and what was converted since. What the game's own code
+read or wrote as hardware registers (the generated code also marks every constant-address access with `// MMIO:`;
+`tools/dis.py ADDR` disassembles the USA build):
 - GS privileged registers: none since agent/gsregs (step 5 above). Before: CSR read+write per FINISH interrupt
   (handler 0x182DD8, ~2 per frame) plus one write at install (0x182E88), and SMODE2/PMODE/DISPFB1/DISPLAY1/
   DISPFB2/DISPLAY2/BGCOLOR stored once per frame by 0x183360.
@@ -115,8 +134,10 @@ access with `// MMIO:`; `tools/dis.py ADDR` disassembles the USA build):
   0x179F18/54, 0x17A168, 0x17A2C8, 0x17D780/7BC and in the FINISH handler, T1 count once per frame at 0x179F94, T0/T1
   mode once at boot at 0x138984/94). T2: none since agent/timers (before: libkernel's timer system 0x2998xx-0x299Fxx,
   ~60 accesses).
-- Scratchpad DMA (channels 8/9) in 0x117D10, 0x1188F0, 0x1590F0, 0x159C58, 0x101888 and D_STAT clears: served as copies.
+- Scratchpad DMA (channels 8/9) in 0x117D10, 0x1188F0, 0x1590F0, 0x159C58, 0x101888 and D_STAT clears: served as copies;
+  since agent/residual direct calls of the native DMA request service (above).
 - IPU + its DMA (libmpeg 0x26F228..0x279588, 0x189BD0..0x18A5E0) and D_ENABLER/W: FMV, skipped (GOW_SKIP_FMV).
+  FMV work in progress: libmpeg2 replaces FFmpeg, movie path and blocker in docs/fmv.md.
 - INTC mask (libkernel 0x2940B0/0x294140), once per DI/EI (not seen in the slot-1 runs of 2026-10-11 evening).
 - Not accessed: VIF/GIF registers, SIF registers, SIF DMA, VIF1/GIF channel registers (except the boot TTE setting).
 

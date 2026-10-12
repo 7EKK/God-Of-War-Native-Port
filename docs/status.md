@@ -701,3 +701,18 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   60/60/60/60 fps, game speed 1.00 all zones, extracted files (no ISO), savetest ok. Timers: 0 accesses from game code.
   Decision: discfiles and t01clock were gated together (one full 35-min rebuild instead of two); both had passed
   their own 4-zone runs. Push to "native" was held ~45 min past the 2 h mark to push a verified state.
+- 06:5x: agent/visual merged (ff3cf11: character shadows via Z-inversion tracking, line primitives). Its gate
+  (port/merged9) had slot 2 at 55.5-60 fps while other forks ran; GS time slot 2 +13 % (shadows now drawn).
+  agent/residual merged (8820bd0: EE DMA registers -> native DMA service via the recompiler; 27 regenerated files).
+  Decision: one gate for both (full rebuild needed anyway); slot 2 at 60 fps in that gate decides visual.
+  agent/fmv hit its turn limit; resumed to commit and verify.
+- 07:5x: main's link failed (exe locked): a test runner orphaned at 06:50 when I stopped the slot-2 re-run shell
+  (TaskStop kills the shell, not the game it started). It also kept every "wait for an idle machine" loop waiting for
+  an hour. Killed it; gate re-run. Lesson: after stopping a test shell, check `Get-Process ps2EntryRunner` and close
+  the runner it started.
+- 08:0x: agent/fmv partial (c9870e2): libmpeg2 0.5.1 vendored (GPL-2+, portable) instead of FFmpeg, mbcount bound
+  (fixes the heap overwrite that showed as garbage), RT-sampling fix; intro still black (blocker in docs/fmv.md:
+  how .m2 pictures reach TBP 0x2800). Not merged yet (feature incomplete); a new fork continues on the same branch.
+- 08:4x VERIFIED (port/merged10/20261012_081448, main ext 8820bd0 = visual + residual): 60/60/60/60 fps (single windows
+  59.4-59.8 while forks ran), game speed 1.00/1.00/1.01/1.00, savetest ok. Desert holds 60 with shadows drawn.
+  Remaining EE hardware access: one VIF1 CHCR read/write at boot (dynamic address, served by the DMA service).
