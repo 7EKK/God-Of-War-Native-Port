@@ -266,3 +266,8 @@ Gains per lever above are estimates from the Gemini review (gemini-work/results/
   still sees all queued GS work done. The stage never waits for itself (`onStageThread`), and it wakes the EE after a
   batch when the GS raised an interrupt (FINISH/SIGNAL), as the worker did after a job.
 - `PS2X_GS_PIPELINE=0` keeps the GS frontend on the worker thread (A/B and fallback). Portable C++ (std::thread).
+- Measured (idle new-game run, port/newgame/b6idle_*: the ship start with the camera over the rain and sea):
+  pipeline on 59.2-60.2 fps through the whole scene, `PS2X_GS_PIPELINE=0` 36-42 fps; game speed 1.00 both.
+  Zones 0-4 (port/b6_zones/20261012_143318 + port/b6_zones2/20261012_145143 for slots 2 and 4, whose first runs
+  were killed from outside by another test's `taskkill /IM`): 60 fps everywhere, speed 1.00, no image warnings;
+  savetest ok.

@@ -79,7 +79,7 @@ Native Windows build, 1920x1080 window, captured by the automatic zone test (`to
 | Native DMA data path; SIF already native | ✅ |
 | GS memory image → native texture/CLUT store; GS display registers native | ✅ |
 | EE timers → native clock (recompiler turns timer reads into native clock calls) | ✅ |
-| 60 fps in all four tested zones (Olympus, Desert, Cliffs, slot 4) | ✅ |
+| 60 fps in all tested zones (Olympus, Desert, Cliffs, slot 4, new-game ship start) | ✅ |
 | Game speed exact (1.00) at 30 and 60 fps, matching PCSX2 | ✅ |
 | Game data from the extracted disc files (no ISO reads) | ✅ |
 | FMV: intro movie plays natively with sound (libmpeg2 + native sound engine); other movies unchecked | 🔧 in progress |
