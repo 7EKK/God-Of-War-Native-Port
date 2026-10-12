@@ -1,4 +1,5 @@
 #include "runtime/ps2_memory.h"
+#include "runtime/gs/gs_stage.h"
 #include <chrono>
 #include <map>
 #include <string>
@@ -1955,18 +1956,24 @@ void PS2Memory::gsWorkerLoop()
 
 void PS2Memory::syncGsWorker(const char *site)
 {
+    if (ps2_gs_stage::onStageThread())
+        return; // GOW-Port: the stage runs queued worker output; it must not wait for itself
     if (m_gsWorkerEnabled && !onGsWorkerThread())
         waitGsWorkerIdle(site, 0u);
 }
 
 void PS2Memory::syncGsWorkerFor(uint32_t address)
 {
+    if (ps2_gs_stage::onStageThread())
+        return; // GOW-Port: the stage runs queued worker output; it must not wait for itself
     if (m_gsWorkerEnabled && needsGsWorkerSync(address) && !onGsWorkerThread())
         waitGsWorkerIdle(nullptr, address);
 }
 
 void PS2Memory::syncGsWorkerIfOtherThread(const char *site)
 {
+    if (ps2_gs_stage::onStageThread())
+        return; // GOW-Port: the stage runs queued worker output; it must not wait for itself
     if (m_gsWorkerEnabled && !onGsWorkerThread())
         waitGsWorkerIdle(site, 0u);
 }
@@ -1996,6 +2003,7 @@ void PS2Memory::waitGsWorkerIdle(const char *site, uint32_t address)
     if (busy)
         m_gsWorkerIdleCv.wait(lock, [this] { return m_gsWorkerJobs.empty() && !m_gsWorkerBusy; });
     lock.unlock();
+    ps2_gs_stage::waitIdle(); // GOW-Port: the GS frontend stage is part of the worker (gs_stage.h)
     if (!gsWorkerSyncDiagEnabled())
         return;
     static GsWorkerSyncDiag diag;
@@ -2036,6 +2044,7 @@ void PS2Memory::stopGsWorker()
     m_gsWorkerCv.notify_all();
     m_gsWorker.join();
     m_gsWorkerEnabled = false;
+    ps2_gs_stage::stop();
 }
 
 // EE accesses that observe or change state owned by the worker while it runs.
