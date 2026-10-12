@@ -149,8 +149,8 @@ def run_zone(slot, args, outdir):
     env.pop('GOW_ISO', None)
     if args.iso:
         env['GOW_ISO'] = ISO  # default: the extracted files next to the ELF (docs/disc.md)
-    if not args.audio:
-        env['GOW_AUDIO'] = '0'  # test runs are silent; --audio for audio tests
+    if args.silent:
+        env['GOW_AUDIO'] = '0'  # --silent mutes the run (sound is on by default, user 2026-10-12)
     if args.diff:
         env.update({'PS2X_EE_DIFF': 'all', 'PS2X_EE_DIFF_MAX': '12', 'PS2X_EE_DIFF_LINES': '300',
                     'PS2X_EE_DIFF_START': str(args.diff_start)})
@@ -269,7 +269,8 @@ def main():
     ap.add_argument('--exe', help='runner to test (default: the main build); captures are written next to it')
     ap.add_argument('--card', default=DEFAULT_CARD)
     ap.add_argument('--secs', type=float, default=200)
-    ap.add_argument('--audio', action='store_true', help='play sound (default: silent, GOW_AUDIO=0)')
+    ap.add_argument('--silent', action='store_true', help='mute the run (GOW_AUDIO=0); sound is on by default')
+    ap.add_argument('--audio', action='store_true', help=argparse.SUPPRESS)  # old flag, sound is the default now
     ap.add_argument('--iso', action='store_true', help='read the original ISO (default: the extracted files in disc-usa/)')
     ap.add_argument('--min-fps', type=float, default=25.0)
     ap.add_argument('--diff', action='store_true', help='also run the EE differential tester (slow)')

@@ -66,7 +66,8 @@ def main():
     ap.add_argument('--secs', type=float, default=150)
     ap.add_argument('--keys', default='g4:r2,g7:x,g9:x,g11:arriba,g12.5:x,g20:x,g22:x')
     ap.add_argument('--exe')
-    ap.add_argument('--audio', action='store_true', help='play sound (default: silent, GOW_AUDIO=0)')
+    ap.add_argument('--silent', action='store_true', help='mute the run (GOW_AUDIO=0); sound is on by default')
+    ap.add_argument('--audio', action='store_true', help=argparse.SUPPRESS)  # old flag, sound is the default now
     ap.add_argument('--iso', action='store_true', help='read the original ISO (default: the extracted files in disc-usa/)')
     args = ap.parse_args()
     exe = os.path.abspath(args.exe) if args.exe else zones.EXE
@@ -83,8 +84,8 @@ def main():
     env.pop('GOW_ISO', None)
     if args.iso:
         env['GOW_ISO'] = zones.ISO  # default: the extracted files next to the ELF (docs/disc.md)
-    if not args.audio:
-        env['GOW_AUDIO'] = '0'  # test runs are silent; --audio for audio tests
+    if args.silent:
+        env['GOW_AUDIO'] = '0'  # --silent mutes the run (sound is on by default, user 2026-10-12)
     for f in os.listdir(exe_dir):
         if f.startswith('gow_pad_test_') and f.endswith('.ppm'):
             os.remove(os.path.join(exe_dir, f))

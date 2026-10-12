@@ -33,8 +33,8 @@
 - Executable: `ext/PS2Recomp/out/build/ps2xRuntime/RelWithDebInfo/ps2EntryRunner.exe <abs path>/disc/SCES_531.33`
   run with cwd = `disc/`. No second argument: the disc comes from `disc/.disc_layout` (see disc.md).
   (argv[2] = path to an .iso is still supported but the user does not want ISO reads.)
-- Test runs are silent (user 2026-10-11): `tools/zones.py` and `tools/savetest.py` set `GOW_AUDIO=0` unless `--audio`
-  is given; use `--audio` (or `GOW_AUDIO_PCM`, docs/sound.md) only for audio tests.
+- Test runs play sound (user 2026-10-12, "enable the audio"): `tools/zones.py` and `tools/savetest.py` mute only with
+  `--silent` (GOW_AUDIO=0).
 - Game data comes from the extracted disc in `disc-usa/` (docs/disc.md); `play.cmd` and the test tools never read the
   ISO (`--iso` in zones.py/savetest.py, or `GOW_ISO=<iso>`, for comparisons).
 - `tools/run.sh <seconds> <name> [ENV=VALUE ...]` — runs from disc/, waits, screenshots, kills;
