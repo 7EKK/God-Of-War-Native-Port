@@ -57,8 +57,8 @@ note = "Native pad read on the EE (keyboard / gamepad)"
 [[library]]
 name = "libvib"
 functions = 2
-state = "pending"
-note = "Vibration not implemented"
+state = "ok"
+note = "DualShock 2 actuators -> host gamepad rumble (XInput on Windows, raylib elsewhere); verified by log, not yet on a real pad"
 
 [[library]]
 name = "libmc2"

@@ -800,3 +800,14 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   agent/newgame2 (new game past the ship start, a01mp05 trigger), agent/movies2 (BONUS movies, IPU/DMA ch3/4
   register stores in the movie path, Kratos tint frame-exact), agent/vibration (DualShock actuators -> native
   gamepad rumble, the 9 IOP startup register stores). Each merges after the usual gate (zones 0-4, savetest).
+- 21:3x VERIFIED particle fix + vibration (port/merged18/20261012_212017, ext c25562c + merge of agent/vibration
+  e8aa85d): zones 0-4 60 fps (slot 3 59.0-59.8 / speed 1.02 while 3 forks built; re-run pending), savetest ok.
+  User report "shadows and particles broken": the torch embers drew as 4-petal stars and the ship's water splash as
+  star sprites. Cause: PACKED ST wrote its Q word straight into the vertex; on the GS it only latches Q until the
+  next PACKED RGBAQ (GIF tags reset it). The heat-haze fans (tbp 0, prim 0x5d) send ST,XYZF2 vertices with junk Q
+  (8.4e6, 0.0067, 1e-38...), so every triangle sampled the frame buffer far off. Torches now match PCSX2.
+  Vibration: gowVibGetProfile reports actuators, gowVibSetActParam -> PSPadBackend::setActuators (XInput on
+  Windows); 92 updates logged in a new-game fight; no real pad tested yet. IOP: 0 hardware accesses.
+  Open: shadows (fork agent/shadows: Olympus floor rectangle, black blobs in slot 4/3), souls unchecked (no orb
+  pickup in the scripted runs), audio clipping (user report; present since the native sound engine, intro movie
+  62 clipped samples/s), visual audit list in docs/visual-audit.md.

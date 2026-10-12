@@ -416,10 +416,48 @@ namespace
         padReturn(ctx, 18u);
     }
 
-    void gowVibGetProfile(uint8_t *, R5900Context *ctx, PS2Runtime *)
+    // libvib on the DualShock 2's two actuators (profile 0x03): actuator 0 = small motor (1 bit), actuator 1 = large
+    // motor (8 bits). The game (0x17C130) reads the profile once per connection and sends the packed data only when
+    // it changes; the pad backend drives the host gamepad's rumble.
+    constexpr uint8_t kVibProfile = 0x03u;
+
+    // 0x27BF90 sceVibGetProfile(socket, u8 *profile) -> profile size in bytes
+    void gowVibGetProfile(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
     {
-        // No rumble capability yet; the game skips actuator updates for count 0.
-        padReturn(ctx, 0u);
+        auto *profile = padBuffer(rdram, GPR_U32(ctx, 5), 1);
+        const auto *socket = padSocket(ctx);
+        if (!profile || !socket || socket->port != 0) { padReturn(ctx, 0u); return; }
+        profile[0] = kVibProfile;
+        padReturn(ctx, 1u);
+    }
+
+    // 0x27C010 sceVibSetActParam(socket, profileSize, const u8 *profile, dataSize, const u8 *data) -> 1 = sent
+    void gowVibSetActParam(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const auto *socket = padSocket(ctx);
+        const uint32_t profileSize = GPR_U32(ctx, 5), dataSize = GPR_U32(ctx, 7);
+        const auto *profile = padBuffer(rdram, GPR_U32(ctx, 6), profileSize);
+        const auto *data = padBuffer(rdram, GPR_U32(ctx, 8), dataSize);
+        if (!socket || socket->port != 0 || !runtime || !profile || !data || profileSize == 0u || dataSize > 32u)
+        {
+            padReturn(ctx, 0u);
+            return;
+        }
+        // Data bits are packed LSB first in actuator order, for the actuators the profile selects.
+        uint32_t bit = 0u;
+        auto take = [&](uint32_t width) {
+            uint32_t value = 0u;
+            for (uint32_t i = 0; i < width && bit < dataSize * 8u; ++i, ++bit)
+                value |= ((data[bit / 8u] >> (bit % 8u)) & 1u) << i;
+            return value;
+        };
+        const bool small = (profile[0] & 1u) && take(1u) != 0u;
+        const uint32_t large = (profile[0] & 2u) ? take(8u) : 0u;
+        static const bool vibLog = std::getenv("GOW_VIB_LOG") != nullptr;
+        if (vibLog)
+            std::fprintf(stderr, "[gow-vib] small=%u large=%u\n", small ? 1u : 0u, large);
+        runtime->padBackend().setActuators(0, small, static_cast<uint8_t>(large));
+        padReturn(ctx, 1u);
     }
 
     // Sectores de la capa 0 del DVD (donde empieza la capa 1). Medido en la ISO del usuario.
@@ -1489,6 +1527,7 @@ namespace
         runtime.replaceFunction(0x0027BAC8u, gowPad2GetButtonProfile);
         runtime.replaceFunction(0x0027BB98u, gowPad2GetState);
         runtime.replaceFunction(0x0027BF90u, gowVibGetProfile);
+        runtime.replaceFunction(0x0027C010u, gowVibSetActParam);
         // El recompilador descarta estas dos funciones porque empiezan en el delay slot
         // de un "jr ra" suelto de la funcion anterior.
         const bool a = ps2_game_overrides::bindAddressHandler(runtime, 0x00296C48u, "sceSifInitRpc");

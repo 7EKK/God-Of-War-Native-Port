@@ -2,7 +2,7 @@
 
 Generated from `data.toml` by `tools/status_map.py`; do not edit by hand.
 
-## Sony SDK libraries (99.7%, 647 functions)
+## Sony SDK libraries (100.0%, 647 functions)
 
 | Library | Functions | State | Note |
 |---|---:|---|---|
@@ -13,7 +13,7 @@ Generated from `data.toml` by `tools/status_map.py`; do not edit by hand.
 | libcdvd | 10 | ✅ ok | CD reads served from the extracted game files (disc-usa/); the ISO only with GOW_ISO |
 | libdbc | 11 | ✅ ok | dbcman RPC answered by native pad services |
 | libpad2 | 13 | ✅ ok | Native pad read on the EE (keyboard / gamepad) |
-| libvib | 2 | ⏳ pending | Vibration not implemented |
+| libvib | 2 | ✅ ok | DualShock 2 actuators -> host gamepad rumble (XInput on Windows, raylib elsewhere); verified by log, not yet on a real pad |
 | libmc2 | 90 | ✅ ok | Native memory-card service; load and save verified (savetest) |
 | libscf | 14 | ✅ ok |  |
 | libgcc | 32 | ✅ ok |  |

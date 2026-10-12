@@ -24,3 +24,6 @@ libsd_irx 1e4c sceSdBlockTransStatus
 libsd_irx 0c3c sceSdSetEffectAttr
 libsd_irx 3e3c sceSdSetTransIntrHandler
 libsd_irx 0984 sceSdSetEffectWorkArea
+sio2man_irx 0000 ctrl_set
+sio2man_irx 0014 ctrl_get
+libsd_irx 1560 bus_setup

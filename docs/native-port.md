@@ -116,10 +116,10 @@ Measured on agent/residual (main + disc files + native clock + native DMA reques
   32-bit access to 0x10008000-0x1000EFFF as a call of `PS2Memory::eeDmaStore/eeDmaLoad` (87 stores, 16 loads in 27
   functions, most of them libdma/libipu); a CHCR store with STR runs the copy or VIF/GIF transfer at once. No DMA
   controller state exists (registers are latched values).
-- **IOP (compiled IRX code): 9 configuration stores at module start, none afterwards**: sio2man writes SIO2_CTRL
-  (0x1F808268); libsd's start writes the SSBUS/SPU delay registers (0x1F801014/1404/140C/1414) and read-modify-writes
-  DPCR/DPCR2 (0x1F8010F0/0x1F801570). These registers have no model behind them (stored in a map, never read
-  back by anything); converting them would only remove dead stores, so they are left.
+- **IOP (compiled IRX code): 0 hardware accesses.** The 9 configuration stores at module start (sio2man SIO2_CTRL
+  0x1F808268; libsd's SSBUS/SPU delay registers 0x1F801014/1404/140C/1414 and DPCR/DPCR2 0x1F8010F0/0x1F801570) are
+  native overrides (tools/iop/native_overrides.txt: sio2man_irx 0000/0014 keep the control value, libsd_irx 1560
+  bus setup is a no-op); `GOW_IOP_IO_HIST=170` logs no `iop-io` line.
 - **Scratchpad memory** (not hardware): ~40 M accesses per 170 s (Desert ~37 M, slot 4 ~156 M) used to go through
   `runtime->Load/Store`; since ext agent/scratchpad the access macros read and write it directly (aligned
   accesses), see docs/performance.md "Scratchpad fast path".
