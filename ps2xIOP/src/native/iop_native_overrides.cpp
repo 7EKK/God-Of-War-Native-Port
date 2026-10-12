@@ -8,9 +8,14 @@
 #include "emulator/core/sound_engine.h"
 
 #include <array>
+#include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+
+// Audio device position (ps2xRuntime ps2_runtime.cpp), printed at the stream start for the movie A/V check.
+extern std::atomic<uint64_t> g_gowAudioFramesProduced;
 
 namespace ps2x::iop::detail
 {
@@ -213,7 +218,8 @@ namespace ps2x::iop::detail
             const uint32_t channel = arg(c, 0) & 1u, mode = arg(c, 1), iopBuffer = arg(c, 2), size = arg(c, 3);
             SoundEngine &sound = c.services.sound();
             if (g_sndDiag)
-                std::fprintf(stderr, "[snd-diag] BlockTrans core=%u mode=%x buf=%x size=%x\n", channel, mode, iopBuffer, size);
+                std::fprintf(stderr, "[snd-diag] BlockTrans core=%u mode=%x buf=%x size=%x audio_produced=%llu\n", channel, mode, iopBuffer,
+                             size, static_cast<unsigned long long>(g_gowAudioFramesProduced.load()));
             if ((mode & 3u) == 2u)
             {
                 sound.stopStream(channel);
