@@ -175,6 +175,7 @@ uniform float uTa0;
 uniform float uTa1;
 uniform int uAem;
 uniform int uAte, uAtst, uAref;
+uniform int uFailTint; // debug: GOW_GS_HW_FAILTINT paints alpha-test failing fragments magenta
 uniform int uPass; // 0 = no alpha test, 1 = keep passing fragments, 2 = keep failing fragments
 uniform float uBlendScale; // 1/128 style: alpha factor = min(a * scale, 1)
 
@@ -288,6 +289,7 @@ void main()
         bool pass = (uAte == 0) || alphaPasses(a);
         if (uPass == 1 && !pass) discard;
         if (uPass == 2 && pass) discard;
+        if (uPass == 2 && uFailTint != 0) { rgb = vec3(255.0, 0.0, 255.0); a = 128.0; }
     }
     if (uSwBlend != 0)
     {
@@ -454,7 +456,7 @@ struct GSHwBackend::Impl
     float scale = 2.0f;
     GLuint program = 0, vao = 0, vbo = 0;
     GLint locInvSize = -1, locTex = -1, locTexSize = -1, locTexDim = -1, locTme = -1, locFst = -1, locTfx = -1, locTcc = -1, locIip = -1,
-          locAte = -1, locAtst = -1, locAref = -1, locPass = -1, locBlendScale = -1, locRtTex24 = -1, locTa0 = -1, locTa1 = -1, locReinterp = -1, locDate = -1, locDatm = -1, locDest = -1, locZTex = -1, locZMax = -1, locTables = -1, locRtColor = -1, locPalette = -1, locTexFmt = -1, locTexFmt2 = -1,
+          locAte = -1, locFailTint = -1, locAtst = -1, locAref = -1, locPass = -1, locBlendScale = -1, locRtTex24 = -1, locTa0 = -1, locTa1 = -1, locReinterp = -1, locDate = -1, locDatm = -1, locDest = -1, locZTex = -1, locZMax = -1, locTables = -1, locRtColor = -1, locPalette = -1, locTexFmt = -1, locTexFmt2 = -1,
           locRtFmt = -1, locRtFmt2 = -1, locTex0 = -1, locRtPx = -1, locAem = -1;
     GLint locIndexed = -1, locLinear = -1, locWrap = -1, locIdxPalette = -1;
     GLint locSwBlend = -1, locColClamp = -1, locAbcd = -1, locFix = -1, locZAlias = -1, locZAliasWrite = -1, locZAliasMax = -1;
@@ -557,7 +559,7 @@ struct GSHwBackend::Impl
         const auto loc = [&](const char *name) { return g.GetUniformLocation(program, name); };
         locInvSize = loc("uInvSize"); locTex = loc("uTex"); locTexSize = loc("uTexSize"); locTexDim = loc("uTexDim"); locTme = loc("uTme");
         locFst = loc("uFst"); locTfx = loc("uTfx"); locTcc = loc("uTcc"); locIip = loc("uIip"); locAte = loc("uAte");
-        locAtst = loc("uAtst"); locAref = loc("uAref"); locPass = loc("uPass"); locBlendScale = loc("uBlendScale");
+        locAtst = loc("uAtst"); locFailTint = loc("uFailTint"); locAref = loc("uAref"); locPass = loc("uPass"); locBlendScale = loc("uBlendScale");
         locReinterp = loc("uReinterp"); locDate = loc("uDate"); locDatm = loc("uDatm"); locDest = loc("uDest"); locZTex = loc("uZTex"); locZMax = loc("uZMax"); locTables = loc("uTables"); locRtColor = loc("uRtColor"); locPalette = loc("uPalette");
         locTexFmt = loc("uTexFmt"); locTexFmt2 = loc("uTexFmt2"); locRtFmt = loc("uRtFmt"); locRtFmt2 = loc("uRtFmt2");
         locTex0 = loc("uTex0"); locRtPx = loc("uRtPx");
@@ -868,6 +870,20 @@ struct GSHwBackend::Impl
         for (uint32_t y = 0; y < tex.height; ++y)
             GSMem::ReadIndexRun(vram, t.psm, t.tbp0, t.tbw, 0u, y, tex.width,
                                 indices.data() + static_cast<size_t>(y) * tex.width);
+        static const long idxDumpTbp = std::getenv("GOW_GS_HW_PALDUMP") ? std::strtol(std::getenv("GOW_GS_HW_PALDUMP"), nullptr, 16) : -1;
+        static int idxDumped = 0;
+        if (idxDumpTbp >= 0 && static_cast<long>(t.tbp0) == idxDumpTbp && idxDumped < 2)
+        {
+            ++idxDumped;
+            uint32_t hist[256] = {};
+            for (uint8_t i : indices)
+                ++hist[i];
+            std::fprintf(stderr, "[gs-hw-idx] tbp=%x %ux%u psm=%u tbw=%u (index:count)", t.tbp0, tex.width, tex.height, t.psm, t.tbw);
+            for (int i = 0; i < 256; ++i)
+                if (hist[i])
+                    std::fprintf(stderr, " %d:%u", i, hist[i]);
+            std::fprintf(stderr, "\n");
+        }
         tex.blockLo = t.tbp0;
         tex.blockHi = t.tbp0 + spanBlocks(t.psm, t.tbw, tex.height);
         const Api &g = gl();
@@ -904,6 +920,17 @@ struct GSHwBackend::Impl
         }
         uint32_t colors[256];
         store.BuildPalette(s, colors);
+        // GOW_GS_HW_PALDUMP=<tbp hex>: debug, print the palette of the first draw textured from that block (rgba per entry)
+        static const long palDumpTbp = std::getenv("GOW_GS_HW_PALDUMP") ? std::strtol(std::getenv("GOW_GS_HW_PALDUMP"), nullptr, 16) : -1;
+        static int palDumped = 0;
+        if (palDumpTbp >= 0 && static_cast<long>(t.tbp0) == palDumpTbp && palDumped < 2)
+        {
+            ++palDumped;
+            std::fprintf(stderr, "[gs-hw-pal] tbp=%x cbp=%x cpsm=%u csm=%u csa=%u:", t.tbp0, t.cbp, t.cpsm, t.csm, t.csa);
+            for (int i = 0; i < 256; ++i)
+                std::fprintf(stderr, "%s%08x", (i % 16) ? " " : "\n  ", colors[i]);
+            std::fprintf(stderr, "\n");
+        }
         GLuint id = 0;
         g.GenTextures(1, &id);
         g.BindTexture(kTexture2D, id);
@@ -1375,7 +1402,7 @@ struct GSHwBackend::Impl
     // GOW_GS_HW_DUMP window: skipped batches are listed in order with the drawn ones
     void dumpSkipped(const GSDrawState &s, const GSPrimitiveBatch &b, const char *why)
     {
-        if (dumpPresents < 0 || presentCount < dumpPresents || presentCount >= dumpPresents + 3 || dumped >= 4000)
+        if (dumpPresents < 0 || presentCount < dumpPresents || presentCount >= dumpPresents + 3 || dumped >= dumpMax)
             return;
         flushPending();
         ++dumped;
@@ -1575,6 +1602,7 @@ struct GSHwBackend::Impl
 
     int dumpPresents = std::getenv("GOW_GS_HW_DUMP") ? std::atoi(std::getenv("GOW_GS_HW_DUMP")) : -1;
     int presentCount = 0, dumped = 0, dumpedAt = 0;
+    const int dumpMax = std::getenv("GOW_GS_HW_DUMPMAX") ? std::atoi(std::getenv("GOW_GS_HW_DUMPMAX")) : 4000;
     bool dumpAfterSkip = false;
     const bool dumpAll = std::getenv("GOW_GS_HW_DUMPALL") != nullptr;
 
@@ -1612,17 +1640,32 @@ struct GSHwBackend::Impl
         if (onlyLo >= 0 && (frameBatch < onlyLo || frameBatch > onlyHi) && s.context.frame.fbp == 0 && s.context.frame.fbw == 8 && !(s.prim.tme && s.context.tex0.tbp0 == 0))
             return;
         const GSContext &c = s.context;
+        // GOW_GS_HW_SKIPTBP=<hex>: debug, skip draws textured from that block (bisecting post passes)
+        static const long skipTbp = std::getenv("GOW_GS_HW_SKIPTBP") ? std::strtol(std::getenv("GOW_GS_HW_SKIPTBP"), nullptr, 16) : -1;
+        if (skipTbp >= 0 && s.prim.tme && static_cast<long>(c.tex0.tbp0) == skipTbp)
+            return;
         static const double dumpAtSec = std::getenv("GOW_GS_HW_DUMPAT") ? std::atof(std::getenv("GOW_GS_HW_DUMPAT")) : -1.0;
         static const auto t0 = std::chrono::steady_clock::now();
         const double nowSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         if (dumpAtSec >= 0.0 && nowSec >= dumpAtSec && dumpedAt == 0 && frameBatch == 1)
             dumpedAt = 1;
-        if (dumpedAt == 1 && dumped < 4000 && dumpPresents < 0)
+        if (dumpedAt == 1 && dumped < dumpMax && dumpPresents < 0)
             dumpPresents = 0, presentCount = 0;
-        if (dumpPresents >= 0 && presentCount >= dumpPresents && presentCount < dumpPresents + 3 && dumped < 4000 && (dumpAll || c.frame.fbp == 208 || c.frame.fbp == 320 || dumped < 40 || dumpAfterSkip))
+        if (dumpPresents >= 0 && presentCount >= dumpPresents && presentCount < dumpPresents + 3 && dumped < dumpMax && (dumpAll || c.frame.fbp == 208 || c.frame.fbp == 320 || dumped < 40 || dumpAfterSkip))
         {
             ++dumped;
             const HwVertex &v0 = verts[0];
+            float bx0 = 1e9f, by0 = 1e9f, bx1 = -1e9f, by1 = -1e9f, cmax = 0.0f, amax = 0.0f, zlo = 2.0f, zhi = -1.0f;
+            for (const HwVertex &v : verts)
+            {
+                bx0 = std::min(bx0, v.x), by0 = std::min(by0, v.y), bx1 = std::max(bx1, v.x), by1 = std::max(by1, v.y);
+                cmax = std::max({cmax, v.r, v.g, v.b}), amax = std::max(amax, v.a), zlo = std::min(zlo, v.z), zhi = std::max(zhi, v.z);
+            }
+            const float zscale = zMaxFor(c.zbuf.psm) < 4294967295.0f ? zMaxFor(c.zbuf.psm) : 16777215.0f;
+            std::fprintf(stderr, "[gs-hw-dump-bb] #%d %.0f-%.0f,%.0f-%.0f ta0=%x ta1=%x aem=%d fge=%d tfx=%u tcc=%u iip=%d cmax=%.0f amax=%.0f prim=%u z=%x-%x\n",
+                         dumped, bx0, bx1, by0, by1, s.texa.ta0, s.texa.ta1, s.texa.aem ? 1 : 0, s.prim.fge ? 1 : 0,
+                         c.tex0.tfx, c.tex0.tcc, s.prim.iip ? 1 : 0, cmax, amax, static_cast<unsigned>(s.prim.type),
+                         static_cast<unsigned>(zlo * zscale + 0.5f), static_cast<unsigned>(zhi * zscale + 0.5f));
             std::fprintf(stderr,
                          "[gs-hw-dump] #%d fb=%d verts=%zu fbp=%u fbw=%u fpsm=%u zbp=%x zpsm=%x zmsk=%d tme=%d tbp=%x tbw=%u tpsm=%u %ux%u cbp=%x test=%llx alpha=%llx abe=%d fbmsk=%x rawz=%.0f v0=(%.1f,%.1f z=%.3f col=%.0f,%.0f,%.0f,%.0f uv=%.1f,%.1f) scis=%u-%u,%u-%u\n",
                          dumped, frameBatch, verts.size(), c.frame.fbp, c.frame.fbw, c.frame.psm, c.zbuf.zbp, c.zbuf.psm, c.zbuf.zmask ? 1 : 0, s.prim.tme ? 1 : 0,
@@ -1822,6 +1865,7 @@ struct GSHwBackend::Impl
         g.Uniform1i(locAref, static_cast<GLint>(aref));
         static const bool forceNoTest = std::getenv("GOW_GS_HW_NOATEST") != nullptr;
         g.Uniform1i(locPass, (ate && !forceNoTest) ? 1 : 0);
+        g.Uniform1i(locFailTint, 0);
         static const int traceAt = std::getenv("GOW_GS_HW_DEPTHTRACE") ? std::atoi(std::getenv("GOW_GS_HW_DEPTHTRACE")) : -1;
         const bool tracing = traceAt >= 0 && presentCount >= traceAt && presentCount < traceAt + 1 && rt.depth && rt.fbp == 0;
         const auto depthStats = [&](const char *when)
@@ -1844,6 +1888,8 @@ struct GSHwBackend::Impl
         {
             // failing fragments: 1 FB_ONLY (colour+alpha, no Z), 2 ZB_ONLY (Z only), 3 RGB_ONLY (colour, no alpha, no Z)
             g.Uniform1i(locPass, 2);
+            static const bool failTint = std::getenv("GOW_GS_HW_FAILTINT") != nullptr;
+            g.Uniform1i(locFailTint, (failTint && afail == 3u && s.prim.tme && c.frame.fbp == 0u) ? 1 : 0);
             if (afail == 1u) { g.DepthMask(kFalse); }
             else if (afail == 2u) { g.ColorMask(kFalse, kFalse, kFalse, kFalse); }
             else { g.DepthMask(kFalse); g.ColorMask(mr, mg, mb, kFalse); }
