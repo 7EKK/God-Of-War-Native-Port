@@ -25,6 +25,8 @@ model: the SPU2 register-level model and the IOP's SPU DMA channels were removed
 - Core input stream (BlockTrans, "ADMA"): 1 KB blocks of 256 left + 256 right 16-bit samples read from the IOP ring at
   48 kHz, mixed at BVOL while MMIX's sound-input bits (0xC0) are set; mode 0x13 loops, mode 2 stops. 989snd clears its
   transfer handler before starting it and polls the position. (Not implemented in the former model.)
+  BVOL is a plain 16-bit signed level (0x7FFF = 1.0), unlike voice volumes; `sceSdBlockTransStatus` returns the IOP
+  address being read (bits 0-23) and the ring half (bit 24), as libsd does. Used by the movie sound (docs/fmv.md).
 - Transfers are copies; VoiceTrans returns `(size + 63) & ~63` and, for mode 0, schedules the driver's completion
   handler `handler(channel, arg)` (989snd 0x78bc: releases its transfer lock and wakes the waiting thread) 512 IOP cycles
   later through `IopNativeServices::callGuestLater`, as the DMA interrupt did. VoiceTransStatus returns 1.

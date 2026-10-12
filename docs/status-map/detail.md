@@ -6,8 +6,8 @@ Generated from `data.toml` by `tools/status_map.py`; do not edit by hand.
 
 | Library | Functions | State | Note |
 |---|---:|---|---|
-| libmpeg | 103 | 🔧 partial | Intro movie plays (native libmpeg2 decoder); movie audio still silent |
-| libipu | 5 | 🔧 partial | Served by the native decoder; movie audio open |
+| libmpeg | 103 | 🔧 partial | Intro movie plays with sound (native libmpeg2 decoder, native sound engine); other movies and exact A/V sync unchecked |
+| libipu | 5 | 🔧 partial | Served by the native decoder |
 | libgraph | 7 | ✅ ok | Display setup is a native override (GS display state, no GS register access) |
 | libdma | 8 | ✅ ok | sceDmaSend feeds VIF/GIF directly; no DMA controller model |
 | libcdvd | 10 | ✅ ok | CD reads served from the extracted game files (disc-usa/); the ISO only with GOW_ISO |
@@ -39,7 +39,7 @@ Generated from `data.toml` by `tools/status_map.py`; do not edit by hand.
 | GS / VU | VIF1 decoded directly; VU1 microprograms compiled ahead of time to C++ | 3 | ✅ ok |
 | GS / VU | Textures and CLUT: native texture store; palettes from render targets read on the GPU | 2 | ✅ ok |
 | GS / VU | GIF (PATH1-3): the game's GIF tags fed to the renderer | 2 | ✅ ok |
-| GS / VU | IPU: replaced by the native MPEG-2 decoder (libmpeg2); movie audio still silent | 2 | 🔧 partial |
+| GS / VU | IPU: replaced by the native MPEG-2 decoder (libmpeg2); intro plays with sound | 2 | 🔧 partial |
 | IOP | R3000A CPU: no interpreter on the hot path | 3 | ✅ ok |
 | IOP | SPU2: native sound engine driven by LIBSD's exports | 3 | ✅ ok |
 | IOP | The game's 8 IRX modules compiled ahead of time to C++ | 2 | ✅ ok |

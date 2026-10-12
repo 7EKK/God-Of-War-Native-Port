@@ -178,7 +178,7 @@
 <rect class="ok gap" x="79.8" y="252.2" width="12.8" height="12.7" stroke-width="1.0"/>
 <rect class="ok gap" x="92.5" y="252.2" width="12.8" height="12.7" stroke-width="1.0"/>
 </g>
-<g><title>libmpeg: 103 functions, partial - Intro movie plays (native libmpeg2 decoder); movie audio still silent</title>
+<g><title>libmpeg: 103 functions, partial - Intro movie plays with sound (native libmpeg2 decoder, native sound engine); other movies and exact A/V sync unchecked</title>
 <rect class="partial gap" x="16.0" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
 <rect fill="url(#hatch)" x="16.0" y="265.0" width="12.8" height="13.1"/>
 <rect class="partial gap" x="28.8" y="265.0" width="12.8" height="13.1" stroke-width="1.0"/>
@@ -801,7 +801,7 @@
 <rect class="ok gap" x="428.9" y="310.7" width="11.1" height="11.9" stroke-width="1.0"/>
 <rect class="ok gap" x="406.7" y="322.6" width="11.1" height="11.9" stroke-width="1.0"/>
 </g>
-<g><title>libipu: 5 functions, partial - Served by the native decoder; movie audio open</title>
+<g><title>libipu: 5 functions, partial - Served by the native decoder</title>
 <rect class="partial gap" x="406.7" y="334.4" width="11.1" height="12.7" stroke-width="1.0"/>
 <rect fill="url(#hatch)" x="406.7" y="334.4" width="11.1" height="12.7"/>
 <rect class="partial gap" x="417.8" y="334.4" width="11.1" height="12.7" stroke-width="1.0"/>
@@ -917,7 +917,7 @@
 <rect class="ok gap" x="824.8" y="241.0" width="57.2" height="84.7" stroke-width="1.5"/>
 <text class="on-ok" x="853.4" y="287.3" font-size="12" text-anchor="middle">GIF</text>
 </g>
-<g><title>IPU: replaced by the native MPEG-2 decoder (libmpeg2); movie audio still silent (partial)</title>
+<g><title>IPU: replaced by the native MPEG-2 decoder (libmpeg2); intro plays with sound (partial)</title>
 <rect class="partial gap" x="767.7" y="325.7" width="114.3" height="42.3" stroke-width="1.5"/>
 <rect fill="url(#hatch)" x="767.7" y="325.7" width="114.3" height="42.3"/>
 <text class="on-partial" x="824.8" y="350.8" font-size="12" text-anchor="middle">IPU</text>

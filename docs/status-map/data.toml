@@ -16,13 +16,13 @@
 name = "libmpeg"
 functions = 103
 state = "partial"
-note = "Intro movie plays (native libmpeg2 decoder); movie audio still silent"
+note = "Intro movie plays with sound (native libmpeg2 decoder, native sound engine); other movies and exact A/V sync unchecked"
 
 [[library]]
 name = "libipu"
 functions = 5
 state = "partial"
-note = "Served by the native decoder; movie audio open"
+note = "Served by the native decoder"
 
 [[library]]
 name = "libgraph"
@@ -174,7 +174,7 @@ group = "GS / VU"
   weight = 2
   [[hardware.item]]
   short = "IPU"
-  name = "IPU: replaced by the native MPEG-2 decoder (libmpeg2); movie audio still silent"
+  name = "IPU: replaced by the native MPEG-2 decoder (libmpeg2); intro plays with sound"
   state = "partial"
   weight = 2
 

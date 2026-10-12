@@ -1,6 +1,6 @@
 # FMV (movies)
 
-Status: **the intro movie plays natively and ends; the game then continues to gameplay. Movie audio is still silent.**
+Status: **the intro movie plays natively with its sound and ends; the game then continues to gameplay.**
 Play and zone runs still set `GOW_SKIP_FMV=1` (it replaces the movie API: 0x188CA0 load, 0x188E80/ED8/EF0/F20, so the
 game continues at once); without it the movies play.
 
@@ -36,12 +36,29 @@ game continues at once); without it the movies play.
 - The movie's VBlank handler 0x26CF20 calls 0x26E798 (PMODE/SMODE2/DISPLAY1/2/DISPFB1/2 stores) and kicks the upload
   and draw packets.
 
+## Movie audio (how it reaches the speakers)
+- The PSS audio is private stream 1, sub-stream header `FF A0 00 00` (0xAn = PCM channel n), then the stream header
+  `SShd` (type 1 = PCM16 little endian, 48000 Hz, 2 channels, interleave 0x200) + `SSbd`, then PCM in blocks of
+  512 bytes left / 512 bytes right. Packets are 4096 bytes on disc; the PCM runs on across packets of odd lengths.
+- The stub hands each audio packet (type PCM = 2, ADPCM = 3, libmpeg's constants) to the game's callback 0x18A8F8
+  from its own copy of the demuxed bytes, through a guest buffer (the game reuses its 16 KB read buffer). The callback
+  keeps the first 0x28 bytes (+0x10C) and appends the rest to the 100 KB audio ring (+0xFC base, +0x100 size,
+  +0x104 read, +0x108 fill); when the ring is full it returns 0 and sets +0x134. libmpeg stops demuxing there; the
+  stub keeps refused packets, in order, and hands them over first on the next demux call.
+- The movie thread (0x189020) sets up a 989snd PCM stream (0x1882E8: SNDRPC 0x3B, IOP ring 0x4000 bytes at 0x77640;
+  0x188408: 0x3E start) and on every pass drains the EE ring into the IOP ring (0x189A88 -> 0x188380 -> 0x188688:
+  989snd command 0x40 = `sceSdBlockTransStatus`, minus the IOP ring address = where the sound unit reads; then SIF
+  DMA in 1 KB units). 989snd plays the IOP ring with `sceSdBlockTrans(core 1, mode 0x13 loop)` = the core input
+  stream of the native SoundEngine, mixed at BVOL 0x7FFE with MMIX 0x0FCF.
+- Fixed for this (2026-10-12): `sceMpegCreate` resets the sceMpeg's callbacks (the game registers its stream callbacks
+  before Create for the first demux and again after it: both stayed active and every audio packet went into the ring
+  twice); `sceSdBlockTransStatus` returns the IOP address read (+ ring half in bit 24) like libsd, not an offset
+  (the game's free-space count went negative and nothing was sent); BVOL is a plain 16-bit level (it was converted
+  like a voice volume: 0x7FFE became -2, the stream was mixed at about -80 dB).
+- Check: port/fmvc4v (`GOW_AUDIO_PCM`): the movie section (35-80 s) has sound with the smoothness of real audio
+  (first-difference / RMS 0.06-0.28, the menu music measures 0.1-0.2; it was 1.3-1.4 = noise before).
+
 ## Open
-- **Movie audio is silent** (audio check port/fmvc3audio: menu music, then silence for the whole movie, then the
-  gameplay sound). The audio callback 0x18A8F8 is called (it skips a 4-byte substream header, keeps the first 0x28
-  bytes as the stream header at +0x10C and copies the rest into the audio ring +0xFC, size +0x100, write +0x104/+0x108;
-  ring full sets +0x134 = 1). What drains that ring to the IOP / sound engine is not identified yet (start command:
-  SMPD 0x1C from 0x188E80). Note the stub's stream-type constants (PCM 1, ADPCM 2) differ from libmpeg's
-  (M2V 0, IPU 1, PCM 2, ADPCM 3, DATA 4); the callback matches only because the stub delivers audio for both.
+- A/V sync is not measured precisely (the PCM is played as the game feeds it; the picture follows PTS).
 - The movie code still stores to IPU / DMA channel 3/4 registers (they reach no device; no IPU model exists).
 - Other movies than the intro are not checked yet.

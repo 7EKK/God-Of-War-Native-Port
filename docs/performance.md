@@ -254,3 +254,15 @@ Gains per lever above are estimates from the Gemini review (gemini-work/results/
 - Fix needed: run VU1 and the GS frontend as a pipeline (the GIF arbiter's path-packet callback is the boundary:
   VU1/XGKICK output queued to a GS-frontend thread), so the job costs max(VU1, GS) instead of the sum. Not done yet:
   it changes which thread owns `GS` state (EE-side syncs `syncGsWorkerIfOtherThread`, FINISH, transfers).
+
+## VU1 / GS frontend pipeline (2026-10-12, ext branch agent/pipeline)
+- With the GS worker (`PS2X_GS_WORKER=1`) the worker ran VIF1 + VU1 and, after every XGKICK, the GS frontend
+  (`GS::processGIFPacket`) on the same thread, so a frame cost VU1 + GS frontend (ship start: ~6.7 + ~8.2 ms).
+- Now the GIF arbiter's packet callback hands each packet (copied, in arbiter order) to a GS frontend stage thread
+  (`ps2xRuntime/src/lib/gs/gs_stage.cpp`); VU1 of packet N+1 overlaps the GS frontend of packet N. The queue is bounded
+  (4 MB) so the worker cannot run a frame ahead.
+- Synchronisation is unchanged for everyone else: `PS2Memory::waitGsWorkerIdle` waits for the worker *and* the stage,
+  so every EE access that synced with the worker (GS register stores, readbacks, display state, FINISH handshake)
+  still sees all queued GS work done. The stage never waits for itself (`onStageThread`), and it wakes the EE after a
+  batch when the GS raised an interrupt (FINISH/SIGNAL), as the worker did after a job.
+- `PS2X_GS_PIPELINE=0` keeps the GS frontend on the worker thread (A/B and fallback). Portable C++ (std::thread).

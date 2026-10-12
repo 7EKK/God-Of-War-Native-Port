@@ -783,3 +783,6 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   slots 0-4 60 fps, speed 1.00, savetest ok. Slot 0's last capture differs (43 > 40) only because the fight plays
   out differently with the game's own rand (both frames render correctly). docs: runtime-changes/elf: rand no
   longer stubbed.
+- 13:5x VERIFIED movie audio (port/merged15/20261012_131851, ext 0ad6d2a): zones 0-4 60 fps, speed 1.00 (slot 3
+  1.01 mean), savetest ok; Desert audio A/B before/after (BVOL change touches all sound): 195 s each, mean RMS
+  4971 vs 4980, correlation 1.0, no silent windows. The intro movie plays to the end with sound.
