@@ -40,7 +40,7 @@ namespace
     constexpr GLenum kConstantColor = 0x8001, kOneMinusConstantColor = 0x8002;
     constexpr GLenum kFuncAdd = 0x8006, kFuncReverseSubtract = 0x800B;
     constexpr GLbitfield kColorBufferBit = 0x4000, kDepthBufferBit = 0x100;
-    constexpr GLenum kNever = 0x200, kGreater = 0x204, kGEqual = 0x206, kAlways = 0x207;
+    constexpr GLenum kNever = 0x200, kLess = 0x201, kLEqual = 0x203, kGreater = 0x204, kGEqual = 0x206, kAlways = 0x207;
     constexpr GLenum kTexture0 = 0x84C0;
     constexpr GLint kRepeat = 0x2901;
     constexpr GLenum kUnpackAlignment = 0x0CF5, kPackAlignment = 0x0D05;
@@ -1368,9 +1368,11 @@ struct GSHwBackend::Impl
         const GSPrimType type = s.prim.type;
         const bool tri = type == GS_PRIM_TRIANGLE || type == GS_PRIM_TRISTRIP || type == GS_PRIM_TRIFAN;
         const bool sprite = type == GS_PRIM_SPRITE;
-        if (!tri && !sprite)
+        const bool line = type == GS_PRIM_LINE || type == GS_PRIM_LINESTRIP;
+        if (!tri && !sprite && !line)
         {
             ++stats.skippedPrim;
+            dumpSkipped(s, b, "prim");
             return;
         }
         const uint8_t fpsm = s.context.frame.psm;
@@ -1413,7 +1415,35 @@ struct GSHwBackend::Impl
                 t = 0.0f;
             }
         };
-        if (tri)
+        if (line)
+        {
+            // a GS line covers about one pixel across its length: drawn as a quad one PS2 pixel wide around the segment
+            // (at least one pixel long), colour/Z/texture coordinates taken from the nearer end point. The game uses
+            // them for the sand streaks and for the per-frame black line that clears row 0 of the frame buffer.
+            const GSVertex &a = b.vertices[0], &c = b.vertices[1];
+            float dx = c.x - a.x, dy = c.y - a.y;
+            const float len = std::sqrt(dx * dx + dy * dy);
+            if (len < 1e-4f)
+                dx = 1.0f, dy = 0.0f;
+            else
+                dx /= len, dy /= len;
+            const float ext = len < 1.0f ? (1.0f - len) * 0.5f : 0.0f; // short lines still cover one pixel
+            const float nx = -dy * 0.5f, ny = dx * 0.5f;
+            GSVertex e[2] = {a, c};
+            e[0].x -= dx * ext; e[0].y -= dy * ext;
+            e[1].x += dx * ext; e[1].y += dy * ext;
+            const int order[6][2] = {{0, 1}, {1, 1}, {0, -1}, {1, 1}, {1, -1}, {0, -1}};
+            for (const auto &o : order)
+            {
+                GSVertex v = e[o[0]];
+                v.x += nx * static_cast<float>(o[1]);
+                v.y += ny * static_cast<float>(o[1]);
+                float u, t;
+                texelUV(v, u, t);
+                addVertex(s, v, u, t, zmax);
+            }
+        }
+        else if (tri)
         {
             for (int i = 0; i < 3; ++i)
             {
@@ -1523,6 +1553,29 @@ struct GSHwBackend::Impl
     int onlyHi = std::getenv("GOW_GS_HW_ONLY") && std::strchr(std::getenv("GOW_GS_HW_ONLY"), '-') ? std::atoi(std::strchr(std::getenv("GOW_GS_HW_ONLY"), '-') + 1) : 1 << 30;
     int frameBatch = 0;
 
+    // Z buffers whose memory the game has inverted (Z' = 0xFFFFFF - Z) with a full-screen colour draw into the Z memory
+    // (CT24 at FBP == ZBP, Cs - Cd with Cs = 255): the shadow passes invert the Z buffer, draw the shadow mask with ZTST GEQUAL
+    // (= LEQUAL against the real depth) and invert it back. The GL depth buffer keeps the real depth; while the flag is set,
+    // depth tests use 1 - z and the reversed comparison, which is the same test on the inverted memory.
+    std::vector<uint32_t> invertedZ;
+    bool zInverted(uint32_t zbp) const { return std::find(invertedZ.begin(), invertedZ.end(), zbp) != invertedZ.end(); }
+    static bool isZInversion(const GSDrawState &s, const std::vector<HwVertex> &verts)
+    {
+        const GSContext &c = s.context;
+        const uint64_t al = c.alpha;
+        if (c.frame.fbp != c.zbuf.zbp || c.frame.psm != GS_PSM_CT24 || s.prim.tme || !s.prim.abe || c.frame.fbmsk != 0u ||
+            (al & 0xFFu) != 0xA4u || ((al >> 32) & 0xFFu) != 0x80u || verts.empty())
+            return false;
+        float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+        for (const HwVertex &v : verts)
+        {
+            if (v.r < 254.5f || v.g < 254.5f || v.b < 254.5f)
+                return false;
+            x0 = std::min(x0, v.x), y0 = std::min(y0, v.y), x1 = std::max(x1, v.x), y1 = std::max(y1, v.y);
+        }
+        return x0 <= c.scissor.x0 + 1.0f && y0 <= c.scissor.y0 + 1.0f && x1 >= c.scissor.x1 && y1 >= c.scissor.y1;
+    }
+
     void draw(const GSDrawState &s, const std::vector<HwVertex> &verts)
     {
         const Api &g = gl();
@@ -1542,8 +1595,8 @@ struct GSHwBackend::Impl
             ++dumped;
             const HwVertex &v0 = verts[0];
             std::fprintf(stderr,
-                         "[gs-hw-dump] #%d verts=%zu fbp=%u fbw=%u fpsm=%u zbp=%x zpsm=%x zmsk=%d tme=%d tbp=%x tbw=%u tpsm=%u %ux%u cbp=%x test=%llx alpha=%llx abe=%d fbmsk=%x rawz=%.0f v0=(%.1f,%.1f z=%.3f col=%.0f,%.0f,%.0f,%.0f uv=%.1f,%.1f) scis=%u-%u,%u-%u\n",
-                         dumped, verts.size(), c.frame.fbp, c.frame.fbw, c.frame.psm, c.zbuf.zbp, c.zbuf.psm, c.zbuf.zmask ? 1 : 0, s.prim.tme ? 1 : 0,
+                         "[gs-hw-dump] #%d fb=%d verts=%zu fbp=%u fbw=%u fpsm=%u zbp=%x zpsm=%x zmsk=%d tme=%d tbp=%x tbw=%u tpsm=%u %ux%u cbp=%x test=%llx alpha=%llx abe=%d fbmsk=%x rawz=%.0f v0=(%.1f,%.1f z=%.3f col=%.0f,%.0f,%.0f,%.0f uv=%.1f,%.1f) scis=%u-%u,%u-%u\n",
+                         dumped, frameBatch, verts.size(), c.frame.fbp, c.frame.fbw, c.frame.psm, c.zbuf.zbp, c.zbuf.psm, c.zbuf.zmask ? 1 : 0, s.prim.tme ? 1 : 0,
                          c.tex0.tbp0, c.tex0.tbw, c.tex0.psm, s.textureWidth, s.textureHeight, c.tex0.cbp, (unsigned long long)c.test,
                          (unsigned long long)c.alpha, s.prim.abe ? 1 : 0, c.frame.fbmsk, firstRawZ, v0.x, v0.y, v0.z, v0.r, v0.g, v0.b, v0.a, v0.u, v0.v,
                          c.scissor.x0, c.scissor.x1, c.scissor.y0, c.scissor.y1);
@@ -1582,7 +1635,26 @@ struct GSHwBackend::Impl
         const bool zAlias = c.zbuf.zbp == c.frame.fbp && ((c.test >> 16) & 1u) != 0u &&
                             (c.frame.psm == GS_PSM_CT32 || c.frame.psm == GS_PSM_CT24);
         if (noDepth || zAlias) g.Disable(kDepthTest); else g.Enable(kDepthTest);
-        g.DepthFunc(ztst == 0 ? kNever : ztst == 1 ? kAlways : ztst == 2 ? kGEqual : kGreater);
+        const bool zInv = !zAlias && ((c.test >> 16) & 1u) != 0u && zInverted(c.zbuf.zbp);
+        if (zInv)
+            g.DepthFunc(ztst == 0 ? kNever : ztst == 1 ? kAlways : ztst == 2 ? kLEqual : kLess);
+        else
+            g.DepthFunc(ztst == 0 ? kNever : ztst == 1 ? kAlways : ztst == 2 ? kGEqual : kGreater);
+        std::vector<HwVertex> flippedZ;
+        if (zInv)
+        {
+            flippedZ = verts;
+            for (HwVertex &v : flippedZ)
+                v.z = 1.0f - v.z;
+        }
+        const std::vector<HwVertex> &dverts = zInv ? flippedZ : verts;
+        if (isZInversion(s, verts))
+        {
+            if (zInverted(c.zbuf.zbp))
+                invertedZ.erase(std::find(invertedZ.begin(), invertedZ.end(), c.zbuf.zbp));
+            else
+                invertedZ.push_back(c.zbuf.zbp);
+        }
         const bool zwrite = !c.zbuf.zmask && !zAlias;
         const bool zAliasWrite = zAlias && !c.zbuf.zmask;
 
@@ -1710,7 +1782,7 @@ struct GSHwBackend::Impl
         }
         g.BindVertexArray(vao);
         g.BindBuffer(kArrayBuffer, vbo);
-        g.BufferData(kArrayBuffer, static_cast<GLsizeiptr>(verts.size() * sizeof(HwVertex)), verts.data(), kStreamDraw);
+        g.BufferData(kArrayBuffer, static_cast<GLsizeiptr>(dverts.size() * sizeof(HwVertex)), dverts.data(), kStreamDraw);
 
         const bool ate = (c.test & 1u) != 0u;
         const uint32_t atst = static_cast<uint32_t>((c.test >> 1) & 7u), aref = static_cast<uint32_t>((c.test >> 4) & 0xFFu);
@@ -1888,6 +1960,7 @@ void GSHwBackend::Reset()
     Impl &d = *m_impl;
     d.flushPending();
     d.store.Reset();
+    d.invertedZ.clear();
     for (auto &kv : d.textures)
         kv.second.valid = false;
 }
