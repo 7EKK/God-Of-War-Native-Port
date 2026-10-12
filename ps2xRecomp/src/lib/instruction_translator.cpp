@@ -55,6 +55,16 @@ namespace ps2recomp
                    (offset == 0x30u && base < 0x10001000u);
         }
 
+        // GOW-Port: EE DMA channel registers and D_STAT/D_PCR (0x10008000-0x1000EFFF): a constant-address 32-bit access
+        // becomes a direct call of the runtime's native DMA request service (PS2Memory::eeDmaLoad/eeDmaStore).
+        bool isEeDmaRegister(uint32_t address, uint32_t &physical)
+        {
+            if (address >= 0xC0000000u || (address >= 0x20000000u && address < 0x80000000u))
+                return false; // KSEG2/3, scratchpad and the uncached RAM mirror are never DMA registers
+            physical = address & 0x1FFFFFFFu;
+            return physical >= 0x10008000u && physical < 0x1000F000u;
+        }
+
         std::string genFastWrite(int width, uint32_t address, const std::string &val)
         {
             const std::string addr = addressLiteral(address);
@@ -103,6 +113,11 @@ namespace ps2recomp
             {
                 return fmt::format("runtime->memory().eeTimerLoad({})", addressLiteral(timerRegister));
             }
+            uint32_t dmaRegister = 0u;
+            if (width == 32 && isEeDmaRegister(resolvedAddress, dmaRegister))
+            {
+                return fmt::format("runtime->memory().eeDmaLoad({})", addressLiteral(dmaRegister));
+            }
             if (inst.isMmio || Ps2IsSpecialAddress(resolvedAddress))
             {
                 return fmt::format("runtime->Load{}(rdram, ctx, {})", width, resolvedAddressExpr);
@@ -117,6 +132,13 @@ namespace ps2recomp
             // (e.g. a branch target merges paths): the native clock when it is one, the generic path otherwise.
             return fmt::format("[&]() -> uint32_t {{ const uint32_t _a = {}; return PS2Memory::isEeTimerRegister(_a) ? "
                                "runtime->memory().eeTimerLoad(_a) : runtime->Load32(rdram, ctx, _a); }}()",
+                               addr);
+        }
+        uint32_t dmaRegister = 0u;
+        if (inst.isMmio && width == 32 && isEeDmaRegister(inst.mmioAddress, dmaRegister))
+        {
+            return fmt::format("[&]() -> uint32_t {{ const uint32_t _a = {}; return PS2Memory::isEeDmaRegister(_a) ? "
+                               "runtime->memory().eeDmaLoad(_a) : runtime->Load32(rdram, ctx, _a); }}()",
                                addr);
         }
         if (inst.isMmio)
@@ -141,6 +163,11 @@ namespace ps2recomp
             {
                 return fmt::format("(void)runtime->memory().eeTimerStore({}, {})", addressLiteral(timerRegister), value);
             }
+            uint32_t dmaRegister = 0u;
+            if (width == 32 && isEeDmaRegister(resolvedAddress, dmaRegister))
+            {
+                return fmt::format("(void)runtime->memory().eeDmaStore({}, {})", addressLiteral(dmaRegister), value);
+            }
             if (inst.isMmio || Ps2IsSpecialAddress(resolvedAddress))
             {
                 return fmt::format("runtime->Store{}(rdram, ctx, {}, {})", width, resolvedAddressExpr, value);
@@ -153,6 +180,14 @@ namespace ps2recomp
         {
             return fmt::format("do {{ const uint32_t _a = {}; const uint32_t _v = {}; "
                                "if (!PS2Memory::isEeTimerRegister(_a) || !runtime->memory().eeTimerStore(_a, _v)) "
+                               "runtime->Store32(rdram, ctx, _a, _v); }} while (0)",
+                               addr, value);
+        }
+        uint32_t dmaRegister = 0u;
+        if (inst.isMmio && width == 32 && isEeDmaRegister(inst.mmioAddress, dmaRegister))
+        {
+            return fmt::format("do {{ const uint32_t _a = {}; const uint32_t _v = {}; "
+                               "if (!PS2Memory::isEeDmaRegister(_a) || !runtime->memory().eeDmaStore(_a, _v)) "
                                "runtime->Store32(rdram, ctx, _a, _v); }} while (0)",
                                addr, value);
         }

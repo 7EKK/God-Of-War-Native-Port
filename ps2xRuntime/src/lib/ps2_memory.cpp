@@ -1280,6 +1280,10 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
     {
         return eeTimerStore(address, value);
     }
+    if (isEeDmaRegister(address))
+    {
+        return eeDmaStore(address, value);
+    }
 
     if (isGsPrivReg(address))
     {
@@ -1320,11 +1324,6 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
         }
         return true;
     }
-
-    // GOW-Port: D_STAT. The game clears its DMA-end bits after its scratchpad copies; no DMA status is kept, transfers
-    // are complete when the store that starts them returns (docs/native-port.md, step 2).
-    if (address == 0x1000E010u)
-        return true;
 
     m_ioRegisters[address] = value;
 
@@ -1402,10 +1401,47 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
         return true;
     }
 
-    // GOW-Port: DMA channel registers written by game code (the boot VIF0 chain 0x1838D0, the scratchpad copies,
-    // VIF1's tag-transfer bit set by 0x13F700) are latched; a CHCR store with STR runs that transfer natively now and
-    // its DMA-end handlers after the store. VIF1 / GIF packets are normally sent through sceDmaSend (Stubs/DMA.cpp).
-    if (address >= 0x10008000 && address < 0x1000F000)
+    if (address >= 0x10000000 && address < 0x10010000)
+    {
+        if (address >= 0x10000200 && address < 0x10000300)
+        {
+            return true;
+        }
+        if (address >= 0x10000000 && address < 0x10000100)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// GOW-Port: native DMA request service (see ps2_memory.h).
+bool PS2Memory::isEeDmaRegister(uint32_t address) noexcept
+{
+    if (address >= 0xC0000000u || (address >= 0x20000000u && address < 0x80000000u))
+        return false; // KSEG2/3, scratchpad and the uncached RAM mirror are never DMA registers
+    const uint32_t phys = address & 0x1FFFFFFFu;
+    return phys >= 0x10008000u && phys < 0x1000F000u;
+}
+
+uint32_t PS2Memory::eeDmaLoad(uint32_t address) noexcept
+{
+    const auto it = m_ioRegisters.find(address & 0x1FFFFFFFu);
+    return it != m_ioRegisters.end() ? it->second : 0u;
+}
+
+bool PS2Memory::eeDmaStore(uint32_t address, uint32_t value)
+{
+    address &= 0x1FFFFFFFu;
+    // D_STAT: the game clears its DMA-end bits after its scratchpad copies; no DMA status is kept, transfers are
+    // complete when the store that starts them returns (docs/native-port.md, step 2).
+    if (address == 0x1000E010u)
+        return true;
+    m_ioRegisters[address] = value;
+    // DMA channel registers written by game code (the boot VIF0 chain 0x1838D0, the scratchpad copies, VIF1's
+    // tag-transfer bit set by 0x13F700) are latched; a CHCR store with STR runs that transfer natively now and its
+    // DMA-end handlers after the store. VIF1 / GIF packets are normally sent through sceDmaSend (Stubs/DMA.cpp).
     {
         if ((address & 0xFFu) != 0u || (value & 0x100u) == 0u)
             return true;
@@ -1457,20 +1493,6 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
         queueCompletedDmacCause(cause);
         return true;
     }
-
-    if (address >= 0x10000000 && address < 0x10010000)
-    {
-        if (address >= 0x10000200 && address < 0x10000300)
-        {
-            return true;
-        }
-        if (address >= 0x10000000 && address < 0x10000100)
-        {
-            return true;
-        }
-    }
-
-    return false;
 }
 
 bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
@@ -2136,6 +2158,10 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
     {
         return eeTimerLoad(address);
+    }
+    if (isEeDmaRegister(address))
+    {
+        return eeDmaLoad(address);
     }
 
     if (isGsPrivReg(address))
