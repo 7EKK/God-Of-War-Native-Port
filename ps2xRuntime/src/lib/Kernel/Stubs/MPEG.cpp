@@ -1696,6 +1696,32 @@ namespace ps2_stubs
             SET_GPR_U32(&callbackCtx, 5, cbDataAddr);
             SET_GPR_U32(&callbackCtx, 6, callback.data);
             SET_GPR_U32(&callbackCtx, 7, 0u);
+
+            // GOW-Port: libmpeg calls the stream callbacks inside sceMpegDemuxPss, on the demuxing thread, before it
+            // returns. God of War relies on that: its .m2 player demuxes the first chunk and then reads the picture
+            // size from the sequence header its callback (0x18A788) just copied into the video ring. Run the callback
+            // here, nested, on the caller's stack (below its frame), until it returns to the sentinel ra 0.
+            {
+                R5900Context nested = callbackCtx;
+                const uint32_t sp = (GPR_U32(callerCtx, 29) - 0x400u) & ~0xFu;
+                SET_GPR_U32(&nested, 29, sp);
+                SET_GPR_U32(&nested, 31, 0u);
+                nested.pc = callback.func;
+                for (uint32_t steps = 0u; nested.pc != 0u && steps < 4096u; ++steps)
+                {
+                    PS2Runtime::RecompiledFunction fn = runtime->lookupFunction(nested.pc);
+                    if (!fn)
+                        break;
+                    fn(rdram, &nested, runtime);
+                }
+                if (nested.pc == 0u)
+                {
+                    runtime->guestFree(cbDataAddr);
+                    return;
+                }
+                std::fprintf(stderr, "[mpeg] stream callback %08x did not return (pc=%08x); queued instead\n",
+                             callback.func, nested.pc);
+            }
             SET_GPR_U32(&callbackCtx, 29, 0u);
             SET_GPR_U32(&callbackCtx, 31, 0u);
             callbackCtx.pc = callback.func;
@@ -2155,6 +2181,7 @@ namespace ps2_stubs
             0x48, 0xFC, 0x100, 0x104, 0x70, 0x90, 0xAC};
         for (unsigned off : s_zeroOffsets)
             mpegGuestWrite32(rdram, uVar3 + off, 0u);
+        mpegGuestWrite32(rdram, uVar3 + 0x00, 0u); // isEnd (sceMpegIsEnd reads it)
         mpegGuestWrite64(rdram, uVar3 + 0x78, 0);
         mpegGuestWrite64(rdram, uVar3 + 0x88, 0);
 
@@ -2491,6 +2518,7 @@ namespace ps2_stubs
         uint32_t height = kStubMovieHeight;
         uint32_t frameCount = 0u;
         bool haveFrame = false;
+        bool streamFinished = false;
         MpegDecodedFrame frame;
         {
             std::unique_lock<std::mutex> lock(g_mpeg_stub_mutex);
@@ -2598,8 +2626,17 @@ namespace ps2_stubs
                 width = playback.width;
                 height = playback.height;
                 frameCount = playback.picturesServed;
+                streamFinished = playback.streamEnded && playback.decodedFrames.empty();
             }
         }
+
+        // GOW-Port: libmpeg's sceMpegIsEnd (God of War runs the original, 0x26FF70) returns the first word of the
+        // decoder's work area (mp->sys); the decoder sets it when the stream is over. Without it the .m2 player never
+        // leaves its playing state after the last picture.
+        if (streamFinished)
+            if (uint8_t *base = getMemPtr(rdram, mpegAddr))
+                if (uint8_t *sys = getMemPtr(rdram, *reinterpret_cast<uint32_t *>(base + 0x40)))
+                    *reinterpret_cast<uint32_t *>(sys) = 1u;
 
         mpegGuestWrite32(rdram, mpegAddr + 0x00u, width);
         mpegGuestWrite32(rdram, mpegAddr + 0x04u, height);

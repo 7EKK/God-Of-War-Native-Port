@@ -1633,7 +1633,8 @@ struct GSHwBackend::Impl
         g.Disable(kCullFace);
 
         // depth
-        const uint32_t ztst = static_cast<uint32_t>((c.test >> 17) & 3u);
+        // ZTE = 0 means no depth test on the GS (the movie player draws its picture sprite with TEST = 0): ALWAYS
+        const uint32_t ztst = ((c.test >> 16) & 1u) ? static_cast<uint32_t>((c.test >> 17) & 3u) : 1u;
         static const bool noDepth = std::getenv("GOW_GS_HW_NODEPTH") != nullptr;
         // Z buffer in this target's own colour memory: tested and written in the shader against the colour words
         const bool zAlias = c.zbuf.zbp == c.frame.fbp && ((c.test >> 16) & 1u) != 0u &&
