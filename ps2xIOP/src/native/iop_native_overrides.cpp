@@ -93,6 +93,22 @@ namespace ps2x::iop::detail
             ret(c, cardFor(c, arg(c, 0)) ? 1u : 0u);
         }
 
+        // ---- SIO2MAN.IRX: SIO2_CTRL accessors -------------------------------------------------------------------------
+        // No SIO2 chip exists (pad and cards are native services), so the control register is a latched value.
+        uint32_t g_sio2Ctrl = 0u;
+
+        // 0x0000: void sio2_ctrl_set(u32) (module start writes 0x3bc)
+        void sio2CtrlSet(IopNativeCall &c)
+        {
+            g_sio2Ctrl = arg(c, 0);
+        }
+
+        // 0x0014: u32 sio2_ctrl_get()
+        void sio2CtrlGet(IopNativeCall &c)
+        {
+            ret(c, g_sio2Ctrl);
+        }
+
         // ---- SIO2D.IRX: device detection (docs/memory-card.md) -----------------------------------------------------
         // The game reads the controller on the EE natively (scePad2* in gow_overrides.cpp) and opens no pad socket on
         // the IOP, so no pad is reported: DS2U_D never connects and never polls. Memory cards are reported from the
@@ -125,6 +141,12 @@ namespace ps2x::iop::detail
         LibsdState g_libsd;
 
         constexpr uint64_t kTransferCompletionCycles = 512u; // the completion handler runs shortly after the call
+
+        // 0x1560: SPU2 bus setup, called by the module start: SSBUS delay/address registers (0x1F801014/1404/140C/
+        // 1414) and the SPU2 DMA enable bits in DPCR/DPCR2. No bus, DMA controller or SPU2 exists behind them.
+        void sdBusSetup(IopNativeCall &)
+        {
+        }
 
         // #4 sceSdInit(flag): the state LIBSD's own init leaves the sound unit in (LIBSD.IRX 0x456c)
         void sdInit(IopNativeCall &c)
@@ -280,8 +302,11 @@ namespace ps2x::iop::detail
             {"mc2_d_irx", 0x0650u, "mc2_d init_card", &mcPresent},
             {"mc2_d_irx", 0x164cu, "mc2_d probe", &mcPresent},
             {"mc2_d_irx", 0x08d8u, "mc2_d probe_f3", &mcPresent},
+            {"sio2man_irx", 0x0000u, "sio2man ctrl_set", &sio2CtrlSet},
+            {"sio2man_irx", 0x0014u, "sio2man ctrl_get", &sio2CtrlGet},
             {"sio2d_irx", 0x0978u, "sio2d probe_pad", &sio2dProbePad},
             {"sio2d_irx", 0x0a1cu, "sio2d probe_card", &sio2dProbeCard},
+            {"libsd_irx", 0x1560u, "libsd bus setup", &sdBusSetup},
             {"libsd_irx", 0x456cu, "sceSdInit", &sdInit},
             {"libsd_irx", 0x3670u, "sceSdSetParam", &sdSetParam},
             {"libsd_irx", 0x36ccu, "sceSdGetParam", &sdGetParam},
