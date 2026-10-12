@@ -22,6 +22,7 @@ extern "C"
 #endif
 
 #include <deque>
+#include <map>
 #include <memory>
 
 #include "Syscalls/Helpers/State.h"
@@ -1691,6 +1692,13 @@ namespace ps2_stubs
                 return;
             }
 
+            static const bool s_cbDiag = std::getenv("GOW_MPEG_DIAG") != nullptr;
+            if (s_cbDiag)
+            {
+                static std::map<uint32_t, uint32_t> counts;
+                if ((counts[callback.func]++ % 500u) == 0u)
+                    std::fprintf(stderr, "[MPEG:diag] stream callback %08x calls=%u\n", callback.func, counts[callback.func]);
+            }
             R5900Context callbackCtx = *callerCtx;
             SET_GPR_U32(&callbackCtx, 4, event.mpegAddr);
             SET_GPR_U32(&callbackCtx, 5, cbDataAddr);
@@ -2076,6 +2084,8 @@ namespace ps2_stubs
         const uint32_t callbackFunc = getRegU32(ctx, 7);
         const uint32_t callbackData = readAbiArg4(rdram, ctx);
 
+        if (std::getenv("GOW_MPEG_DIAG"))
+            std::fprintf(stderr, "[MPEG:diag] AddStrCallback type=%u ch=%u func=%08x data=%08x\n", streamType, streamId, callbackFunc, callbackData);
         std::lock_guard<std::mutex> lock(g_mpeg_stub_mutex);
         g_mpeg_stub_state.initialized = true;
         (void)getPlaybackState(mpegAddr);
