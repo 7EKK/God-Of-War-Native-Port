@@ -146,7 +146,7 @@ group = "EE"
   weight = 2
   [[hardware.item]]
   short = "Timers"
-  name = "Timers T0/T1/T2: still register-level (native clock in progress)"
+  name = "Timers: T2 native (DelayThread on the scheduler); T0/T1 reads still served by the timer model (needs recompiler change)"
   state = "partial"
   weight = 1
 

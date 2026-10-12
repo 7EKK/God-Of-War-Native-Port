@@ -34,7 +34,7 @@ Generated from `data.toml` by `tools/status_map.py`; do not edit by hand.
 | EE | FPU (COP1) and MMI instructions | 2 | ✅ ok |
 | EE | INTC: not accessed by game code in gameplay | 2 | ✅ ok |
 | EE | DMA controller: no model, packets go straight to VIF/GIF | 2 | ✅ ok |
-| EE | Timers T0/T1/T2: still register-level (native clock in progress) | 1 | 🔧 partial |
+| EE | Timers: T2 native (DelayThread on the scheduler); T0/T1 reads still served by the timer model (needs recompiler change) | 1 | 🔧 partial |
 | GS / VU | GS: native OpenGL render-target renderer, 2x internal, 16:9; display registers native | 3 | ✅ ok |
 | GS / VU | VIF1 decoded directly; VU1 microprograms compiled ahead of time to C++ | 3 | ✅ ok |
 | GS / VU | Textures and CLUT: native texture store; palettes from render targets read on the GPU | 2 | ✅ ok |

@@ -899,7 +899,7 @@
 <rect class="ok gap" x="677.3" y="283.3" width="57.6" height="84.7" stroke-width="1.5"/>
 <text class="on-ok" x="706.1" y="329.7" font-size="12" text-anchor="middle">DMAC</text>
 </g>
-<g><title>Timers T0/T1/T2: still register-level (native clock in progress) (partial)</title>
+<g><title>Timers: T2 native (DelayThread on the scheduler); T0/T1 reads still served by the timer model (needs recompiler change) (partial)</title>
 <rect class="partial gap" x="734.9" y="283.3" width="28.8" height="84.7" stroke-width="1.5"/>
 <rect fill="url(#hatch)" x="734.9" y="283.3" width="28.8" height="84.7"/>
 <text class="on-partial" x="749.3" y="325.7" font-size="12" text-anchor="middle" dominant-baseline="central" transform="rotate(-90 749.3 325.7)">Timers</text>

@@ -1358,6 +1358,34 @@ namespace
         ctx->pc = ra;
     }
 
+    // ---- GOW-Port: no-emulation, EE timer 2 (docs/native-port.md "EE timers") ----
+    // libkernel's timer system (InitTimer + StartTimerSystemTime from _InitSys, SetTimerAlarm and the timer-2
+    // interrupt handler cbTimerHandler) serves only DelayThread in this game. DelayThread is a native scheduler
+    // delay and the timer system starts without timer 2, so no game code programs or reads timer 2.
+
+    // 0x294A30 DelayThread(usec): the original waits on a semaphore signalled by a timer alarm. Same result
+    // (0, or KE_CAN_NOT_WAIT 0x80008008 with interrupts disabled), the thread sleeps usec of guest time.
+    void gowDelayThread(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        ctx->pc = GPR_U32(ctx, 31);
+        if ((ctx->cop0_status & 0x10000u) == 0u)
+        {
+            SET_GPR_S32(ctx, 2, static_cast<int32_t>(0x80008008u));
+            return;
+        }
+        const uint64_t usec = GPR_U32(ctx, 4);
+        runtime->eeScheduler().delayCurrent(usec * EeScheduler::kEeClockHz / 1000000u); // resumes with v0 = 0
+    }
+
+    // 0x2998C0 InitTimer(prescale) and 0x299A20 StartTimerSystemTime(), called once each by _InitSys (0x2994A0):
+    // success without programming timer 2 or installing its interrupt handler.
+    void gowTimerSystemNoop(uint8_t *, R5900Context *ctx, PS2Runtime *)
+    {
+        SET_GPR_U64(ctx, 2, 0u);
+        ctx->pc = GPR_U32(ctx, 31);
+    }
+    // ---- end EE timer 2 ----
+
     void applyGowOverrides(PS2Runtime &runtime)
     {
         configureGowCdImage();
@@ -1412,6 +1440,9 @@ namespace
         runtime.replaceFunction(0x00183360u, gowDisplaySetup);
         runtime.replaceFunction(0x00182DD8u, gowGsFinishHandler);
         runtime.replaceFunction(0x00182E88u, gowGsFinishInstall);
+        runtime.replaceFunction(0x00294A30u, gowDelayThread);     // EE timer 2: native DelayThread
+        runtime.replaceFunction(0x002998C0u, gowTimerSystemNoop); // InitTimer
+        runtime.replaceFunction(0x00299A20u, gowTimerSystemNoop); // StartTimerSystemTime
         runtime.replaceFunction(0x0027B7E8u, gowPad2Init);
         runtime.replaceFunction(0x0027B828u, gowPad2Init);
         runtime.replaceFunction(0x0027B890u, gowPad2CreateSocket);
