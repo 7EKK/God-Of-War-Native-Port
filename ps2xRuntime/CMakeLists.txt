@@ -392,6 +392,7 @@ add_library(ps2_runtime STATIC
     src/lib/ps2_audio_vag.cpp
     src/lib/gs/ps2_gs_memory.cpp
     src/lib/gs/gs_frontend.cpp
+    src/lib/gs/gs_stage.cpp # GOW-Port: GS frontend stage pipelined behind VU1.
     src/lib/gs/gs_display.cpp # GOW-Port: native display state + GS FINISH handshake (no-emulation step 5).
     src/lib/gs/gs_host_present.cpp # GOW-Port: mismo consumidor de textura en juego y controles.
         # GOW-Port: backend OpenGL y cola del fork SotC ac9efa0 (GPL-3.0).

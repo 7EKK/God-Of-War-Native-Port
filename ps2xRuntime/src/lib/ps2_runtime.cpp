@@ -1,4 +1,5 @@
 #include "ps2_runtime.h"
+#include "runtime/gs/gs_stage.h"
 #include "vu_pcsx2/pcsx2_vu1_bridge.h"
 static bool gowUsePcsx2Vu1(); // GOW_VU1_PCSX2=1, defined before PS2Runtime::initialize
 #include "runtime/gs/gs_host_present.h" // GOW-Port: consumidor privado del host.
@@ -674,8 +675,28 @@ bool PS2Runtime::syncCoreSubsystems()
     m_gs.init(gsVram, static_cast<uint32_t>(PS2_GS_VRAM_SIZE), &m_memory.gs());
     // GOW-Port: cada flujo conserva su cursor GIF, incluso cuando otro PATH lo interrumpe.
     m_gifArbiter.reset();
+    // GOW-Port: with the GS worker, the GS frontend runs on its own stage thread behind VU1 (gs_stage.h).
+    static const bool gsPipeline = []
+    {
+        const char *worker = std::getenv("PS2X_GS_WORKER");
+        const char *pipeline = std::getenv("PS2X_GS_PIPELINE");
+        return worker && worker[0] == '1' && !(pipeline && pipeline[0] == '0');
+    }();
+    if (gsPipeline)
+        ps2_gs_stage::start([this](GifPathId path, const uint8_t *data, uint32_t size)
+                            { m_gs.processGIFPacket(data, size, path); },
+                            [this]
+                            {
+                                if (m_eeScheduler && (m_memory.gs().csr.load(std::memory_order_acquire) & 0x3u) != 0u)
+                                    m_eeScheduler->postEvent(EeEvent{EeEventType::ExternalWake, 0xFFFFFFFFu, ~0ull});
+                            });
     m_gifArbiter.setProcessPathPacketFn([this](GifPathId path, const uint8_t *data, uint32_t size)
-                                    { m_gs.processGIFPacket(data, size, path); });
+                                    {
+                                        if (gsPipeline && m_memory.onGsWorkerThread())
+                                            ps2_gs_stage::push(path, data, size);
+                                        else
+                                            m_gs.processGIFPacket(data, size, path);
+                                    });
     m_memory.setGifArbiter(&m_gifArbiter);
     // GOW-Port: on the GS worker (PS2X_GS_WORKER=1) the EE context belongs to another thread: the D/T-bit
     // enables come from the FBRST captured when the job was queued, and VPU_STAT is not written back
