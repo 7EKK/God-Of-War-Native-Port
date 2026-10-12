@@ -1453,6 +1453,15 @@ namespace ps2_stubs
                         // lengths (God of War: 4073 / 4059 data bytes).
                         const uint8_t subStream = payloadStart + 1u < packetEnd ? buffer[payloadStart + 1u] : 0u;
                         const bool pcm = streamId == kMpegPrivateStream1 && (subStream & 0xF0u) == 0xA0u;
+                        // A/V check (GOW_MPEG_DIAG): the PTS of each stream's first audio packet
+                        static const bool s_audioPtsDiag = std::getenv("GOW_MPEG_DIAG") != nullptr;
+                        static std::map<uint32_t, bool> s_audioPtsSeen;
+                        if (s_audioPtsDiag && pes.pts90k >= 0 && !s_audioPtsSeen[mpegAddr])
+                        {
+                            s_audioPtsSeen[mpegAddr] = true;
+                            std::fprintf(stderr, "[MPEG:sync] first audio packet mpeg=0x%x pts=%lld\n", mpegAddr,
+                                         static_cast<long long>(pes.pts90k));
+                        }
                         const size_t before = callbackEvents.size();
                         queueStreamCallbackEvent(
                             mpegAddr,
