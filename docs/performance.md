@@ -226,3 +226,31 @@ Gains per lever above are estimates from the Gemini review (gemini-work/results/
   addresses as before (same page tables), so the GS memory contents and the textures are unchanged. Portable C++.
 - Result: Cliffs 60 fps (gs_ms ~1640 per 5 s, GS worker busy 63 % instead of 85 %); the other zones stay at 60.
 
+
+## Scratchpad fast path (2026-10-12, ext branch agent/scratchpad 96f61ab)
+- The scratchpad (16 KB at 0x70000000, alias 0xF0000000) is plain memory, but `Ps2IsSpecialAddress` includes it, so
+  every access in recompiled code took `runtime->Load/Store` (a call, the GOW_IO_HIST check, `syncGsWorkerFor`, a
+  bounds-checked copy): ~40 M accesses per 170 s per zone, ~156 M in slot 4 (docs/native-port.md inventory).
+- Now the READ*/WRITE* macros (include/ps2_runtime_macros.h) test for the scratchpad inside their special-address branch
+  and access it directly (`Ps2ScratchpadFastPtr`); unaligned accesses and every other special address keep the runtime
+  path (address error unchanged). RAM accesses are unchanged. No regeneration: the generated code already uses the
+  macros (~150k access sites); only a full rebuild.
+- Verified (port/spr/20261012_081449, baseline merged9): 4 zones ok, 60 fps everywhere, game speed 1.00-1.02, no image
+  warnings; savetest ok. With `GOW_IO_HIST=60` in slot 4 the histogram window never closed: no access reached the
+  runtime path after the first one for the whole run (before: ~156 M scratchpad accesses per 170 s).
+- ee_ms did not drop in that run (slot 1 2088 vs 1920, slot 4 2989 vs 2683): ee_ms includes the GS-wait spin (see
+  "EE checkpoint cost" above) and other forks were building at the same time, so it is not a cost measure here. The
+  gain matters where the EE is the bottleneck (Switch); measure it there or with a profiler on an idle machine.
+
+## Aegean Sea (new game) ship start: 43 fps, worker job bound (2026-10-12, ext branch agent/newgame)
+- New-game test (`tools/zones.py --slots 0`): the first ship deck runs at ~43 fps while the camera looks over the rain
+  and the sea (from gameplay +15 s until Kratos moves on); the rest of the fight holds 60 fps.
+- Per frame there: VU1 ~6.7 ms + GS frontend ~8.2 ms (Olympus: ~4 + ~4), ~16 M primitives per 5 s. Worker trace
+  (`PS2X_GS_WORKER_TRACE`, port/agent_ee/gap.py): job 17.9 ms + EE gap 4.5 ms = ~22 ms per frame.
+- Not the GPU and not the GL queue: `PS2X_GS_HW_SCALE=1` and `PS2X_GS_QUEUE_CHUNKS=48` leave it at 43-45 fps.
+  Sampling (muestrear) shows no thread saturated (EE 34 %, VIF/VU1/GS-frontend thread 28 %, GL thread 26 %): the
+  stages run one after another. `decodeDirect` was 12 % of the GL thread; it now reads rows (`GSMem::ReadColorRun`,
+  bit-identical, `GOW_GS_TEXCHECK=1` verifies) but fps did not change.
+- Fix needed: run VU1 and the GS frontend as a pipeline (the GIF arbiter's path-packet callback is the boundary:
+  VU1/XGKICK output queued to a GS-frontend thread), so the job costs max(VU1, GS) instead of the sum. Not done yet:
+  it changes which thread owns `GS` state (EE-side syncs `syncGsWorkerIfOtherThread`, FINISH, transfers).

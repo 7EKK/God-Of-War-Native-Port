@@ -696,7 +696,34 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   3. Top row of every capture is darker grey: the CRTC merge of the two read circuits (circuit 1 one line lower) blends
      row 0 with the black background, as the hardware does (hidden by TV overscan). Not a defect, left as is.
   4. Kratos looks washed-out/orange near light shafts (slot 2 capture 2): seen in some runs only, changes with timing;
-     not confirmed against a matched PCSX2 frame yet. Open.
+     confirmed against a matched PCSX2 frame (port/kt_match.png: PCSX2 port/kt_pc_c2.png vs ours, Desert, 2.2 s into the walk):
+   ours draws the ground dust far too bright/orange over Kratos and the light-shaft area. Bisected (fork agent/kratostint,
+   ext 5a372d5, GOW_GS_HW_SKIPTBP): skipping the draws textured from tbp 0x39D0 (two ~690-vertex flat-shaded tristrips,
+   T8 + CLUT 0x3C90 CT32, TFX modulate TCC=1, ALPHA Cs*As+Cd, ZTST GEQUAL, ZMSK, vertex rgb <= 82, a <= 39) removes the
+   orange entirely; skipping the haze sprite (tbp 0x3980, (Cd-Cs)*Ad+Cs) does not. Depth is consistent (dust z 0x806D18 >
+   Kratos 0x8054xx, so the dust is legitimately in front); Kratos passes its alpha test (GOW_GS_HW_FAILTINT). So the
+   brightness of these additive draws is wrong: next suspects are the CLUT 0x3C90 alpha / colours (GOW_GS_HW_TEXDUMP)
+   and the flat-shaded per-triangle colour (kick vertex).
+   **Narrowed (fork B4, ext agent/kratostint): not the GS renderer.** PCSX2 single-frame GS dumps of the Desert (save
+   states 07/08/09, standing and walking: ref/pcsx2/snaps/*SCUS-97399_20261012{100034,100055,100115,103129,103151}.gs,
+   parsed by a per-draw summary script) give, for the same draws: identical dust state (prim 0x154, TFX 0, TCC 1,
+   ALPHA 0x8000000048, TEST 0x5360B, vertex rgb max 82, a max 39) and a grey-noise CLUT with alpha 0x80 like ours
+   (GOW_GS_HW_PALDUMP). The difference is geometry: on the PS2 the dust is ONE ~1060-1100-vertex strip at Z
+   0x8010xx-0x8024xx, always behind Kratos (Z 0x802C00-0x803036 in all five dumps: the camera keeps a fixed distance),
+   so ZTST GEQUAL hides it on Kratos. Ours draws TWO ~690-vertex strips spanning huge screen extents (-847..2211 px)
+   with Z 0x80F2C8-0x84FF06 (at the camera), and our Kratos Z is 0x8056xx (walking) / 0x80C2xx (zone start); our
+   world Z range is also much wider (0x803D-0x831B vs PS2 0x8008-0x8026), and Kratos looks larger in our captures.
+   => the camera/projection (or the dust emitter placement) computed by game code differs from the PS2 in the Desert.
+   Not the 16:9 patch (Kratos Z identical with the widescreen data patch off). Next: compare the camera/projection
+   inputs (VU1 microprogram constants: the matrix + Z scale/offset the EE uploads per frame) between PCSX2 (PINE reads
+   or an EE RAM dump from a save state) and ours at a matched state; suspects: EE camera code (frame-delta or rand
+   driven), VU0 macro ops in the camera path. Open.
+   Side finding: the game's `rand` (0x28C0C8: 32-bit LCG x*1103515245+12345 on the reent struct at *(0x2A4294)+0x58,
+   returns 31 bits) is replaced by a runtime stub returning `std::rand() & 0x7FFF` (15 bits): every caller that
+   scales by 2^31 gets almost no randomness (noise palettes, particles). Fix tested in agent/kratostint: drop the
+   `rand@0x0028C0C8` stub from port/usa/recomp*.toml so the game's own rand runs (one regenerated file,
+   port/output-usa-rand/sub_0028C0C8_0x28c0c8.cpp; ps2_recompiled_stubs.h keeps a harmless duplicate declaration).
+   It does not fix the dust.
 - 05:2x merged and verified (ext 34d35ff cliffs60, then discfiles + t01clock as 52630c6): port/merged8/20261012_050655:
   60/60/60/60 fps, game speed 1.00 all zones, extracted files (no ISO), savetest ok. Timers: 0 accesses from game code.
   Decision: discfiles and t01clock were gated together (one full 35-min rebuild instead of two); both had passed
@@ -716,3 +743,13 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
 - 08:4x VERIFIED (port/merged10/20261012_081448, main ext 8820bd0 = visual + residual): 60/60/60/60 fps (single windows
   59.4-59.8 while forks ran), game speed 1.00/1.00/1.01/1.00, savetest ok. Desert holds 60 with shadows drawn.
   Remaining EE hardware access: one VIF1 CHCR read/write at boot (dynamic address, served by the DMA service).
+- 09:4x: agent/fmv (1a7b5fe): the intro movie plays to the end and the game continues (stream callbacks run nested
+  as libmpeg expects -> real picture size; GS: TEST.ZTE=0 means no depth test; sceMpegIsEnd flag). Movie audio still
+  silent: a fork continues on the same branch. Plan: merge 1a7b5fe after the scratchpad gate (merged11), own gate.
+  Scratchpad A/B slot 4 (main vs fast path, 2 runs each): EE 2750/2774 vs 2739/2702, 60 fps, speed 1.00 -> merged
+  (61497cb), full rebuild + gate running.
+- New-game test (fork agent/newgame, tools/zones.py --slots 0): title -> New Game -> Hero -> Aegean Sea ship works;
+  fights, blade trails, HUD, death screen render correctly (port/newgame/ng1, ng2 sheets); no missing functions,
+  no errors. Open: ship start ~43 fps (worker job VU1+GS serial, docs/performance.md "Aegean Sea").
+- 10:4x VERIFIED scratchpad fast path (port/merged11/20261012_101724, ext 61497cb): 60/60/60/60, speed 1.00 x4,
+  savetest ok. Merged FMV video (e21f2f2 = agent/fmv 1a7b5fe; libmpeg2 vendored, FFmpeg off by default); gate running.
