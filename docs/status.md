@@ -674,3 +674,11 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
 - GitHub: github.com/Waffle565/God-Of-War-Native-Port (main = this repo, runtime = ext gow-usa-kl); README status map
   from docs/status-map/data.toml (tools/status_map.py). Push only when the user asks.
 - Next: T0/T1 via the recompiler (USA regeneration + full rebuild), then step 6 (extracted files instead of the ISO).
+
+## 2026-10-12 (night): autonomous mode (user asleep)
+- User order: work without questions; decisions and blockers are written here. Task order: T0/T1 timers via the
+  recompiler -> step 6 extracted disc files -> Cliffs 60 fps -> FMV/IPU native -> visual bugs from zone captures ->
+  anything else still emulated. Merge gate: zones 1-4 ok vs latest merged baseline, fps not lower, game speed 1.00,
+  savetest ok. Push main + runtime to "native" every 2 h and before finishing.
+- Running (forks, branched from ext 7a9a96b): agent/t01clock (PS2Recomp-kl-vu), agent/discfiles (-present),
+  agent/cliffs60 (-ee). Baseline: port/merged6/20261012_021137 (60/60/33/60, speed 1.00).
