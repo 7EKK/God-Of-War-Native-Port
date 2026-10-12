@@ -877,8 +877,8 @@ struct GSHwBackend::Impl
                                 indices.data() + static_cast<size_t>(y) * tex.width);
         static const long idxDumpTbp = std::getenv("GOW_GS_HW_PALDUMP") ? std::strtol(std::getenv("GOW_GS_HW_PALDUMP"), nullptr, 16) : -1;
         static int idxDumped = 0;
-        // GOW_GS_HW_PALDUMPMAX=<n>: dump the first n decodes of that block's index texture (default 2)
-        static const int idxDumpMax = std::getenv("GOW_GS_HW_PALDUMPMAX") ? std::atoi(std::getenv("GOW_GS_HW_PALDUMPMAX")) : 2;
+        // GOW_GS_HW_PALDUMPMAX=<n>: dump the first n decodes of that block's index texture (default 4)
+        static const int idxDumpMax = std::getenv("GOW_GS_HW_PALDUMPMAX") ? std::atoi(std::getenv("GOW_GS_HW_PALDUMPMAX")) : 4;
         if (idxDumpTbp >= 0 && static_cast<long>(t.tbp0) == idxDumpTbp && idxDumped < idxDumpMax)
         {
             ++idxDumped;
@@ -926,12 +926,13 @@ struct GSHwBackend::Impl
         uint64_t key = clutHash;
         key = key * 1099511628211ull ^ (t.cpsm | (t.csm << 8) | (t.csa << 16) | (static_cast<uint64_t>(t.psm & 63) << 24));
         key = key * 1099511628211ull ^ (static_cast<uint64_t>(s.texa.ta0) | (static_cast<uint64_t>(s.texa.ta1) << 8) | (static_cast<uint64_t>(s.texa.aem) << 16));
-        // GOW_GS_HW_PALDUMP=<tbp hex>: debug, print the palette of the first draws textured from that block (rgba per entry)
+        // GOW_GS_HW_PALDUMP=<tbp hex>: debug, print the palette of each CLUT (cbp) the draws textured from that block use (rgba per entry)
         static const long palDumpTbp = std::getenv("GOW_GS_HW_PALDUMP") ? std::strtol(std::getenv("GOW_GS_HW_PALDUMP"), nullptr, 16) : -1;
-        static int palDumped = 0;
-        if (palDumpTbp >= 0 && static_cast<long>(t.tbp0) == palDumpTbp && palDumped < 2)
+        static std::vector<uint32_t> palDumpedCbp; // one dump per CLUT address
+        if (palDumpTbp >= 0 && static_cast<long>(t.tbp0) == palDumpTbp && palDumpedCbp.size() < 8 &&
+            std::find(palDumpedCbp.begin(), palDumpedCbp.end(), t.cbp) == palDumpedCbp.end())
         {
-            ++palDumped;
+            palDumpedCbp.push_back(t.cbp);
             uint32_t colors[256];
             store.BuildPalette(s, colors);
             std::fprintf(stderr, "[gs-hw-pal] tbp=%x cbp=%x cpsm=%u csm=%u csa=%u:", t.tbp0, t.cbp, t.cpsm, t.csm, t.csa);
@@ -1611,8 +1612,11 @@ struct GSHwBackend::Impl
         if (c == 0) { cs = kSrc1Alpha; cd = kOneMinusSrc1Alpha; }
         else if (c == 2) { cs = kConstantColor; cd = kOneMinusConstantColor; constant = std::min(fix / 128.0f, 1.0f); }
         else { soft = true; cs = kSrc1Alpha; cd = kOneMinusSrc1Alpha; } // C = Ad
-        // COLCLAMP=0: results wrap around instead of saturating, possible whenever B is not 0
-        if ((s.colclamp & 1u) == 0u && a != b && b != 2)
+        // COLCLAMP=0: results wrap around instead of saturating, below 0 (B != 0) and above 255 (Cs*C + Cd). The character
+        // shadow-volume pass counts in the G channel this way (Cs*FIX + Cd, G cleared to 127): it draws its triangles once
+        // adding 255 (= -1) and once adding 1. Clamping saturated the first half at 255, the second could not undo it, and
+        // everything the volume covered was darkened (black wedges on walls, rectangles under Kratos).
+        if ((s.colclamp & 1u) == 0u && a != b)
             soft = true;
         if (a == b)
         {
@@ -1917,7 +1921,20 @@ struct GSHwBackend::Impl
         if (tracing) depthStats("before");
         g.ColorMask(mr, mg, mb, ma);
         g.DepthMask(zwrite ? kTrue : kFalse);
-        g.DrawArrays(kTriangles, 0, static_cast<GLsizei>(verts.size()));
+        if (softBlend && !zAliasWrite && (s.colclamp & 1u) == 0u)
+        {
+            // wrapping blend (COLCLAMP=0, only the shadow-volume passes): the shader reads the destination, so draw one
+            // triangle at a time with a barrier in between; overlapping triangles of one draw then see each other's results
+            // like on the GS (the volumes count overlaps this way)
+            for (size_t i = 0; i + 3 <= verts.size(); i += 3)
+            {
+                if (i != 0)
+                    g.TextureBarrier();
+                g.DrawArrays(kTriangles, static_cast<GLint>(i), 3);
+            }
+        }
+        else
+            g.DrawArrays(kTriangles, 0, static_cast<GLsizei>(verts.size()));
         static const bool noFailPass = std::getenv("GOW_GS_HW_NOFAIL") != nullptr;
         if (ate && afail != 0u && !noFailPass)
         {
@@ -1943,14 +1960,14 @@ struct GSHwBackend::Impl
         static std::vector<bool> rtDumped(1024, false); // with the GOW_GS_HW_DUMP window: the first frame that reaches a batch wins
         if (rtDumpSec >= 0.0 && rtDumpPresent < 0 && frameBatch == 1 && std::chrono::duration<double>(std::chrono::steady_clock::now() - rtT0).count() >= rtDumpSec)
             rtDumpPresent = presentCount;
-        if (((rtDumpAt >= 0 && presentCount == rtDumpAt) || (rtDumpPresent >= 0 && presentCount == rtDumpPresent) || (rtRange && dumpPresents >= 0 && presentCount >= dumpPresents && presentCount < dumpPresents + 3 && !rtDumped[frameBatch & 1023])) && (rt.fbp == 0 || rt.fbp == 208) && frameBatch >= rtDumpLo && frameBatch <= rtDumpHi)
+        if (((rtDumpAt >= 0 && presentCount == rtDumpAt) || (rtDumpPresent >= 0 && presentCount >= rtDumpPresent && presentCount <= rtDumpPresent + 1) || (rtRange && dumpPresents >= 0 && presentCount >= dumpPresents && presentCount < dumpPresents + 3 && !rtDumped[frameBatch & 1023])) && (rt.fbp == 0 || rt.fbp == 208) && frameBatch >= rtDumpLo && frameBatch <= rtDumpHi)
         {
             std::vector<uint8_t> px(static_cast<size_t>(rt.glW) * rt.glH * 4u);
             g.BindFramebuffer(kFramebuffer, rt.fbo);
             g.PixelStorei(kPackAlignment, 1);
             g.ReadPixels(0, 0, rt.glW, rt.glH, kRgba, kUnsignedByte, px.data());
             char name[64];
-            std::snprintf(name, sizeof(name), "gs_hw_rt%u_b%03d.ppm", rt.fbp, frameBatch);
+            std::snprintf(name, sizeof(name), "gs_hw_rt%u_p%d_b%03d.ppm", rt.fbp, presentCount, frameBatch);
             rtDumped[frameBatch & 1023] = true;
             if (FILE *f = std::fopen(name, "wb"))
             {
