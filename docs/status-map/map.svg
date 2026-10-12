@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="424" viewBox="0 0 900 424" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" role="img">
-<title>Status: libraries* 74.4%, hardware 91.9%</title>
+<title>Status: libraries* 83.0%, hardware 95.3%</title>
 <style>
   .bg { fill: #ffffff; } .line { stroke: #d0d7de; } .t1 { fill: #1f2328; } .t2 { fill: #59636e; }
   .ok { fill: #0ca30c; } .partial { fill: #fab219; } .pending { fill: #c4c8ce; } .gap { stroke: #ffffff; }
@@ -19,13 +19,13 @@
 <rect class="bk" x="16" y="56" width="92" height="22" rx="3"/>
 <text class="bt" x="62.0" y="71" font-size="12.5" text-anchor="middle">libraries*</text>
 <rect class="partial" x="108.0" y="56" width="53" height="22" rx="3"/>
-<text class="t1" x="134.5" y="71" font-size="12.5" text-anchor="middle">74.4%</text>
+<text class="t1" x="134.5" y="71" font-size="12.5" text-anchor="middle">83.0%</text>
 <rect class="bk" x="171.0" y="56" width="78" height="22" rx="3"/>
 <text class="bt" x="210.0" y="71" font-size="12.5" text-anchor="middle">hardware</text>
 <rect class="partial" x="249.0" y="56" width="53" height="22" rx="3"/>
-<text class="t1" x="275.5" y="71" font-size="12.5" text-anchor="middle">91.9%</text>
-<text class="t1" x="16" y="103" font-size="14">Sony SDK libraries*: 74.4% (426/647)</text>
-<text class="t1" x="460" y="103" font-size="14">PS2 hardware → native: 91.9%</text>
+<text class="t1" x="275.5" y="71" font-size="12.5" text-anchor="middle">95.3%</text>
+<text class="t1" x="16" y="103" font-size="14">Sony SDK libraries*: 83.0% (537/647)</text>
+<text class="t1" x="460" y="103" font-size="14">PS2 hardware → native: 95.3%</text>
 <g><title>libc: 150 functions, ok</title>
 <rect class="ok gap" x="16.0" y="112.0" width="12.8" height="12.7" stroke-width="1.0"/>
 <rect class="ok gap" x="28.8" y="112.0" width="12.8" height="12.7" stroke-width="1.0"/>
@@ -283,209 +283,108 @@
 <rect class="pending gap" x="143.5" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
 <rect class="pending gap" x="156.3" y="356.9" width="12.8" height="13.1" stroke-width="1.0"/>
 </g>
-<g><title>libkernel: 101 functions, partial - Runs natively; its alarms and the game clock still read the EE timer registers (native clock in progress)</title>
-<rect class="partial gap" x="181.8" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="181.8" y="112.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="194.3" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="194.3" y="112.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="206.8" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="206.8" y="112.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="219.3" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="219.3" y="112.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="231.9" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="231.9" y="112.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="244.4" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="244.4" y="112.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="256.9" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="256.9" y="112.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="269.4" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="269.4" y="112.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="281.9" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="281.9" y="112.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="294.5" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="294.5" y="112.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="181.8" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="181.8" y="124.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="194.3" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="194.3" y="124.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="206.8" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="206.8" y="124.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="219.3" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="219.3" y="124.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="231.9" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="231.9" y="124.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="244.4" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="244.4" y="124.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="256.9" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="256.9" y="124.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="269.4" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="269.4" y="124.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="281.9" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="281.9" y="124.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="294.5" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="294.5" y="124.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="181.8" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="181.8" y="136.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="194.3" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="194.3" y="136.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="206.8" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="206.8" y="136.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="219.3" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="219.3" y="136.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="231.9" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="231.9" y="136.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="244.4" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="244.4" y="136.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="256.9" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="256.9" y="136.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="269.4" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="269.4" y="136.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="281.9" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="281.9" y="136.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="294.5" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="294.5" y="136.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="181.8" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="181.8" y="149.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="194.3" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="194.3" y="149.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="206.8" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="206.8" y="149.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="219.3" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="219.3" y="149.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="231.9" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="231.9" y="149.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="244.4" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="244.4" y="149.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="256.9" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="256.9" y="149.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="269.4" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="269.4" y="149.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="281.9" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="281.9" y="149.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="294.5" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="294.5" y="149.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="181.8" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="181.8" y="161.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="194.3" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="194.3" y="161.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="206.8" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="206.8" y="161.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="219.3" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="219.3" y="161.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="231.9" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="231.9" y="161.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="244.4" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="244.4" y="161.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="256.9" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="256.9" y="161.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="269.4" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="269.4" y="161.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="281.9" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="281.9" y="161.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="294.5" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="294.5" y="161.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="181.8" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="181.8" y="174.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="194.3" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="194.3" y="174.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="206.8" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="206.8" y="174.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="219.3" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="219.3" y="174.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="231.9" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="231.9" y="174.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="244.4" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="244.4" y="174.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="256.9" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="256.9" y="174.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="269.4" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="269.4" y="174.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="281.9" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="281.9" y="174.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="294.5" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="294.5" y="174.0" width="12.5" height="12.4"/>
-<rect class="partial gap" x="181.8" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="181.8" y="186.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="194.3" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="194.3" y="186.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="206.8" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="206.8" y="186.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="219.3" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="219.3" y="186.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="231.9" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="231.9" y="186.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="244.4" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="244.4" y="186.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="256.9" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="256.9" y="186.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="269.4" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="269.4" y="186.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="281.9" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="281.9" y="186.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="294.5" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="294.5" y="186.4" width="12.5" height="12.4"/>
-<rect class="partial gap" x="181.8" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="181.8" y="198.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="194.3" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="194.3" y="198.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="206.8" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="206.8" y="198.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="219.3" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="219.3" y="198.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="231.9" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="231.9" y="198.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="244.4" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="244.4" y="198.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="256.9" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="256.9" y="198.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="269.4" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="269.4" y="198.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="281.9" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="281.9" y="198.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="294.5" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="294.5" y="198.8" width="12.5" height="12.4"/>
-<rect class="partial gap" x="181.8" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="181.8" y="211.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="194.3" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="194.3" y="211.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="206.8" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="206.8" y="211.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="219.3" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="219.3" y="211.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="231.9" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="231.9" y="211.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="244.4" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="244.4" y="211.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="256.9" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="256.9" y="211.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="269.4" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="269.4" y="211.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="281.9" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="281.9" y="211.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="294.5" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="294.5" y="211.2" width="12.5" height="12.4"/>
-<rect class="partial gap" x="181.8" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="181.8" y="223.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="194.3" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="194.3" y="223.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="206.8" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="206.8" y="223.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="219.3" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="219.3" y="223.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="231.9" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="231.9" y="223.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="244.4" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="244.4" y="223.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="256.9" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="256.9" y="223.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="269.4" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="269.4" y="223.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="281.9" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="281.9" y="223.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="294.5" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="294.5" y="223.6" width="12.5" height="12.4"/>
-<rect class="partial gap" x="181.8" y="236.0" width="12.5" height="12.4" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="181.8" y="236.0" width="12.5" height="12.4"/>
+<g><title>libkernel: 101 functions, ok - Runs natively; DelayThread on the scheduler, no timer register access</title>
+<rect class="ok gap" x="181.8" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="194.3" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="206.8" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="219.3" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="231.9" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="244.4" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="256.9" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="269.4" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="281.9" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="294.5" y="112.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="181.8" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="194.3" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="206.8" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="219.3" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="231.9" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="244.4" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="256.9" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="269.4" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="281.9" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="294.5" y="124.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="181.8" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="194.3" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="206.8" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="219.3" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="231.9" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="244.4" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="256.9" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="269.4" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="281.9" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="294.5" y="136.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="181.8" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="194.3" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="206.8" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="219.3" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="231.9" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="244.4" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="256.9" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="269.4" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="281.9" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="294.5" y="149.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="181.8" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="194.3" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="206.8" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="219.3" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="231.9" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="244.4" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="256.9" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="269.4" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="281.9" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="294.5" y="161.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="181.8" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="194.3" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="206.8" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="219.3" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="231.9" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="244.4" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="256.9" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="269.4" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="281.9" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="294.5" y="174.0" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="181.8" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="194.3" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="206.8" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="219.3" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="231.9" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="244.4" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="256.9" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="269.4" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="281.9" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="294.5" y="186.4" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="181.8" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="194.3" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="206.8" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="219.3" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="231.9" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="244.4" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="256.9" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="269.4" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="281.9" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="294.5" y="198.8" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="181.8" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="194.3" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="206.8" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="219.3" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="231.9" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="244.4" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="256.9" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="269.4" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="281.9" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="294.5" y="211.2" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="181.8" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="194.3" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="206.8" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="219.3" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="231.9" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="244.4" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="256.9" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="269.4" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="281.9" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="294.5" y="223.6" width="12.5" height="12.4" stroke-width="1.0"/>
+<rect class="ok gap" x="181.8" y="236.0" width="12.5" height="12.4" stroke-width="1.0"/>
 </g>
 <g><title>libmc2: 90 functions, ok - Native memory-card service; load and save verified (savetest)</title>
 <rect class="ok gap" x="181.8" y="248.4" width="12.5" height="13.5" stroke-width="1.0"/>
@@ -768,27 +667,17 @@
 <rect class="ok gap" x="405.2" y="285.5" width="11.6" height="13.3" stroke-width="1.0"/>
 <rect class="ok gap" x="416.8" y="285.5" width="11.6" height="13.3" stroke-width="1.0"/>
 </g>
-<g><title>libcdvd: 10 functions, partial - Reads the original ISO; extracted game files are the last step</title>
-<rect class="partial gap" x="364.0" y="298.8" width="14.3" height="9.9" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="364.0" y="298.8" width="14.3" height="9.9"/>
-<rect class="partial gap" x="378.2" y="298.8" width="14.3" height="9.9" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="378.2" y="298.8" width="14.3" height="9.9"/>
-<rect class="partial gap" x="392.5" y="298.8" width="14.3" height="9.9" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="392.5" y="298.8" width="14.3" height="9.9"/>
-<rect class="partial gap" x="364.0" y="308.7" width="14.3" height="9.9" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="364.0" y="308.7" width="14.3" height="9.9"/>
-<rect class="partial gap" x="378.2" y="308.7" width="14.3" height="9.9" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="378.2" y="308.7" width="14.3" height="9.9"/>
-<rect class="partial gap" x="392.5" y="308.7" width="14.3" height="9.9" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="392.5" y="308.7" width="14.3" height="9.9"/>
-<rect class="partial gap" x="364.0" y="318.6" width="14.3" height="9.9" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="364.0" y="318.6" width="14.3" height="9.9"/>
-<rect class="partial gap" x="378.2" y="318.6" width="14.3" height="9.9" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="378.2" y="318.6" width="14.3" height="9.9"/>
-<rect class="partial gap" x="392.5" y="318.6" width="14.3" height="9.9" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="392.5" y="318.6" width="14.3" height="9.9"/>
-<rect class="partial gap" x="364.0" y="328.5" width="14.3" height="9.9" stroke-width="1.0"/>
-<rect fill="url(#hatch)" x="364.0" y="328.5" width="14.3" height="9.9"/>
+<g><title>libcdvd: 10 functions, ok - CD reads served from the extracted game files (disc-usa/); the ISO only with GOW_ISO</title>
+<rect class="ok gap" x="364.0" y="298.8" width="14.3" height="9.9" stroke-width="1.0"/>
+<rect class="ok gap" x="378.2" y="298.8" width="14.3" height="9.9" stroke-width="1.0"/>
+<rect class="ok gap" x="392.5" y="298.8" width="14.3" height="9.9" stroke-width="1.0"/>
+<rect class="ok gap" x="364.0" y="308.7" width="14.3" height="9.9" stroke-width="1.0"/>
+<rect class="ok gap" x="378.2" y="308.7" width="14.3" height="9.9" stroke-width="1.0"/>
+<rect class="ok gap" x="392.5" y="308.7" width="14.3" height="9.9" stroke-width="1.0"/>
+<rect class="ok gap" x="364.0" y="318.6" width="14.3" height="9.9" stroke-width="1.0"/>
+<rect class="ok gap" x="378.2" y="318.6" width="14.3" height="9.9" stroke-width="1.0"/>
+<rect class="ok gap" x="392.5" y="318.6" width="14.3" height="9.9" stroke-width="1.0"/>
+<rect class="ok gap" x="364.0" y="328.5" width="14.3" height="9.9" stroke-width="1.0"/>
 </g>
 <g><title>libdma: 8 functions, ok - sceDmaSend feeds VIF/GIF directly; no DMA controller model</title>
 <rect class="ok gap" x="364.0" y="338.4" width="14.3" height="10.5" stroke-width="1.0"/>
@@ -864,10 +753,9 @@
 <rect class="ok gap" x="538.9" y="209.2" width="76.9" height="63.5" stroke-width="1.5"/>
 <text class="on-ok" x="577.3" y="245.0" font-size="12" text-anchor="middle">SIF</text>
 </g>
-<g><title>CDVD: reads the ISO; extracted files are the last step (partial)</title>
-<rect class="partial gap" x="462.0" y="272.8" width="51.3" height="95.2" stroke-width="1.5"/>
-<rect fill="url(#hatch)" x="462.0" y="272.8" width="51.3" height="95.2"/>
-<text class="on-partial" x="487.6" y="324.4" font-size="12" text-anchor="middle">CDVD</text>
+<g><title>CDVD: the game's reads served from the extracted files (no drive model) (ok)</title>
+<rect class="ok gap" x="462.0" y="272.8" width="51.3" height="95.2" stroke-width="1.5"/>
+<text class="on-ok" x="487.6" y="324.4" font-size="12" text-anchor="middle">CDVD</text>
 </g>
 <g><title>Pad: native service (SIO2 chip model deleted) (ok)</title>
 <rect class="ok gap" x="513.3" y="272.8" width="51.3" height="95.2" stroke-width="1.5"/>
@@ -899,10 +787,9 @@
 <rect class="ok gap" x="677.3" y="283.3" width="57.6" height="84.7" stroke-width="1.5"/>
 <text class="on-ok" x="706.1" y="329.7" font-size="12" text-anchor="middle">DMAC</text>
 </g>
-<g><title>Timers: T2 native (DelayThread on the scheduler); T0/T1 reads still served by the timer model (needs recompiler change) (partial)</title>
-<rect class="partial gap" x="734.9" y="283.3" width="28.8" height="84.7" stroke-width="1.5"/>
-<rect fill="url(#hatch)" x="734.9" y="283.3" width="28.8" height="84.7"/>
-<text class="on-partial" x="749.3" y="325.7" font-size="12" text-anchor="middle" dominant-baseline="central" transform="rotate(-90 749.3 325.7)">Timers</text>
+<g><title>Timers: native EE clock (game code calls it, counts computed from guest cycles); T2 users (DelayThread) on the scheduler (ok)</title>
+<rect class="ok gap" x="734.9" y="283.3" width="28.8" height="84.7" stroke-width="1.5"/>
+<text class="on-ok" x="749.3" y="325.7" font-size="12" text-anchor="middle" dominant-baseline="central" transform="rotate(-90 749.3 325.7)">Timers</text>
 </g>
 <rect class="chip" x="620.8" y="115.0" width="23.2" height="16" rx="3"/>
 <text class="chip-t" x="625.8" y="127.0" font-size="11.5">EE</text>

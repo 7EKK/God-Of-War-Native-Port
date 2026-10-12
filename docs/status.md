@@ -682,3 +682,22 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   savetest ok. Push main + runtime to "native" every 2 h and before finishing.
 - Running (forks, branched from ext 7a9a96b): agent/t01clock (PS2Recomp-kl-vu), agent/discfiles (-present),
   agent/cliffs60 (-ee). Baseline: port/merged6/20261012_021137 (60/60/33/60, speed 1.00).
+- 03:5x: agent/cliffs60 done (Cliffs 33 -> 60 fps, row-run GS uploads); merged into main as 34d35ff, gate running
+  (with --iso, because the disc-files tool change is not on main yet). agent/discfiles done (extracted files, ISO
+  only with GOW_ISO; disc-usa already complete, nothing extracted); merge gate after cliffs60's.
+  New forks: agent/fmv (FMV/IPU native, -ee), agent/visual (visual bugs from captures, -present).
+- Visual defects from the zone captures (fork agent/visual, 2026-10-12; reference: PCSX2 Desert frame port/pcsx2_walk1.png):
+  1. **Character shadows missing** (Kratos has a ground shadow in PCSX2, none in port/merged6/20261012_021137/zone_slot2):
+     the shadow passes invert the Z memory (full-screen CT24 colour draw at FBP == ZBP, Cs - Cd with white), draw the
+     G-plane shadow mask with ZTST GEQUAL and invert back; our GL depth never saw the inversion, so the mask failed
+     everywhere. FIXED (inversion tracked per Z buffer; port/visual_shadow/20261012_044040 shows the shadows).
+  2. **Line primitives skipped** (~10/frame in the Desert: sand streaks, GOW_GS_HW_STATS skippedPrim): FIXED (drawn as
+     one-pixel quads, skippedPrim=0).
+  3. Top row of every capture is darker grey: the CRTC merge of the two read circuits (circuit 1 one line lower) blends
+     row 0 with the black background, as the hardware does (hidden by TV overscan). Not a defect, left as is.
+  4. Kratos looks washed-out/orange near light shafts (slot 2 capture 2): seen in some runs only, changes with timing;
+     not confirmed against a matched PCSX2 frame yet. Open.
+- 05:2x merged and verified (ext 34d35ff cliffs60, then discfiles + t01clock as 52630c6): port/merged8/20261012_050655:
+  60/60/60/60 fps, game speed 1.00 all zones, extracted files (no ISO), savetest ok. Timers: 0 accesses from game code.
+  Decision: discfiles and t01clock were gated together (one full 35-min rebuild instead of two); both had passed
+  their own 4-zone runs. Push to "native" was held ~45 min past the 2 h mark to push a verified state.

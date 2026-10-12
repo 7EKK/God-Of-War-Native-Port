@@ -211,3 +211,18 @@ Gains per lever above are estimates from the Gemini review (gemini-work/results/
 - Worktree build pitfall: a fresh configure defaults to PS2X_ENABLE_AGRESSIVE_LOGS / RUNTIME_LOGS / DEBUG_UI /
   IOP_RPC_TRACE = ON and no PS2X_VU1_MICROCODE_DIR (interpreted VU1): ~3 fps and a GB-size ps2_log.txt.
   Copy those cache values from out/build-kl (logs/UI/trace OFF, VU1 dir port/vu1_micro + generator source).
+
+## Cliffs of Madness 30 -> 60 fps: texture uploads (2026-10-12, ext branch agent/cliffs60)
+- Cliffs (save slot 3) was GS-bound at ~32 fps: gs_ms 3330 per 5 s (~20 ms per frame) against 1150 in Olympus at 60 fps.
+  The zone streams 4 bit (PSMT4) textures every frame. Sampling the GS worker (port/agent_ee/prof_run3.sh: zone slot 3 +
+  muestrear) showed the time on the CPU, not the GPU: `GSMem::WriteP4` 25 %, `GSTextureStore::UploadAligned` ~20 %,
+  `indexTextureFor` 16 % of the worker thread.
+- Cause: host->local uploads were written one pixel at a time through a format switch and a non-inlined write call,
+  with two integer divisions (pixel index -> x,y) per pixel; the index textures were decoded per texel through the
+  generic `GSSwizzle` path.
+- Fix: `GSMem::WriteRun` writes one row run of a transfer with the format resolved once and the page-table address
+  math inlined (`PixelStorageTraits<psm>::Write`); `UploadAligned` splits the stream into row runs (no per-pixel
+  division). `GSMem::ReadIndexRun` decodes a row of a paletted texture the same way for `indexTextureFor`. Same
+  addresses as before (same page tables), so the GS memory contents and the textures are unchanged. Portable C++.
+- Result: Cliffs 60 fps (gs_ms ~1640 per 5 s, GS worker busy 63 % instead of 85 %); the other zones stay at 60.
+

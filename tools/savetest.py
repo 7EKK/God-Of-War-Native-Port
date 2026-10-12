@@ -67,6 +67,7 @@ def main():
     ap.add_argument('--keys', default='g4:r2,g7:x,g9:x,g11:arriba,g12.5:x,g20:x,g22:x')
     ap.add_argument('--exe')
     ap.add_argument('--audio', action='store_true', help='play sound (default: silent, GOW_AUDIO=0)')
+    ap.add_argument('--iso', action='store_true', help='read the original ISO (default: the extracted files in disc-usa/)')
     args = ap.parse_args()
     exe = os.path.abspath(args.exe) if args.exe else zones.EXE
     exe_dir = os.path.dirname(exe)
@@ -78,7 +79,10 @@ def main():
     script = '5:start,16:abajo,24:x,89:x,' + args.keys
     caps = ','.join(f'g{t}' for t in range(2, 26, 1))
     env = dict(os.environ, **zones.PLAY_ENV)
-    env.update({'GOW_ISO': zones.ISO, 'GOW_MC0': card, 'GOW_PAD_GUION': script, 'GOW_PAD_CAPTURAS': caps})
+    env.update({'GOW_MC0': card, 'GOW_PAD_GUION': script, 'GOW_PAD_CAPTURAS': caps})
+    env.pop('GOW_ISO', None)
+    if args.iso:
+        env['GOW_ISO'] = zones.ISO  # default: the extracted files next to the ELF (docs/disc.md)
     if not args.audio:
         env['GOW_AUDIO'] = '0'  # test runs are silent; --audio for audio tests
     for f in os.listdir(exe_dir):

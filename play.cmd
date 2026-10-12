@@ -1,7 +1,7 @@
 @echo off
 rem God of War (USA) native port - play launcher. No diagnostics, release settings.
 rem   play.cmd            16:9, 1920x1080 window (the only mode)
-rem Needs: iso-usa\God of War (USA).iso, disc-usa\SCUS_973.99 and the built runner.
+rem Needs: the disc extracted to disc-usa\ (tools\iso_extract.py --layout) and the built runner. No ISO is read.
 setlocal
 set "ROOT=%~dp0"
 set "EXE_DIR=%ROOT%ext\PS2Recomp-kl\out\build-kl\ps2xRuntime\Release"
@@ -12,7 +12,6 @@ if not exist "%ROOT%disc-usa\play.mcd" (
 set PS2X_GS_WORKER=1
 set GOW_GS_FINISH_ASINCRONO=1
 set GOW_SKIP_FMV=1
-set "GOW_ISO=%ROOT%iso-usa\God of War (USA).iso"
 set "GOW_MC0=%ROOT%disc-usa\play.mcd"
 cd /d "%EXE_DIR%"
 ps2EntryRunner.exe "%ROOT%disc-usa\SCUS_973.99"

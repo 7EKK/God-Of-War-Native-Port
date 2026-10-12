@@ -78,15 +78,15 @@ Native Windows build, 1920x1080 window, captured by the automatic zone test (`to
 | Native pad, memory card (load/save verified), sound engine | ✅ |
 | Native DMA data path; SIF already native | ✅ |
 | GS memory image → native texture/CLUT store; GS display registers native | ✅ |
-| EE timers → native clock | 🔧 in progress |
-| Speed: 60 fps in Olympus, Desert and slot 4; Cliffs ~33 fps | 🔧 in progress |
+| EE timers → native clock (recompiler turns timer reads into native clock calls) | ✅ |
+| 60 fps in all four tested zones (Olympus, Desert, Cliffs, slot 4) | ✅ |
 | Game speed exact (1.00) at 30 and 60 fps, matching PCSX2 | ✅ |
-| Game data from extracted files instead of the ISO | ⏳ last step |
+| Game data from the extracted disc files (no ISO reads) | ✅ |
 | FMV (currently skipped) | ⏳ |
 | Nintendo Switch build | ⏳ after the PC port |
 
 Latest zone check (4 save slots, ~2 minutes each): all zones reach gameplay with no runtime errors, fps
-60 / 60 / 30 / 60, save test passes. Details and the ordered next steps: [`docs/status.md`](docs/status.md) and
+60 / 60 / 60 / 60, save test passes. Details and the ordered next steps: [`docs/status.md`](docs/status.md) and
 [`docs/native-port.md`](docs/native-port.md).
 
 ## Repository layout

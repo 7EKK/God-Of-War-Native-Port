@@ -1160,10 +1160,10 @@ namespace
         ctx->pc = GPR_U32(ctx, 31);
     }
 
-    // smpd (SMPD_IOP.IRX) lee GODOFWAR.TOC / PART*.PAK por numero de sector con sceCdRead. Sin imagen de
-    // disco, el IOP monta una ISO virtual con los archivos extraidos; con la ISO original los sectores son
-    // exactamente los del DVD. Orden: variable GOW_ISO, "../God of War.iso" respecto al ELF, o el primer
-    // .iso de la carpeta del ELF.
+    // GOW-Port: no-emulation step 6 (docs/disc.md). The game reads its data from the files extracted next to the ELF
+    // (tools/iso_extract.py --layout: .disc_layout + .disc_meta), each at its original LSN, so smpd's raw sector reads
+    // of GODOFWAR.TOC / PART*.PAK are host file reads (ps2xIOP DiscSource). GOW_ISO=<iso> still selects the original
+    // image explicitly (for comparisons); no .iso is looked for otherwise.
     void configureGowCdImage()
     {
         namespace fs = std::filesystem;
@@ -1180,28 +1180,23 @@ namespace
         if (const char *env = std::getenv("GOW_ISO"); env != nullptr && env[0] != '\0')
             image = fs::u8path(env);
 #endif
-        else if (!paths.elfDirectory.empty())
+        if (image.empty())
         {
-            const fs::path sibling = paths.elfDirectory.parent_path() / "God of War.iso";
-            if (fs::is_regular_file(sibling, ec))
-                image = sibling;
-            else
-                for (const auto &entry : fs::directory_iterator(paths.elfDirectory, ec))
-                    if (entry.is_regular_file(ec) && entry.path().extension() == ".iso")
-                    {
-                        image = entry.path();
-                        break;
-                    }
+            const fs::path root = paths.cdRoot.empty() ? paths.elfDirectory : paths.cdRoot;
+            if (!fs::is_regular_file(root / ".disc_layout", ec))
+                std::fprintf(stderr, "[gow-cd] no .disc_layout in %s: extract the disc with tools/iso_extract.py --layout\n",
+                             reinterpret_cast<const char *>(root.u8string().c_str()));
+            return;
         }
-        if (image.empty() || !fs::is_regular_file(image, ec))
+        if (!fs::is_regular_file(image, ec))
         {
-            std::fprintf(stderr, "[gow-cd] sin imagen de disco: el IOP usara la ISO virtual de la carpeta extraida\n");
+            std::fprintf(stderr, "[gow-cd] GOW_ISO is not a file; using the extracted files\n");
             return;
         }
         paths.cdImage = image;
         PS2Runtime::setIoPaths(paths);
         const auto imageUtf8 = image.u8string();
-        std::fprintf(stderr, "[gow-cd] imagen de disco: %s\n", reinterpret_cast<const char *>(imageUtf8.c_str()));
+        std::fprintf(stderr, "[gow-cd] disc image (GOW_ISO): %s\n", reinterpret_cast<const char *>(imageUtf8.c_str()));
     }
 
     // GOW-Port: no-emulation step 5, GS privileged registers (docs/native-port.md). The game's three functions that
@@ -1311,8 +1306,7 @@ namespace
             gowStore32(rdram, 0x0029C7D0u, 2u);
             if (readGuest32(rdram, 0x0032F1B4u) & 4u)
             {
-                // Timer 0 is still read as a register here (EE timers: separate step).
-                const uint32_t now = runtime->Load32(rdram, ctx, 0x10000000u);
+                const uint32_t now = runtime->memory().eeTimerLoad(0x10000000u); // native EE clock, timer 0
                 if (now < readGuest32(rdram, 0x002C7908u))
                 {
                     const uint64_t wraps = gowLoad64(rdram, 0x00303628u) + 0x10000u;

@@ -39,8 +39,8 @@ note = "sceDmaSend feeds VIF/GIF directly; no DMA controller model"
 [[library]]
 name = "libcdvd"
 functions = 10
-state = "partial"
-note = "Reads the original ISO; extracted game files are the last step"
+state = "ok"
+note = "CD reads served from the extracted game files (disc-usa/); the ISO only with GOW_ISO"
 
 [[library]]
 name = "libdbc"
@@ -94,8 +94,8 @@ state = "ok"
 [[library]]
 name = "libkernel"
 functions = 101
-state = "partial"
-note = "Runs natively; its alarms and the game clock still read the EE timer registers (native clock in progress)"
+state = "ok"
+note = "Runs natively; DelayThread on the scheduler, no timer register access"
 
 [[library]]
 name = "sif"
@@ -146,8 +146,8 @@ group = "EE"
   weight = 2
   [[hardware.item]]
   short = "Timers"
-  name = "Timers: T2 native (DelayThread on the scheduler); T0/T1 reads still served by the timer model (needs recompiler change)"
-  state = "partial"
+  name = "Timers: native EE clock (game code calls it, counts computed from guest cycles); T2 users (DelayThread) on the scheduler"
+  state = "ok"
   weight = 1
 
 [[hardware]]
@@ -202,8 +202,8 @@ group = "IOP"
   weight = 2
   [[hardware.item]]
   short = "CDVD"
-  name = "CDVD: reads the ISO; extracted files are the last step"
-  state = "partial"
+  name = "CDVD: the game's reads served from the extracted files (no drive model)"
+  state = "ok"
   weight = 2
   [[hardware.item]]
   short = "Pad"

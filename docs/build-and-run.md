@@ -35,6 +35,8 @@
   (argv[2] = path to an .iso is still supported but the user does not want ISO reads.)
 - Test runs are silent (user 2026-10-11): `tools/zones.py` and `tools/savetest.py` set `GOW_AUDIO=0` unless `--audio`
   is given; use `--audio` (or `GOW_AUDIO_PCM`, docs/sound.md) only for audio tests.
+- Game data comes from the extracted disc in `disc-usa/` (docs/disc.md); `play.cmd` and the test tools never read the
+  ISO (`--iso` in zones.py/savetest.py, or `GOW_ISO=<iso>`, for comparisons).
 - `tools/run.sh <seconds> <name> [ENV=VALUE ...]` — runs from disc/, waits, screenshots, kills;
   log → `port/<name>.log`, screenshot → `port/<name>.png`.
 - `tools/shot.ps1 <process> <out.png>` — PrintWindow capture of the game window (works with overlapping windows).

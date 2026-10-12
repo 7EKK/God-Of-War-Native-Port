@@ -14,7 +14,7 @@ This file is the inventory and the order of work. Status per layer is measured, 
 | VU0 macro mode | recompiled inline COP2 ops | inline | keep | native |
 | VU1 microcode | native per-instruction-pair code generated ahead of time (tools/vu1/vu1n_gen.py), A/B verified | generated | later: lower to GPU compute | native |
 | VIF1 / GIF / DMA plumbing | no DMA controller: sceDmaSend hands the game's packets (its DMA tag lists walked in place) to the VIF decoder (UNPACK into VU memory) and the GIF paths | ~1k lines | becomes a thinner loader once VU1 outputs vertices directly | native (step 2) |
-| GS (graphics synthesizer) | **native render-target renderer** `GSHwBackend`, the only renderer: real render targets and textures at `PS2X_GS_HW_SCALE` (default 2), paletted textures as index + palette textures, reinterpretation passes (channel shuffles, aliased Z, CRTC merge) done natively | ~2.3k lines | done: textures and CLUTs come from a small native texture/CLUT store (`GSTextureStore`, step 5); no CPU rasteriser left | native |
+| GS (graphics synthesizer) | **native render-target renderer** `GSHwBackend`, the only renderer: real render targets and textures at `PS2X_GS_HW_SCALE` (default 2), paletted textures as index + palette textures, reinterpretation passes (channel shuffles, aliased Z, CRTC merge, the shadow passes' Z-buffer inversion) done natively; triangles, sprites and lines | ~2.3k lines | done: textures and CLUTs come from a small native texture/CLUT store (`GSTextureStore`, step 5); no CPU rasteriser left | native |
 | IOP (I/O CPU + IRX modules: CDVD, SIO2, 989snd) | the game's 8 IRX modules (sio2man, dbcman, sio2d, mc2_d, ds2u_d, libsd, 989nomid, smpd_iop; 52k instructions) **compiled ahead of time** to C++ (tools/iop/iopn_gen.py -> ps2xIOP/src/native); HLE kernel imports; the R3000 interpreter only runs code without a compiled form | generated | replace the hardware models below (SPU2, SIO2, CDVD) with native services | native code, in progress |
 | SPU2 | native SoundEngine driven by LIBSD's exports (docs/sound.md) | in IOP | done | native (step 3) |
 
@@ -90,15 +90,20 @@ EE timers (no-emulation order, after step 5):
      a guest-time wake-up event, same return values) and InitTimer/StartTimerSystemTime return success without
      programming timer 2 or installing its handler, so no game code touches timer 2 (`GOW_IO_HIST`: 0 accesses, before
      ~60 incl. the uncached 0xB0001000/10/20 stores). An unexpected user of the timer system would show up there;
-   - Timers 0/1 NOT converted: the game's clock idiom (T0 count + wrap word 0x303628 + last value 0x2C7908, T1 the
-     same with 0x303630/0x2C790C) is inlined in 0x179F00 (T0 twice, T1), 0x17A0E0, 0x17A2A0, 0x17D778 (frame step,
-     twice), 0x14A290 and the FINISH handler. All but 0x17D778 call guest functions that can block (vid::Flip
-     0x1837B8, the DMA-done spin), so they cannot be replaced by C++ overrides: a C++ frame cannot resume after a
-     thread switch. Clean cut: a recompiler binding that emits constant-address timer COUNT loads as a call to a
-     native EE clock (count = (EE cycle - epoch) >> 9 for BUSCLK/256, x 15734 / 294912000 for H-BLNK: exactly what the
-     timer model returns today), with the epoch taken by a native 0x138978 (the boot code that sets both modes). Needs a
-     USA regeneration (full rebuild), so it waits for the next one;
+   - Timers 0/1 DONE (2026-10-12, branch agent/t01clock): the game's clock idiom (T0 count + wrap word 0x303628 +
+     last value 0x2C7908, T1 the same with 0x303630/0x2C790C) is inlined in 0x179F00 (T0 twice, T1), 0x17A0E0,
+     0x17A2A0, 0x17D778 (frame step, twice), 0x14A290, 0x1452F8 and the FINISH handler; most of these call guest
+     functions that can block, so C++ overrides could not replace them. Instead the recompiler emits every 32-bit
+     access the analysis resolves to a timer register as a call of the native EE clock
+     (`PS2Memory::eeTimerLoad/eeTimerStore`, docs/runtime-changes.md): 27 call sites in 13 functions, including the
+     boot code 0x138978 that sets T0 = BUSCLK/256 (mode 0x82) and T1 = H-BLNK (0x83). Neither mode raises events, so
+     the count is computed when read: count at epoch + guest EE cycles since the epoch x clock / 294.912 MHz (the
+     same floor as the former stepping model; timers with compare/overflow events keep that model). The FINISH
+     override reads the same clock. `GOW_IO_HIST=150`, slot 1: 0 timer register accesses (before: T0 51051 reads,
+     T1 7293, 2 mode writes); game speed 1.00. Regenerating the USA code changes exactly these 13 files;
 6. CDVD -> extracted game files (last).
+   - DONE (2026-10-12): the game reads `disc-usa/` (files extracted with their original LSNs, docs/disc.md); the
+     ISO is only opened when `GOW_ISO` is set explicitly. smpd's raw sector reads are host file reads (DiscSource).
 
 ## Hardware access inventory (2026-10-11, `GOW_IO_HIST=150`, boot + Olympus)
 What the game's own code still reads or writes as hardware registers (the generated code also marks every constant-address
@@ -106,10 +111,10 @@ access with `// MMIO:`; `tools/dis.py ADDR` disassembles the USA build):
 - GS privileged registers: none since agent/gsregs (step 5 above). Before: CSR read+write per FINISH interrupt
   (handler 0x182DD8, ~2 per frame) plus one write at install (0x182E88), and SMODE2/PMODE/DISPFB1/DISPLAY1/
   DISPFB2/DISPLAY2/BGCOLOR stored once per frame by 0x183360.
-- EE timers: T0 count (~50k reads in 150 s: the game's 64-bit clock pattern "T0 + wrap count 0x303628, last value
-  0x2C7908" inlined at 0x179F18/54, 0x17A168, 0x17A2C8, 0x17D780/7BC (2 per frame each) and in the FINISH handler),
-  T1 count once per frame (0x179F94), T0/T1 mode once at boot (0x138984/94). T2: none since agent/timers (before: libkernel's
-  timer system 0x2998xx-0x299Fxx, ~60 accesses).
+- EE timers: none since agent/t01clock (game code calls the native EE clock; before: T0 count ~51k reads in 150 s at
+  0x179F18/54, 0x17A168, 0x17A2C8, 0x17D780/7BC and in the FINISH handler, T1 count once per frame at 0x179F94, T0/T1
+  mode once at boot at 0x138984/94). T2: none since agent/timers (before: libkernel's timer system 0x2998xx-0x299Fxx,
+  ~60 accesses).
 - Scratchpad DMA (channels 8/9) in 0x117D10, 0x1188F0, 0x1590F0, 0x159C58, 0x101888 and D_STAT clears: served as copies.
 - IPU + its DMA (libmpeg 0x26F228..0x279588, 0x189BD0..0x18A5E0) and D_ENABLER/W: FMV, skipped (GOW_SKIP_FMV).
 - INTC mask (libkernel 0x2940B0/0x294140), once per DI/EI (not seen in the slot-1 runs of 2026-10-11 evening).
