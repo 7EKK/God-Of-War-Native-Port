@@ -724,6 +724,17 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
    `rand@0x0028C0C8` stub from port/usa/recomp*.toml so the game's own rand runs (one regenerated file,
    port/output-usa-rand/sub_0028C0C8_0x28c0c8.cpp; ps2_recompiled_stubs.h keeps a harmless duplicate declaration).
    It does not fix the dust.
+   **Camera hypothesis refuted (fork B5, matched states):** the PCSX2 states 07-09 are at a different Desert spot.
+   At the same zone start (same card, PCSX2 loaded via PINE) the camera object 0x75CD70 matches ours: projection
+   0x100/0x280 identical except the 16:9 y scale, camera parameter +0x3A8 = 37000 and +0x1B8 = 370370 in both, and
+   it switches to 16500 when walking out in both (0x125BE0 copies it from the active region object, +0x39C = changed
+   flag). A PCSX2 GS dump at that zone start (ref/pcsx2/snaps/*20261012113302.gs) has the same per-texture Z ranges as
+   ours (38e0 80ac16-80ba2c vs 80aad7-80b8cd, 39e0 808588-808ac9 vs 80859b-8089b7) and the dust (39d0) at the
+   camera too (80ff3e-85d4d4, rgb 9, a 16; ours rgb 7, a 13). Only near differs slightly (+0x384: -10.0049 vs -10.0).
+   A PCSX2 burst during the walk out of the save room (port/b5/pcsx2_walk_burst.png, 0.4-3.9 s) shows the dust over
+   Kratos's lower body on the PS2 too at ~1.8 s, gone by ~2.5 s, when the dust becomes the far 1080-vertex strip
+   (*20261012120341.gs: Z 8019a3-8023fb). So the orange in our 2.2 s capture is mostly this transition caught at a
+   different instant; what may remain is a brightness/timing difference, not measured frame-exactly. Lower priority.
 - 05:2x merged and verified (ext 34d35ff cliffs60, then discfiles + t01clock as 52630c6): port/merged8/20261012_050655:
   60/60/60/60 fps, game speed 1.00 all zones, extracted files (no ISO), savetest ok. Timers: 0 accesses from game code.
   Decision: discfiles and t01clock were gated together (one full 35-min rebuild instead of two); both had passed
@@ -761,3 +772,10 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   (15 bits) instead of the game's own 31-bit rand; fix = drop the stub, regenerate that function
   (port/output-usa-rand); to be merged with the camera fix or alone after its gate.
 - 12:0x VERIFIED FMV video (port/merged12/20261012_114149, ext e21f2f2): 60 x4, speed 1.00 x4, savetest ok.
+- 12:1x: Kratos tint (defect 4) is mostly timing, not a bug: at a matched state camera, projection and depth match
+  PCSX2 (PINE + GS dump); the PS2 also shows the save-room exit dust over Kratos for ~0.7 s. Low priority now.
+  rand fix (31-bit game rand instead of the 15-bit stub) to be merged after the current gate.
+- 12:3x VERIFIED new-game texture row decode (port/merged13/20261012_115916, ext 9de5084): slots 0-4 all 60 fps,
+  speed 1.00, savetest ok. zones.py slot 0 = new game (ship start). Merged GS debug tools (611993b) and the rand
+  fix (runner sub_0028C0C8 regenerated as the game's own function; port/usa/recomp*.toml: rand stub commented out);
+  gate running. New fork: agent/pipeline (ship start 43 fps: VU1 + GS frontend serial in one worker job).

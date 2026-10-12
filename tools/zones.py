@@ -3,7 +3,8 @@
 usage: python -I tools/zones.py [--slots 1,2,3,4] [--card <Mcd.ps2>] [--secs 200] [--diff] [--baseline <report dir>] [--out <dir>]
 
 For each slot (= one zone of the user's save card) the real runner is started with the play configuration and a pad
-script (load the slot, wait for gameplay, walk in the four directions, wait). Per zone it records:
+script (load the slot, wait for gameplay, walk in the four directions, wait). Slot 0 is a NEW GAME instead (title ->
+New Game -> Hero -> the Aegean Sea ship), walking and attacking. Per zone it records:
   * reached gameplay (state 11) and how long that took,
   * game fps (guest_flip_hz of the last windows) against the 25 fps floor,
   * game speed (GOW_DELTA_DIAG [gow-speed]: game seconds per wall second, 1.00 = real time; warning outside 0.9-1.1),
@@ -114,6 +115,16 @@ def image_distance(a, b):
 
 
 def pad_script(slot, walk):
+    if slot == 0:
+        # New game: title -> New Game -> difficulty (Hero) -> the Aegean Sea ship; walk and attack (square) so
+        # Kratos fights the first enemies instead of dying.
+        keys = ['5:start', '14:x', '20:x', '26:x', '32:x']
+        t0 = 8
+        for direction in walk:
+            keys.append(f'g{t0:g}:{direction}*3')
+            keys += [f'g{t0 + 0.5 + 0.5 * i:g}:cuadrado*0.2' for i in range(8)]
+            t0 += 5
+        return ','.join(keys), t0
     keys = ['5:start', '16:abajo', '24:x']
     t = 85.0
     for _ in range(slot - 1):
