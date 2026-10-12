@@ -134,7 +134,7 @@ The pipeline is still manual; the exact steps and their build cost are in
 3. Generate the native IOP and VU1 code (`tools/iop/iopn_gen.py`, `tools/vu1/`; see docs/native-port.md).
 4. Build `ps2EntryRunner` (Release) and run it with `play.cmd`.
 
-Test runs: `python tools/zones.py --slots 1,2,3,4` (silent by default, `--audio` for sound) and `python tools/savetest.py`.
+Test runs: `python tools/zones.py --slots 1,2,3,4` (sound on, `--silent` mutes) and `python tools/savetest.py`.
 
 ## How it works
 
