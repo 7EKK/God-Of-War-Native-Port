@@ -407,6 +407,32 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
     }
 }
 
+uint64_t EeScheduler::catchUpToHost(uint64_t maxCycles) noexcept
+{
+    uint64_t target = 0u;
+    {
+        std::lock_guard lock(m_eventMutex);
+        const auto now = std::chrono::steady_clock::now();
+        for (const ScheduledEvent &item : m_deadlines)
+        {
+            if (item.hostDeadline <= now && item.deadlineCycle > m_eeCycle && item.deadlineCycle > target)
+                target = item.deadlineCycle; // the latest event that is already due on the host clock
+        }
+    }
+    if (target <= m_eeCycle)
+        return 0u;
+    uint64_t missing = std::min(target - m_eeCycle, maxCycles);
+    const uint64_t added = missing;
+    while (missing != 0u)
+    {
+        const uint32_t step = static_cast<uint32_t>(std::min<uint64_t>(missing, 0x40000000u));
+        accountCycles(step);
+        missing -= step;
+    }
+    m_checkpointPending.store(true, std::memory_order_release);
+    return added;
+}
+
 bool EeScheduler::isExecutingGuest() const noexcept
 {
     return m_guestExecuting.load(std::memory_order_acquire);

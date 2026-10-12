@@ -21,11 +21,21 @@ extern "C"
 }
 #endif
 
+#include <atomic>
+#include <chrono>
+#include <cstdio>
 #include <deque>
 #include <map>
 #include <memory>
 
 #include "Syscalls/Helpers/State.h"
+
+// Audio device position, defined in ps2_runtime.cpp (movie A/V check, GOW_MPEG_DIAG).
+extern std::atomic<uint64_t> g_gowAudioFramesPlayed, g_gowAudioFramesProduced;
+// Time spent in the decoder stubs (movie cost check, printed by the GOW_MPEG_DIAG sync line).
+namespace { double g_mpegGetMs = 0.0, g_mpegDemuxMs = 0.0;
+  struct MpegTimer { double &acc; std::chrono::steady_clock::time_point t = std::chrono::steady_clock::now();
+    ~MpegTimer() { acc += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count(); } }; }
 
 namespace ps2_stubs
 {
@@ -2277,6 +2287,7 @@ namespace ps2_stubs
 
     void sceMpegDemuxPss(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        MpegTimer timer{g_mpegDemuxMs};
         const uint32_t mpegAddr = getRegU32(ctx, 4);
         const uint32_t dataAddr = getRegU32(ctx, 5);
         const uint32_t byteCount = getRegU32(ctx, 6);
@@ -2562,6 +2573,7 @@ namespace ps2_stubs
 
     void sceMpegGetPicture(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        MpegTimer timer{g_mpegGetMs};
         const uint32_t mpegAddr = getRegU32(ctx, 4);
         const uint32_t imageAddr = getRegU32(ctx, 5);
         const uint32_t entryMbCount = getRegU32(ctx, 6);
@@ -2709,6 +2721,16 @@ namespace ps2_stubs
         // GOW-Port: GOW_MPEG_DIAG=1 traces the first pictures handed to the game (decoder output check).
         static const bool s_mpegDiag = std::getenv("GOW_MPEG_DIAG") != nullptr;
         static uint32_t s_mpegDiagCount = 0u;
+        // A/V check: every 30th picture, wall time and the audio device position (ps2_runtime.cpp counters).
+        if (s_mpegDiag && haveFrame && frameCount % 30u == 0u)
+        {
+            static const auto t0 = std::chrono::steady_clock::now();
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            std::fprintf(stderr, "[MPEG:sync] frame=%u pts=%llu wall_ms=%.1f audio_played=%llu audio_produced=%llu get_ms=%.1f demux_ms=%.1f\n",
+                         static_cast<unsigned>(frameCount), static_cast<unsigned long long>(frame.pts90k), ms,
+                         static_cast<unsigned long long>(g_gowAudioFramesPlayed.load()),
+                         static_cast<unsigned long long>(g_gowAudioFramesProduced.load()), g_mpegGetMs, g_mpegDemuxMs);
+        }
         if (s_mpegDiag && s_mpegDiagCount < 400u)
         {
             ++s_mpegDiagCount;

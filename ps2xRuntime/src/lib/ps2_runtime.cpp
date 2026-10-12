@@ -38,6 +38,10 @@ static bool gowUsePcsx2Vu1(); // GOW_VU1_PCSX2=1, defined before PS2Runtime::ini
 #include <cstdio>
 #include <cstdlib>
 
+// GOW-Port: audio device position for the movie A/V check (GOW_MPEG_DIAG, Kernel/Stubs/MPEG.cpp): frames the device
+// has played (including silence fill) and frames the sound engine produced (= GOW_AUDIO_PCM file position).
+std::atomic<uint64_t> g_gowAudioFramesPlayed{0};
+std::atomic<uint64_t> g_gowAudioFramesProduced{0};
 #if !defined(PLATFORM_VITA)
 namespace
 {
@@ -54,6 +58,8 @@ namespace
         size_t produced = 0u;
         if (ps2x::iop::IopSubsystem *source = g_spu2AudioSource.load(std::memory_order_acquire))
             produced = source->drainAudio(out, frames, kSpu2MaxLatencyFrames);
+        g_gowAudioFramesPlayed.fetch_add(frames, std::memory_order_relaxed);
+        g_gowAudioFramesProduced.fetch_add(produced, std::memory_order_relaxed);
         // GOW-Port: GOW_AUDIO_PCM=<archivo> guarda las muestras emuladas (s16le, estéreo, 48 kHz) sin los
         // silencios de relleno, para comprobar el audio aunque la emulación vaya más lenta que el tiempo real.
         static std::FILE *pcm = []() -> std::FILE *

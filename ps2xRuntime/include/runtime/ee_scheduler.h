@@ -280,6 +280,10 @@ public:
     void postEvent(EeEvent event);
     [[nodiscard]] bool checkpointDue(uint32_t cycles = kGeneratedCheckpointCycles) noexcept;
     void accountCycles(uint32_t cycles) noexcept;
+    // GOW-Port: for a guest busy-wait that never blocks (the movie player): when guest time has fallen behind the
+    // host clock (a scheduled event's host deadline has passed but its guest cycle is not reached), account the
+    // missing cycles (at most maxCycles) so guest time, EE timers and the IOP keep real time. Returns cycles added.
+    uint64_t catchUpToHost(uint64_t maxCycles) noexcept;
     [[nodiscard]] bool isExecutingGuest() const noexcept;
 
     // Kernel object API. All calls except postEvent/requestStop execute on the
