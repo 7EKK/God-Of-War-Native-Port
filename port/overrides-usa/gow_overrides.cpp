@@ -31,6 +31,7 @@ void sub_0013DC78_0x13dc78(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
 namespace
 {
     uint32_t readGuest32(const uint8_t *rdram, uint32_t addr);
+    void writeGuest32(uint8_t *rdram, uint32_t addr, uint32_t value);
     void gowDiagPrimPoll(uint8_t *rdram, double seconds);
     // libpad2 uses socket handles and an 18-byte payload, unlike libpad's
     // port/slot API and 32-byte status packet. God of War expects state 1 and
@@ -138,6 +139,12 @@ namespace
         static const auto testStart = std::chrono::steady_clock::now();
         if (smokeTest)
         {
+            // the script alone drives the test: a connected gamepad or the keyboard must not leak into it (stick drift
+            // of a real pad changed the save slot picked and the walk of the zone checks)
+            state[2] = state[3] = 0xFF;
+            state[4] = state[5] = state[6] = state[7] = 128;
+            for (size_t i = 8; i < sizeof(state); ++i)
+                state[i] = 0;
             const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - testStart).count();
             // GOW-Port: times written "g<s>" in GOW_PAD_GUION / GOW_PAD_CAPTURAS count from the start of gameplay
             // (first state 11 with nothing pending), so runs at different speeds act at the same point in the game.
@@ -206,6 +213,37 @@ namespace
                 const char *value = std::getenv("GOW_PAD_TEST_NO_CAPTURE");
                 return value && std::strcmp(value, "1") == 0;
             }();
+            // GOW-Port: GOW_PLAYER_TRACE=1 logs once per second Kratos's position (0x2C7790; player
+            // object *0x29E5CC), the game state and the movie state, to steer scripted runs.
+            // GOW_GOD_MODE=1 (test runs only): Kratos's health (creature *0x29D2B4, +0x198 current, +0x19C maximum,
+            // floats) is refilled every poll so long scripted runs are not ended by deaths.
+            static const bool godMode = std::getenv("GOW_GOD_MODE") != nullptr;
+            if (godMode)
+                if (const uint32_t creature = readGuest32(rdram, 0x29D2B4u) & 0x01FFFFFFu; creature >= 0x100000u)
+                {
+                    const uint32_t maximum = readGuest32(rdram, creature + 0x19Cu);
+                    float value = 0;
+                    std::memcpy(&value, &maximum, 4);
+                    if (value > 0.0f && value <= 10000.0f)
+                        writeGuest32(rdram, creature + 0x198u, maximum);
+                }
+            static const bool playerTrace = std::getenv("GOW_PLAYER_TRACE") != nullptr;
+            static double nextPlayerReport = 0;
+            if (playerTrace && seconds >= nextPlayerReport)
+            {
+                nextPlayerReport = seconds + 1;
+                const uint32_t player = readGuest32(rdram, 0x29E5CCu) & 0x01FFFFFFu;
+                // 0x2C7790: a world position vector that follows Kratos's walk (found by RAM diffs while walking).
+                float pos[3]{};
+                std::memcpy(pos, rdram + 0x2C7790u, sizeof(pos));
+                const uint32_t creature = readGuest32(rdram, 0x29D2B4u) & 0x01FFFFFFu;
+                float health = 0;
+                if (creature >= 0x100000u)
+                    std::memcpy(&health, rdram + creature + 0x198u, 4);
+                std::fprintf(stderr, "[gow-player] t=%.1f g=%.1f obj=%x pos=%.1f,%.1f,%.1f hp=%.0f state=%u movie=%u\n", seconds,
+                             gameplayStart >= 0.0 ? seconds - gameplayStart : -1.0, player, pos[0], pos[1], pos[2], health,
+                             readGuest32(rdram, 0x29E560u), readGuest32(rdram, 0x29C838u));
+            }
             static double nextStateReport = 0;
             static const bool primDiag = [] { const char *diag=std::getenv("GOW_EE_PRIM_DIAG"); return diag && std::strcmp(diag,"1")==0; }();
             if (primDiag)
@@ -690,32 +728,70 @@ namespace
         padReturn(ctx, 0u);
     }
 
-    // GOW-Port: GOW_MOVIE_OVERRIDE=<name> (debug) plays that movie (e.g. Semo02, a01mp05) instead of the first one the
-    // game loads, so any movie can be checked through the intro path. The name is written into the game's own buffer
-    // when it fits (the string plus the zero bytes after it).
+    // GOW-Port: GOW_MOVIE_OVERRIDE=<name> (debug) plays that movie (e.g. Semo02, BONUS03) instead of the first one the
+    // game loads, so any movie can be checked through the intro path. 0x188CA0 copies its name argument (a0) into the
+    // movie struct (0x304D10), so the override name is put on the guest stack below sp and a0 points there; the
+    // game's own buffer (the intro's holds 6 characters) is not written.
     void gowMovieOverrideLoad(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         static bool done = false;
         static const char *override = std::getenv("GOW_MOVIE_OVERRIDE");
-        if (!done && override && *override)
+        const size_t len = override ? std::strlen(override) : 0;
+        if (done || len == 0 || len > 31)
+        {
+            sub_00188CA0_0x188ca0(rdram, ctx, runtime);
+            return;
+        }
+        done = true;
+        const uint32_t sp = GPR_U32(ctx, 29);
+        const uint32_t name = sp - 32u;
+        uint8_t *buffer = padBuffer(rdram, name, 32);
+        const uint8_t *old = padBuffer(rdram, GPR_U32(ctx, 4), 1);
+        std::fprintf(stderr, "[gow-fmv] override %s -> %s\n", old ? reinterpret_cast<const char *>(old) : "?", override);
+        std::memset(buffer, 0, 32);
+        std::memcpy(buffer, override, len);
+        SET_GPR_U32(ctx, 4, name);
+        SET_GPR_U32(ctx, 29, name);
+        sub_00188CA0_0x188ca0(rdram, ctx, runtime);
+        SET_GPR_U32(ctx, 29, sp);
+    }
+
+    // GOW-Port: GOW_BONUS_MOVIE=<NN> (debug) plays bonus movie NN (BONUS03, 06, 10, 12, 14, 16, 17, 18, 24, 25) from
+    // the main menu the way the Treasures menu does, without unlocking it: its command handler 0x1BA2C8 writes the two
+    // digits into the game's "BonusXX" buffer (0x29CC00) and sets the menu object's movie name (+0x1518) and +0x1520;
+    // the menu update 0x1BA4F8 then starts it with 0x1B2D20(name, 3, 1) and returns to the menu when it ends. The
+    // request is made once, GOW_BONUS_MOVIE_DELAY seconds (default 10) after the menu update first runs.
+    void gowDiagBonusMovie(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static const char *movie = std::getenv("GOW_BONUS_MOVIE");
+        static const double delay = [] { const char *v = std::getenv("GOW_BONUS_MOVIE_DELAY"); return v ? std::atof(v) : 10.0; }();
+        static const auto first = std::chrono::steady_clock::now();
+        static bool done = false;
+        if (!done && std::chrono::duration<double>(std::chrono::steady_clock::now() - first).count() >= delay)
         {
             done = true;
-            if (char *name = reinterpret_cast<char *>(padBuffer(rdram, GPR_U32(ctx, 4), 32)))
+            uint8_t *name = padBuffer(rdram, 0x0029CC00u, 8);
+            uint8_t *menu = padBuffer(rdram, GPR_U32(ctx, 4), 0x1528);
+            if (name && menu && std::strlen(movie) == 2 && std::memcmp(name, "Bonus", 5) == 0)
             {
-                size_t room = std::strlen(name);
-                while (room < 31 && name[room] == '\0' && name[room + 1] == '\0')
-                    ++room;
-                const size_t len = std::strlen(override);
-                if (len < room)
-                {
-                    std::fprintf(stderr, "[gow-fmv] override %s -> %s\n", name, override);
-                    std::memcpy(name, override, len + 1);
-                }
-                else
-                    std::fprintf(stderr, "[gow-fmv] override %s does not fit (%zu bytes)\n", override, room);
+                name[5] = static_cast<uint8_t>(movie[0]);
+                name[6] = static_cast<uint8_t>(movie[1]);
+                const uint32_t address = 0x0029CC00u, one = 1u;
+                std::memcpy(menu + 0x1518, &address, 4);
+                std::memcpy(menu + 0x1520, &one, 4);
+                std::fprintf(stderr, "[gow-fmv] bonus request %.7s (menu %08x)\n", reinterpret_cast<char *>(name),
+                             GPR_U32(ctx, 4));
             }
         }
-        sub_00188CA0_0x188ca0(rdram, ctx, runtime);
+        // movie thread state (0x29C838: 10 loaded, 11 playing, 0 idle) as seen by the menu, for the test scripts
+        static uint32_t lastState = 0u;
+        const uint32_t state = readGuest32(rdram, 0x0029C838u);
+        if (done && state != lastState)
+        {
+            std::fprintf(stderr, "[gow-fmv] menu sees movie state %u -> %u\n", lastState, state);
+            lastState = state;
+        }
+        sub_001BA4F8_0x1ba4f8(rdram, ctx, runtime);
     }
 
     // GOW-Port: the movie thread never blocks: it polls its stream service (0x188B80, called only by the movie
@@ -730,6 +806,12 @@ namespace
 
     void gowSkipMovieReady(uint8_t *, R5900Context *ctx, PS2Runtime *) { padReturn(ctx, 1u); }
     void gowSkipMovieNoop(uint8_t *, R5900Context *ctx, PS2Runtime *) { padReturn(ctx, 0u); }
+    // The level script's movie start request (0x188E80): logged so skipped runs show when a movie would play.
+    void gowSkipMovieStart(uint8_t *, R5900Context *ctx, PS2Runtime *)
+    {
+        std::fprintf(stderr, "[gow-fmv] start request skipped (ra=%x)\n", GPR_U32(ctx, 31));
+        padReturn(ctx, 0u);
+    }
 
     void gowDiagFlashReady(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -1482,7 +1564,7 @@ namespace
         if (const char *skip = std::getenv("GOW_SKIP_FMV"); skip && std::strcmp(skip, "1") == 0)
         {
             runtime.replaceFunction(0x00188CA0u, gowSkipMovieLoad);
-            runtime.replaceFunction(0x00188E80u, gowSkipMovieNoop);
+            runtime.replaceFunction(0x00188E80u, gowSkipMovieStart);
             runtime.replaceFunction(0x00188ED8u, gowSkipMovieReady);
             runtime.replaceFunction(0x00188EF0u, gowSkipMovieReady);
             runtime.replaceFunction(0x00188F20u, gowSkipMovieNoop);
@@ -1492,6 +1574,8 @@ namespace
             runtime.replaceFunction(0x00188B80u, gowMovieStreamService);
             if (std::getenv("GOW_MOVIE_OVERRIDE"))
                 runtime.replaceFunction(0x00188CA0u, gowMovieOverrideLoad);
+            if (std::getenv("GOW_BONUS_MOVIE"))
+                runtime.replaceFunction(0x001BA4F8u, gowDiagBonusMovie);
         }
         if (std::getenv("GOW_RENDER_DIAG"))
             for (const uint32_t address : {0x001262C8u, 0x00126310u, 0x0012633Cu, 0x00126368u,
