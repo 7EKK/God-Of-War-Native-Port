@@ -371,9 +371,10 @@ void main()
 out vec4 oColor;
 uniform sampler2D uSrc;
 uniform ivec4 uSrcOffset; // x, y: source pixel of output pixel 0; z: 1 = CT24 (alpha 0x80); w: 1 = alpha x2 as blend factor
+uniform int uSrcEdge; // first source row/column shown; the ones before it repeat it
 void main()
 {
-    ivec2 p = ivec2(gl_FragCoord.xy) + uSrcOffset.xy;
+    ivec2 p = max(ivec2(gl_FragCoord.xy) + uSrcOffset.xy, ivec2(uSrcEdge));
     ivec2 size = textureSize(uSrc, 0);
     vec4 c = (p.x < size.x && p.y < size.y) ? texelFetch(uSrc, p, 0) : vec4(0.0);
     float a = (uSrcOffset.z != 0) ? 128.0 / 255.0 : c.a;
@@ -465,7 +466,7 @@ struct GSHwBackend::Impl
 
     GLuint tableTex = 0, paletteTex = 0;
     GLuint presentProgram = 0, presentVao = 0, presentFbo = 0, presentTex = 0;
-    GLint locPresentSrc = -1, locPresentOffset = -1;
+    GLint locPresentSrc = -1, locPresentOffset = -1, locPresentEdge = -1;
     uint32_t presentW = 0, presentH = 0;
     GLuint shuffleProgram = 0, shuffleVao = 0, shuffleVbo = 0;
     GLint locShTexa = -1;
@@ -616,6 +617,7 @@ struct GSHwBackend::Impl
                 g.LinkProgram(presentProgram);
                 locPresentSrc = g.GetUniformLocation(presentProgram, "uSrc");
                 locPresentOffset = g.GetUniformLocation(presentProgram, "uSrcOffset");
+                locPresentEdge = g.GetUniformLocation(presentProgram, "uSrcEdge");
                 g.GenVertexArrays(1, &presentVao);
                 g.BindVertexArray(vao);
             }
@@ -2349,6 +2351,29 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
         }
     }
 
+    // GOW_GS_HW_EDGELOG=1: every 300 presents, the displayed buffer's first host rows (at x = width/2) and columns
+    // (at y = height/2) before composition (edge artefacts: what the frame buffer holds there)
+    static const bool edgeLog = std::getenv("GOW_GS_HW_EDGELOG") != nullptr;
+    if (edgeLog && d.presentCount % 300 == 0)
+        if (RenderTarget *rt = d.findTarget(fbp))
+        {
+            uint8_t px[4 * 8];
+            g.BindFramebuffer(kFramebuffer, rt->fbo);
+            std::fprintf(stderr, "[gs-hw-edge] fbp=%x gl=%ux%u rows:", fbp, rt->glW, rt->glH);
+            for (uint32_t y = 0; y < 8; ++y)
+            {
+                g.ReadPixels(static_cast<GLint>(rt->glW / 2u), static_cast<GLint>(y), 1, 1, kRgba, kUnsignedByte, px);
+                std::fprintf(stderr, " %02x%02x%02x", px[0], px[1], px[2]);
+            }
+            std::fprintf(stderr, " cols:");
+            for (uint32_t x = 0; x < 8; ++x)
+            {
+                g.ReadPixels(static_cast<GLint>(x), static_cast<GLint>(rt->glH / 4u), 1, 1, kRgba, kUnsignedByte, px);
+                std::fprintf(stderr, " %02x%02x%02x", px[0], px[1], px[2]);
+            }
+            std::fprintf(stderr, " usedW=%u pxW=%u\n", rt->usedW, rt->pxW);
+        }
+
     // compose the read circuits on the GPU, then read the result back once
     if (!d.presentProgram)
         return frame;
@@ -2380,6 +2405,11 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
     g.BindVertexArray(d.presentVao);
     g.ActiveTexture(kTexture0);
     g.Uniform1i(d.locPresentSrc, 0);
+    // The displayed buffer's first two PS2 rows and columns hold no picture in our renderer: row 0 is the game's black
+    // line, and row 1 / column 0 receive stale memory where an upstream full-screen pass leaves them unpainted at the
+    // internal scale (the PS2 shows scene there). They showed as a coloured line along the top and left edge; they
+    // now repeat the first painted row/column (a TV's overscan hides this area on the console).
+    g.Uniform1i(d.locPresentEdge, static_cast<GLint>(std::lround(2.0f * d.scale)));
     const bool mmod = ((request.pmode >> 5) & 1u) != 0u, slbg = ((request.pmode >> 7) & 1u) != 0u;
     const uint32_t alp = static_cast<uint32_t>((request.pmode >> 8) & 0xFFu);
     const auto drawCircuit = [&](uint32_t cfbp, uint64_t dispfb, uint32_t cdbx, uint32_t cdby, bool alphaFactor)
