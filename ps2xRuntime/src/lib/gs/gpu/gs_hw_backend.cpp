@@ -837,20 +837,12 @@ struct GSHwBackend::Impl
         }
         ++stats.texDecodes;
         classifyTexture(s);
-        const GSSwizzle::Format &f = GSSwizzle::GetFormat(t.psm);
         tex.width = std::max<uint32_t>(1u, s.textureWidth);
         tex.height = std::max<uint32_t>(1u, s.textureHeight);
         std::vector<uint8_t> indices(static_cast<size_t>(tex.width) * tex.height);
         for (uint32_t y = 0; y < tex.height; ++y)
-        {
-            const GSSwizzle::AxisPart row = GSSwizzle::RowPart(f, t.tbp0, t.tbw, y);
-            uint8_t *line = indices.data() + static_cast<size_t>(y) * tex.width;
-            for (uint32_t x = 0; x < tex.width; ++x)
-            {
-                const GSSwizzle::Location at = GSSwizzle::Combine(f, row, GSSwizzle::ColumnPart(f, x));
-                line[x] = static_cast<uint8_t>(GSSwizzle::LoadAt(f, vram + at.byte, at.shift));
-            }
-        }
+            GSMem::ReadIndexRun(vram, t.psm, t.tbp0, t.tbw, 0u, y, tex.width,
+                                indices.data() + static_cast<size_t>(y) * tex.width);
         tex.blockLo = t.tbp0;
         tex.blockHi = t.tbp0 + spanBlocks(t.psm, t.tbw, tex.height);
         const Api &g = gl();
