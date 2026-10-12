@@ -661,3 +661,16 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
 - Left in step 5: palette loads from a render target still go through a readback into the GS memory image
   (syncTargetToVram, ~2.8k of 8.9k CLUT loads in Olympus). Timers: proposal in docs/native-port.md (T0 game clock,
   T2 kernel alarms). Game speed at 60 fps is 2-3 % fast (step clamped at 1/60 s? unverified).
+
+## 2026-10-12: second round merged (ext 7f31fe8, 9d9b312, 7a9a96b)
+- CLUT from a render target is read on the GPU; no render target is ever read back into GS memory (the case does not
+  occur in zones 1-4: the earlier "2.8k loads" was a false count). GS memory holds only the game's uploads.
+- Game speed exact: the guest clock is paced to wall time within each field (15 pacing points per field in
+  EeScheduler); the 2-3 % excess at 60 fps came from the GS-wait spin running guest time ~10x fast (docs/performance.md).
+- Timer 2 native (DelayThread on the scheduler). T0/T1 still read through the timer model: needs the recompiler to turn
+  constant-address timer COUNT loads into native clock calls (docs/native-port.md "EE timers").
+- Merged main (port/merged6/20261012_021137): 60/60/33/60 fps, game speed 1.00 in all zones, no image warnings vs
+  merged5, savetest ok.
+- GitHub: github.com/Waffle565/God-Of-War-Native-Port (main = this repo, runtime = ext gow-usa-kl); README status map
+  from docs/status-map/data.toml (tools/status_map.py). Push only when the user asks.
+- Next: T0/T1 via the recompiler (USA regeneration + full rebuild), then step 6 (extracted files instead of the ISO).
