@@ -111,6 +111,7 @@ namespace ps2x::iop::detail
         std::array<bool, 2> m_streamHalf{};
         std::vector<int16_t> m_output;
         mutable std::mutex m_outputMutex;
+        double m_resamplePhase = 0.0; // drainOutput: fractional read position when playing back faster
         uint64_t m_lastCycle = 0;
     };
 }

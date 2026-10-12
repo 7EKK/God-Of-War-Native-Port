@@ -1,4 +1,5 @@
 #include "iop_emulator.h"
+#include <cstdio>
 #include "imports/iop_cdvd.h"
 #include "core/iop_cpu.h"
 #include "imports/iop_heaplib.h"
@@ -162,6 +163,8 @@ namespace ps2x::iop::detail
             nextModuleId = 1;
             moduleCursor = kModuleLoadBase;
             totalCycles = 0;
+            scheduledCycles = outsideCycles = driftMark = driftTotalMark = 0;
+            soundBase = runStartTotal = runGrant = lastRunEnd = 0;
             totalInstructions = 0;
             eeCycleCarry = 0;
             activeCpu = nullptr;
@@ -582,7 +585,10 @@ namespace ps2x::iop::detail
                 cpu.gpr[29] = kCallStackBase - 32u;
             }
             cpu.gpr[31] = kCallReturnSentinel;
+            const uint64_t callStartCycles = totalCycles;
             runCpu(cpu, budget);
+            if (depth == 0u)
+                outsideByAddress[address] += totalCycles - callStartCycles;
             if (!cpu.stopped && !cpu.yielded)
             {
                 // GOW-Port: avisar en vez de abandonar la llamada en silencio.
@@ -694,11 +700,11 @@ namespace ps2x::iop::detail
             if (nativeStats)
             {
                 const auto t0 = std::chrono::steady_clock::now();
-                sound.advanceTo(totalCycles);
+                sound.advanceTo(soundBase + std::min(totalCycles - runStartTotal, runGrant));
                 spuSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
             }
             else
-                sound.advanceTo(totalCycles);
+                sound.advanceTo(soundBase + std::min(totalCycles - runStartTotal, runGrant));
         }
 
         void servicePendingGuestCallbacks()
@@ -773,6 +779,36 @@ namespace ps2x::iop::detail
             ++runCyclesCalls;
             try
             {
+                // GOW_IOP_DRIFT=1: every ~5 s of EE-granted cycles, how far the IOP clock moved beyond them and how
+                // much of that happened outside runCycles (EE-side RPC calls into IOP servers, module starts)
+                static const bool driftLog = std::getenv("GOW_IOP_DRIFT") != nullptr;
+                const uint64_t outside = totalCycles - lastRunEnd;
+                outsideCycles += outside;
+                runStartTotal = totalCycles;
+                runGrant = cycles;
+                scheduledCycles += cycles;
+                if (driftLog && scheduledCycles - driftMark >= 5u * 36864000u)
+                {
+                    static auto driftWall = std::chrono::steady_clock::now();
+                    const auto wallNow = std::chrono::steady_clock::now();
+                    std::fprintf(stderr, "[iop-drift] wall=%.3f granted=%llu advanced=%llu outside=%llu\n",
+                                 std::chrono::duration<double>(wallNow - driftWall).count(),
+                                 static_cast<unsigned long long>(scheduledCycles - driftMark),
+                                 static_cast<unsigned long long>(totalCycles - driftTotalMark),
+                                 static_cast<unsigned long long>(outsideCycles));
+                    std::vector<std::pair<uint64_t, uint32_t>> top;
+                    for (const auto &[address, spent] : outsideByAddress)
+                        top.emplace_back(spent, address);
+                    std::sort(top.rbegin(), top.rend());
+                    for (size_t i = 0; i < top.size() && i < 5u; ++i)
+                        std::fprintf(stderr, "[iop-drift]   call %08x cycles=%llu\n", top[i].second,
+                                     static_cast<unsigned long long>(top[i].first));
+                    outsideByAddress.clear();
+                    driftWall = wallNow;
+                    driftMark = scheduledCycles;
+                    driftTotalMark = totalCycles;
+                    outsideCycles = 0;
+                }
                 const uint64_t target = totalCycles + cycles;
                 while (totalCycles < target)
                 {
@@ -819,6 +855,9 @@ namespace ps2x::iop::detail
                         ++totalCycles;
                 }
                 serviceSound(); // GOW-Port: al dia tambien tras saltar ciclos ociosos hasta el final
+                soundBase += cycles;
+                runGrant = 0;
+                lastRunEnd = totalCycles;
             }
             catch (...)
             {
@@ -1034,6 +1073,14 @@ namespace ps2x::iop::detail
         uint32_t nextModuleId = 1;
         uint32_t moduleCursor = kModuleLoadBase;
         uint64_t totalCycles = 0;
+        // The sound engine's sample clock counts only the IOP cycles the EE granted (runCycles), each call clamped to its
+        // grant: IOP work outside runCycles (EE-side RPC calls into IOP servers) and overshoot inside it (callbacks
+        // running past the target) move totalCycles ahead of the EE. Counting those made the sample clock ~1.3x real
+        // time on the title screen and menus (a dbcman RPC at 0x12BCC alone costs ~10 M IOP cycles/s there) and the
+        // audio output dropped ~30 % of the samples: an audible crackle.
+        uint64_t soundBase = 0, runStartTotal = 0, runGrant = 0, lastRunEnd = 0;
+        uint64_t scheduledCycles = 0, outsideCycles = 0, driftMark = 0, driftTotalMark = 0; // GOW_IOP_DRIFT
+        std::unordered_map<uint32_t, uint64_t> outsideByAddress; // GOW_IOP_DRIFT: cycles of top-level calls per address
         uint64_t totalInstructions = 0;
         uint64_t eeCycleCarry = 0;
         CpuState *activeCpu = nullptr;

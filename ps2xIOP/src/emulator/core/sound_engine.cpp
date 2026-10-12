@@ -1,6 +1,9 @@
 #include "sound_engine.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace ps2x::iop::detail
@@ -72,6 +75,10 @@ namespace ps2x::iop::detail
     {
         Core &c = m_cores[coreOf(entry)];
         const uint32_t voice = voiceOf(entry);
+        // GOW_SND_REGLOG=1: core-level writes (MMIX, master/effect/input volumes) as the driver sets them
+        static const bool regLog = std::getenv("GOW_SND_REGLOG") != nullptr;
+        if (regLog && idOf(entry) >= IdMmix && idOf(entry) <= IdBvolR)
+            std::fprintf(stderr, "[snd-reg] core=%u id=%02x value=%04x\n", coreOf(entry), idOf(entry), value);
         switch (idOf(entry))
         {
         case IdVolL: if (voice < VoicesPerCore) c.voices[voice].volL = value; break;
@@ -577,18 +584,79 @@ namespace ps2x::iop::detail
         return m_output.size() / 2u;
     }
 
+    // The device asks for maxFrames; the engine produces at the guest's IOP clock, which can run slightly faster than the
+    // device (the title screen and menus run the guest clock ~3.7 % ahead of the wall clock). Above the latency target the
+    // buffer is played back up to 5 % faster with linear interpolation instead of dropping blocks of samples (an audible
+    // crackle); at or below the target the samples are copied as they are. Only a buffer far above the target (after a
+    // stall) is cut back.
     size_t SoundEngine::drainOutput(int16_t *stereo, size_t maxFrames, size_t maxLatencyFrames)
     {
         std::lock_guard<std::mutex> lock(m_outputMutex);
-        const size_t available = m_output.size() / 2u;
-        if (maxLatencyFrames != SIZE_MAX && available > maxFrames + maxLatencyFrames)
+        size_t available = m_output.size() / 2u;
+        size_t dropped = 0;
+        double rate = 1.0;
+        if (maxLatencyFrames != SIZE_MAX)
         {
-            const size_t drop = available - maxFrames - maxLatencyFrames;
-            m_output.erase(m_output.begin(), m_output.begin() + static_cast<std::ptrdiff_t>(drop * 2u));
+            if (available > maxFrames + 4u * maxLatencyFrames)
+            {
+                dropped = available - maxFrames - maxLatencyFrames;
+                m_output.erase(m_output.begin(), m_output.begin() + static_cast<std::ptrdiff_t>(dropped * 2u));
+                available -= dropped;
+                m_resamplePhase = 0.0;
+            }
+            const double over = (static_cast<double>(available) - static_cast<double>(maxFrames + maxLatencyFrames)) /
+                                static_cast<double>(maxLatencyFrames);
+            rate = 1.0 + std::clamp(over * 0.1, 0.0, 0.05);
         }
-        const size_t frames = std::min(maxFrames, m_output.size() / 2u);
-        std::copy_n(m_output.begin(), frames * 2u, stereo);
-        m_output.erase(m_output.begin(), m_output.begin() + static_cast<std::ptrdiff_t>(frames * 2u));
+        size_t frames = 0;
+        double position = m_resamplePhase;
+        if (rate == 1.0 && position == 0.0)
+        {
+            frames = std::min(maxFrames, available);
+            std::copy_n(m_output.begin(), frames * 2u, stereo);
+            position = static_cast<double>(frames);
+        }
+        else
+        {
+            for (; frames < maxFrames; ++frames, position += rate)
+            {
+                const size_t index = static_cast<size_t>(position);
+                if (index + 1u >= available)
+                    break;
+                const double fraction = position - static_cast<double>(index);
+                for (size_t side = 0; side < 2u; ++side)
+                {
+                    const double a = m_output[index * 2u + side], b = m_output[(index + 1u) * 2u + side];
+                    stereo[frames * 2u + side] = static_cast<int16_t>(std::lround(a + (b - a) * fraction));
+                }
+            }
+        }
+        const size_t consumed = std::min(available, static_cast<size_t>(position));
+        m_resamplePhase = position - static_cast<double>(consumed);
+        m_output.erase(m_output.begin(), m_output.begin() + static_cast<std::ptrdiff_t>(consumed * 2u));
+        // GOW_AUDIO_STATS=1: every ~5 s, frames requested by the device, frames missing (underrun -> silence), frames
+        // dropped after a stall, the highest playback rate and the buffered level
+        static const bool stats = std::getenv("GOW_AUDIO_STATS") != nullptr;
+        if (stats)
+        {
+            static size_t requested = 0, missing = 0, droppedSum = 0, calls = 0, minLevel = SIZE_MAX, maxLevel = 0;
+            static double maxRate = 1.0;
+            requested += maxFrames;
+            missing += maxFrames - frames;
+            droppedSum += dropped;
+            maxRate = std::max(maxRate, rate);
+            minLevel = std::min(minLevel, available);
+            maxLevel = std::max(maxLevel, available);
+            ++calls;
+            if (requested >= 240000u)
+            {
+                std::fprintf(stderr, "[audio-stats] requested=%zu missing=%zu dropped=%zu calls=%zu rate<=%.4f level=%zu-%zu\n",
+                             requested, missing, droppedSum, calls, maxRate, minLevel, maxLevel);
+                requested = missing = droppedSum = calls = maxLevel = 0;
+                minLevel = SIZE_MAX;
+                maxRate = 1.0;
+            }
+        }
         return frames;
     }
 }
