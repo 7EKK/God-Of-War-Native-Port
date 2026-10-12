@@ -258,7 +258,6 @@ void GSTextureStore::UploadAligned(const uint8_t *data, uint32_t sizeBytes)
     const uint8_t dpsm = m_transfer.bitbltbuf.dpsm;
     const uint32_t rrw = m_transfer.trxreg.rrw;
     const uint32_t dsax = m_transfer.trxpos.dsax, dsay = m_transfer.trxpos.dsay;
-    uint32_t offset = 0u;
     auto advance = [&](uint32_t count)
     {
         m_state.copiedPixels = std::min<uint32_t>(m_state.totalPixels, m_state.copiedPixels + count);
@@ -271,67 +270,25 @@ void GSTextureStore::UploadAligned(const uint8_t *data, uint32_t sizeBytes)
         m_state.x = dsax + (m_state.copiedPixels % rrw);
         m_state.y = dsay + (m_state.copiedPixels / rrw);
     };
-    while (offset < sizeBytes && m_state.direction == 0u)
+    uint32_t bits;
+    switch (dpsm)
     {
-        switch (dpsm)
-        {
-        case GS_PSM_CT32:
-        case GS_PSM_Z32:
-        {
-            if (sizeBytes - offset < 4u)
-                return;
-            uint32_t value;
-            std::memcpy(&value, data + offset, 4u);
-            writePixel(m_vram, dpsm, dbp, dbw, m_state.x, m_state.y, value);
-            offset += 4u;
-            advance(1u);
-            break;
-        }
-        case GS_PSM_CT24:
-        case GS_PSM_Z24:
-        {
-            if (sizeBytes - offset < 3u)
-                return;
-            const uint32_t value = data[offset] | (static_cast<uint32_t>(data[offset + 1u]) << 8u) | (static_cast<uint32_t>(data[offset + 2u]) << 16u);
-            writePixel(m_vram, dpsm, dbp, dbw, m_state.x, m_state.y, value);
-            offset += 3u;
-            advance(1u);
-            break;
-        }
-        case GS_PSM_CT16:
-        case GS_PSM_CT16S:
-        case GS_PSM_Z16:
-        case GS_PSM_Z16S:
-        {
-            if (sizeBytes - offset < 2u)
-                return;
-            uint16_t value;
-            std::memcpy(&value, data + offset, 2u);
-            writePixel(m_vram, dpsm, dbp, dbw, m_state.x, m_state.y, value);
-            offset += 2u;
-            advance(1u);
-            break;
-        }
-        case GS_PSM_T8:
-        case GS_PSM_T8H:
-            writePixel(m_vram, dpsm, dbp, dbw, m_state.x, m_state.y, data[offset++]);
-            advance(1u);
-            break;
-        case GS_PSM_T4:
-        case GS_PSM_T4HL:
-        case GS_PSM_T4HH:
-        {
-            const uint8_t packed = data[offset++];
-            const uint32_t first = m_state.copiedPixels;
-            writePixel(m_vram, dpsm, dbp, dbw, dsax + (first % rrw), dsay + (first / rrw), packed & 0x0Fu);
-            if (first + 1u < m_state.totalPixels)
-                writePixel(m_vram, dpsm, dbp, dbw, dsax + ((first + 1u) % rrw), dsay + ((first + 1u) / rrw), (packed >> 4u) & 0x0Fu);
-            advance(std::min<uint32_t>(2u, m_state.totalPixels - first));
-            break;
-        }
-        default:
-            return;
-        }
+    case GS_PSM_CT32: case GS_PSM_Z32: bits = 32u; break;
+    case GS_PSM_CT24: case GS_PSM_Z24: bits = 24u; break;
+    case GS_PSM_CT16: case GS_PSM_CT16S: case GS_PSM_Z16: case GS_PSM_Z16S: bits = 16u; break;
+    case GS_PSM_T8: case GS_PSM_T8H: bits = 8u; break;
+    case GS_PSM_T4: case GS_PSM_T4HL: case GS_PSM_T4HH: bits = 4u; break;
+    default: return;
+    }
+    // Whole pixels in this chunk (a 24 bit pixel split across chunks is joined by Upload), written one row run at a time.
+    const uint32_t avail = static_cast<uint32_t>((static_cast<uint64_t>(sizeBytes) * 8u) / bits);
+    uint32_t done = 0u;
+    while (done < avail && m_state.direction == 0u)
+    {
+        const uint32_t n = std::min({dsax + rrw - m_state.x, avail - done, m_state.totalPixels - m_state.copiedPixels});
+        GSMem::WriteRun(m_vram, dpsm, dbp, dbw, m_state.x, m_state.y, data, done, n);
+        done += n;
+        advance(n);
     }
 }
 
