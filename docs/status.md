@@ -792,3 +792,7 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   (taskkill /IM), which killed other tests' runs; now they end only their own process.
 - 15:2x VERIFIED VU1/GS pipeline (port/merged16/20261012_150523, ext 832a7b4): zones 0-4 60 fps, speed 1.00,
   savetest ok. User back ~15:15 ("enable the audio"): test runs play sound again; autonomous loop ended.
+- 16:2x VERIFIED movies at real speed (port/merged17/20261012_161100, ext 1fc7911): zones 0-4 60 fps, speed 1.00,
+  savetest ok (sound on). Intro, Semo02, Semo05 play at real speed with sound (A/V: audio ~0.1 s behind, constant).
+  play.cmd now plays the movies (GOW_SKIP_FMV removed); tests still skip them. Unchecked: a01mp05 (ship trigger
+  not reached by the script), BONUS movies.

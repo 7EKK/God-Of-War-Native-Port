@@ -1,8 +1,10 @@
 # FMV (movies)
 
-Status: **the intro movie plays natively with its sound and ends; the game then continues to gameplay.**
-Play and zone runs still set `GOW_SKIP_FMV=1` (it replaces the movie API: 0x188CA0 load, 0x188E80/ED8/EF0/F20, so the
-game continues at once); without it the movies play.
+Status: **movies play natively, at real speed, with their sound, and end; the game then continues.** Checked: the
+intro (Semo01), Semo02 and Semo05 (through `GOW_MOVIE_OVERRIDE`), and the new-game path (the intro, then the ship level
+preloads a01mp05 and waits for its trigger while gameplay runs at 60 fps). `play.cmd` plays the movies; zone and save
+tests still set `GOW_SKIP_FMV=1` (it replaces the movie API: 0x188CA0 load, 0x188E80/ED8/EF0/F20, so the game
+continues at once) to keep the runs short.
 
 ## What exists
 - **Decoder**: the game's libmpeg entry points (`sceMpeg*`, stubbed in the recompiler config) are served by the runtime
@@ -19,7 +21,19 @@ game continues at once); without it the movies play.
   `sceMpegCreate`. Without it the player stayed in its playing state forever after the last picture.
 - GS renderer: `TEST.ZTE = 0` means no depth test (the GS ignores ZTST then). The movie draws its picture sprite with
   `TEST = 0`; it was treated as ZTST NEVER and rejected after the first frame, which froze the picture.
-- `GOW_MPEG_DIAG=1`: pictures handed to the game, `AddStrCallback` registrations, stream-callback call counts.
+- **Real-time playback**: the movie thread never blocks; it polls its stream service (0x188B80, called only by the
+  movie player 0x188848) as fast as it can. Guest time advances only by executed cycles, and the recompiled poll costs
+  more host time per guest cycle than a real EE, so guest time, the IOP and with it the movie sound fell to 0.72x real
+  time (pictures at ~22 fps instead of 30; measured with the sync line below). The override `gowMovieStreamService`
+  calls `EeScheduler::catchUpToHost` before each poll: guest cycles of scheduled events whose host deadline has already
+  passed are accounted (EE timers and IOP included), at most one field per call. Gameplay is not affected (there the
+  guest is never behind the host clock).
+- `GOW_MPEG_DIAG=1`: pictures handed to the game, `AddStrCallback` registrations, stream-callback call counts, and a
+  `[MPEG:sync]` line every 30 pictures (PTS, wall time, audio device position played/produced, time spent in the
+  decoder stubs) plus each stream's first audio packet PTS. `GOW_SND_DIAG=1` adds the device position to the LIBSD
+  stream start (`BlockTrans ... mode=13`).
+- `GOW_MOVIE_OVERRIDE=<name>` (debug): the first movie the game loads is replaced by that one (e.g. `Semo05`); the name
+  must fit the game's buffer (the intro's holds 6 characters: Semo02..Semo13 work, 7-character names do not).
 
 ## How the game plays a movie (USA build)
 - Movie thread 0x189020, state in 0x29C838: 3..9 load, **10** = loaded, waiting; **11** = playing. 0x188E80 (start
@@ -58,7 +72,15 @@ game continues at once); without it the movies play.
 - Check: port/fmvc4v (`GOW_AUDIO_PCM`): the movie section (35-80 s) has sound with the smoothness of real audio
   (first-difference / RMS 0.06-0.28, the menu music measures 0.1-0.2; it was 1.3-1.4 = noise before).
 
+## A/V sync (intro, port/c5/sync5)
+- Picture PTS follows wall time (6.01 s of PTS per 6.00 s of wall; drift = the 29.97/30 rate), and the device plays
+  exactly what the engine produces (no underruns). Semo02: 113.1 s PTS in 113.0 s wall, Semo05: 110.1 in 110.0.
+- Audio and video start at the same PTS (8329). When a picture is handed to the game, the audio produced so far is
+  ~90 ms behind its PTS (picture 30: 1.094 s vs 1.0225 s; picture 600: 20.113 s vs 20.0225 s), constant over the
+  movie; the device buffer adds ~20 ms and the picture is shown 1-2 VBlanks after it is handed over, so what is heard
+  trails what is seen by roughly 0.1 s.
+
 ## Open
-- A/V sync is not measured precisely (the PCM is played as the game feeds it; the picture follows PTS).
 - The movie code still stores to IPU / DMA channel 3/4 registers (they reach no device; no IPU model exists).
-- Other movies than the intro are not checked yet.
+- In-level movies (a01mp05...) and the BONUS movies are not checked while playing (the 7-character names do not fit
+  the override; the level trigger was not reached by the scripted walk).

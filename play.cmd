@@ -11,7 +11,6 @@ if not exist "%ROOT%disc-usa\play.mcd" (
 )
 set PS2X_GS_WORKER=1
 set GOW_GS_FINISH_ASINCRONO=1
-set GOW_SKIP_FMV=1
 set "GOW_MC0=%ROOT%disc-usa\play.mcd"
 cd /d "%EXE_DIR%"
 ps2EntryRunner.exe "%ROOT%disc-usa\SCUS_973.99"

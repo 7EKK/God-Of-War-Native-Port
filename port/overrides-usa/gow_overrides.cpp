@@ -652,6 +652,44 @@ namespace
         padReturn(ctx, 0u);
     }
 
+    // GOW-Port: GOW_MOVIE_OVERRIDE=<name> (debug) plays that movie (e.g. Semo02, a01mp05) instead of the first one the
+    // game loads, so any movie can be checked through the intro path. The name is written into the game's own buffer
+    // when it fits (the string plus the zero bytes after it).
+    void gowMovieOverrideLoad(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static bool done = false;
+        static const char *override = std::getenv("GOW_MOVIE_OVERRIDE");
+        if (!done && override && *override)
+        {
+            done = true;
+            if (char *name = reinterpret_cast<char *>(padBuffer(rdram, GPR_U32(ctx, 4), 32)))
+            {
+                size_t room = std::strlen(name);
+                while (room < 31 && name[room] == '\0' && name[room + 1] == '\0')
+                    ++room;
+                const size_t len = std::strlen(override);
+                if (len < room)
+                {
+                    std::fprintf(stderr, "[gow-fmv] override %s -> %s\n", name, override);
+                    std::memcpy(name, override, len + 1);
+                }
+                else
+                    std::fprintf(stderr, "[gow-fmv] override %s does not fit (%zu bytes)\n", override, room);
+            }
+        }
+        sub_00188CA0_0x188ca0(rdram, ctx, runtime);
+    }
+
+    // GOW-Port: the movie thread never blocks: it polls its stream service (0x188B80, called only by the movie
+    // player 0x188848) as fast as it can. Guest time only advances by executed cycles, and the recompiled poll costs
+    // more host time per guest cycle than a real EE, so guest time, the IOP and the movie sound fell to ~0.72x real
+    // time (pictures at ~22 fps instead of 30). Each poll counts the host time that has passed as guest time.
+    void gowMovieStreamService(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        runtime->eeScheduler().catchUpToHost(EeScheduler::kEeClockHz / 60u);
+        sub_00188B80_0x188b80(rdram, ctx, runtime);
+    }
+
     void gowSkipMovieReady(uint8_t *, R5900Context *ctx, PS2Runtime *) { padReturn(ctx, 1u); }
     void gowSkipMovieNoop(uint8_t *, R5900Context *ctx, PS2Runtime *) { padReturn(ctx, 0u); }
 
@@ -1410,6 +1448,12 @@ namespace
             runtime.replaceFunction(0x00188ED8u, gowSkipMovieReady);
             runtime.replaceFunction(0x00188EF0u, gowSkipMovieReady);
             runtime.replaceFunction(0x00188F20u, gowSkipMovieNoop);
+        }
+        else
+        {
+            runtime.replaceFunction(0x00188B80u, gowMovieStreamService);
+            if (std::getenv("GOW_MOVIE_OVERRIDE"))
+                runtime.replaceFunction(0x00188CA0u, gowMovieOverrideLoad);
         }
         if (std::getenv("GOW_RENDER_DIAG"))
             for (const uint32_t address : {0x001262C8u, 0x00126310u, 0x0012633Cu, 0x00126368u,
