@@ -242,16 +242,26 @@ else()
     endif()
 endif()
 
-if(PS2X_IS_ANDROID)
-    set(PS2X_ENABLE_FFMPEG_DEFAULT OFF)
-else()
-    set(PS2X_ENABLE_FFMPEG_DEFAULT ON)
+# GOW-Port: MPEG video (FMV) is decoded by the vendored libmpeg2 (third_party/libmpeg2, portable C, also builds for
+# the Switch). FFmpeg stays available as an opt-in alternative backend.
+add_library(libmpeg2 STATIC
+    third_party/libmpeg2/alloc.c
+    third_party/libmpeg2/cpu_accel.c
+    third_party/libmpeg2/cpu_state.c
+    third_party/libmpeg2/decode.c
+    third_party/libmpeg2/header.c
+    third_party/libmpeg2/idct.c
+    third_party/libmpeg2/motion_comp.c
+    third_party/libmpeg2/slice.c
+)
+target_include_directories(libmpeg2 PUBLIC third_party/libmpeg2)
+if(MSVC)
+    target_compile_options(libmpeg2 PRIVATE /W0)
 endif()
 
-option(PS2X_ENABLE_FFMPEG "Enable FFmpeg-backed MPEG video decoding" ${PS2X_ENABLE_FFMPEG_DEFAULT})
+option(PS2X_ENABLE_FFMPEG "Decode MPEG video with FFmpeg instead of libmpeg2" OFF)
 
 if(NOT PS2X_ENABLE_FFMPEG)
-    message(STATUS "FFmpeg disabled; MPEG video decode falls back to stub frames")
     add_library(ffmpeg INTERFACE)
 elseif(WIN32)
     include(ExternalProject)
@@ -527,7 +537,7 @@ target_include_directories(ps2_runtime PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel
 )
 
-target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ffmpeg ps2_iop)
+target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ffmpeg libmpeg2 ps2_iop)
 if(WIN32)
     # GOW-Port: WGL propio del hilo GS.
     target_link_libraries(ps2_runtime PRIVATE opengl32 gdi32)

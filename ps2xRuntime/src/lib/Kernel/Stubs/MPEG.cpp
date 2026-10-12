@@ -3,7 +3,7 @@
 #include "runtime/ee_scheduler.h"
 
 #if !defined(PS2X_HAS_FFMPEG)
-#define PS2X_HAS_FFMPEG 1
+#define PS2X_HAS_FFMPEG 0
 #endif
 
 #if PS2X_HAS_FFMPEG
@@ -13,6 +13,11 @@ extern "C"
 #include <libavutil/error.h>
 #include <libavutil/log.h>
 #include <libswscale/swscale.h>
+}
+#else
+extern "C"
+{
+#include <mpeg2.h>
 }
 #endif
 
@@ -444,27 +449,108 @@ namespace ps2_stubs
             bool m_drained = false;
         };
 #else
-        // TODO
+        // GOW-Port: MPEG-2 video decoder on the vendored libmpeg2 (portable C, no FFmpeg; third_party/libmpeg2).
+        // Same interface as the FFmpeg backend: elementary-stream bytes in, RGBA frames (display order) out.
         class MpegFfmpegDecoder
         {
         public:
-            bool feed(const uint8_t *, size_t, std::deque<MpegDecodedFrame> &, int64_t = -1, int64_t = -1)
-            {
-                static bool s_warnedNoFfmpeg = false;
-                if (!s_warnedNoFfmpeg)
-                {
-                    std::cerr << "[MPEG] runtime built without FFmpeg; MPEG video decode is disabled." << std::endl;
-                    s_warnedNoFfmpeg = true;
-                }
-                return false;
-            }
+            MpegFfmpegDecoder() = default;
+            ~MpegFfmpegDecoder() { reset(); }
+            MpegFfmpegDecoder(const MpegFfmpegDecoder &) = delete;
+            MpegFfmpegDecoder &operator=(const MpegFfmpegDecoder &) = delete;
 
-            bool flush(std::deque<MpegDecodedFrame> &)
+            bool feed(const uint8_t *data, size_t size, std::deque<MpegDecodedFrame> &frames, int64_t pts90k = -1, int64_t = -1)
             {
+                if (!data || size == 0)
+                    return true;
+                if (!m_dec && !(m_dec = mpeg2_init()))
+                {
+                    std::cerr << "[MPEG] libmpeg2 init failed" << std::endl;
+                    return false;
+                }
+                m_drained = false;
+                if (pts90k >= 0) // applies to the next picture start code in this data
+                    mpeg2_tag_picture(m_dec, static_cast<uint32_t>(pts90k), static_cast<uint32_t>(static_cast<uint64_t>(pts90k) >> 32));
+                // libmpeg2 reads straight from the buffer until it reports STATE_BUFFER, so the whole input is consumed here.
+                mpeg2_buffer(m_dec, const_cast<uint8_t *>(data), const_cast<uint8_t *>(data) + size);
+                parse(frames);
                 return true;
             }
 
-            void reset() {}
+            bool flush(std::deque<MpegDecodedFrame> &frames)
+            {
+                if (!m_dec || m_drained)
+                    return true;
+                static const uint8_t kSequenceEnd[4] = {0x00, 0x00, 0x01, 0xB7}; // outputs the last reference picture
+                mpeg2_buffer(m_dec, const_cast<uint8_t *>(kSequenceEnd), const_cast<uint8_t *>(kSequenceEnd) + 4);
+                parse(frames);
+                m_drained = true;
+                return true;
+            }
+
+            void reset()
+            {
+                if (m_dec)
+                    mpeg2_close(m_dec);
+                m_dec = nullptr;
+                m_drained = false;
+            }
+
+        private:
+            void parse(std::deque<MpegDecodedFrame> &frames)
+            {
+                const mpeg2_info_t *info = mpeg2_info(m_dec);
+                for (;;)
+                {
+                    const mpeg2_state_t state = mpeg2_parse(m_dec);
+                    if (state == STATE_BUFFER)
+                        return;
+                    if ((state == STATE_SLICE || state == STATE_END || state == STATE_INVALID_END) &&
+                        info->display_fbuf && info->sequence)
+                        emit(*info, frames);
+                }
+            }
+
+            static uint8_t clamp8(int v) { return static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v)); }
+
+            // BT.601 limited range YCbCr -> full range RGB (what the FFmpeg backend's swscale produced), alpha 255.
+            void emit(const mpeg2_info_t &info, std::deque<MpegDecodedFrame> &frames)
+            {
+                const mpeg2_sequence_t &seq = *info.sequence;
+                const int w = static_cast<int>(seq.picture_width), h = static_cast<int>(seq.picture_height);
+                if (w <= 0 || h <= 0)
+                    return;
+                const uint8_t *const *buf = info.display_fbuf->buf;
+                const int yStride = static_cast<int>(seq.width), cStride = static_cast<int>(seq.chroma_width);
+                const int cxShift = seq.chroma_width < seq.width ? 1 : 0, cyShift = seq.chroma_height < seq.height ? 1 : 0;
+                MpegDecodedFrame f;
+                f.width = w;
+                f.height = h;
+                const mpeg2_picture_t *pic = info.display_picture;
+                f.repeatPict = pic && pic->nb_fields > 2u ? static_cast<int>(pic->nb_fields) - 2 : 0;
+                f.pts90k = pic && (pic->flags & PIC_FLAG_TAGS) ? static_cast<int64_t>((static_cast<uint64_t>(pic->tag2) << 32) | pic->tag) : -1;
+                f.rgba.resize(static_cast<size_t>(w) * h * 4u);
+                uint8_t *out = f.rgba.data();
+                for (int y = 0; y < h; ++y)
+                {
+                    const uint8_t *yr = buf[0] + y * yStride;
+                    const uint8_t *ur = buf[1] + (y >> cyShift) * cStride;
+                    const uint8_t *vr = buf[2] + (y >> cyShift) * cStride;
+                    for (int x = 0; x < w; ++x, out += 4)
+                    {
+                        const int c = (yr[x] - 16) * 298 + 128;
+                        const int d = ur[x >> cxShift] - 128, e = vr[x >> cxShift] - 128;
+                        out[0] = clamp8((c + 409 * e) >> 8);
+                        out[1] = clamp8((c - 100 * d - 208 * e) >> 8);
+                        out[2] = clamp8((c + 516 * d) >> 8);
+                        out[3] = 255;
+                    }
+                }
+                frames.push_back(std::move(f));
+            }
+
+            mpeg2dec_t *m_dec = nullptr;
+            bool m_drained = false;
         };
 #endif
 
@@ -1656,7 +1742,9 @@ namespace ps2_stubs
             dispatchStreamCallbacks(rdram, ctx, runtime, events);
         }
 
-        void writeBlankMpegFrame(uint8_t *rdram, uint32_t destAddr, uint32_t width, uint32_t height)
+        // GOW-Port: like libmpeg, at most `capacity` bytes (mbcount macroblocks of 16x16 RGB32 = 1024 bytes) are written:
+        // God of War passes mbcount 0 for its .m2 movies, whose rgb32 buffer is only a few bytes before its GS packet.
+        void writeBlankMpegFrame(uint8_t *rdram, uint32_t destAddr, uint32_t width, uint32_t height, size_t capacity)
         {
             if (!rdram || destAddr == 0u)
             {
@@ -1672,6 +1760,8 @@ namespace ps2_stubs
                     static_cast<size_t>(mbx) * static_cast<size_t>(outHeight) * 16u * 4u;
                 for (uint32_t y = 0u; y < outHeight; ++y)
                 {
+                    if (stripOffset + (static_cast<size_t>(y) + 1u) * 16u * 4u > capacity)
+                        break;
                     uint8_t *dst = getMemPtr(
                         rdram,
                         destAddr + static_cast<uint32_t>(stripOffset + static_cast<size_t>(y) * 16u * 4u));
@@ -1690,7 +1780,7 @@ namespace ps2_stubs
             }
         }
 
-        void writeDecodedFrameToGuest(uint8_t *rdram, uint32_t destAddr, const MpegDecodedFrame &frame)
+        void writeDecodedFrameToGuest(uint8_t *rdram, uint32_t destAddr, const MpegDecodedFrame &frame, size_t capacity)
         {
             if (!rdram || destAddr == 0u || frame.rgba.empty() || frame.width <= 0 || frame.height <= 0)
             {
@@ -1709,6 +1799,8 @@ namespace ps2_stubs
                     static_cast<size_t>(mbx) * static_cast<size_t>(outHeight) * 16u * 4u;
                 for (uint32_t y = 0u; y < outHeight; ++y)
                 {
+                    if (stripOffset + (static_cast<size_t>(y) + 1u) * 16u * 4u > capacity)
+                        break;
                     uint8_t *dst = getMemPtr(
                         rdram,
                         destAddr + static_cast<uint32_t>(stripOffset + static_cast<size_t>(y) * 16u * 4u));
@@ -2394,6 +2486,7 @@ namespace ps2_stubs
     {
         const uint32_t mpegAddr = getRegU32(ctx, 4);
         const uint32_t imageAddr = getRegU32(ctx, 5);
+        const uint32_t entryMbCount = getRegU32(ctx, 6);
         uint32_t width = kStubMovieWidth;
         uint32_t height = kStubMovieHeight;
         uint32_t frameCount = 0u;
@@ -2525,13 +2618,26 @@ namespace ps2_stubs
             }
         }
 
+        // GOW-Port: GOW_MPEG_DIAG=1 traces the first pictures handed to the game (decoder output check).
+        static const bool s_mpegDiag = std::getenv("GOW_MPEG_DIAG") != nullptr;
+        static uint32_t s_mpegDiagCount = 0u;
+        if (s_mpegDiag && s_mpegDiagCount < 400u)
+        {
+            ++s_mpegDiagCount;
+            uint32_t sum = 0u;
+            for (size_t i = 0; i < frame.rgba.size(); i += 4097u)
+                sum += frame.rgba[i];
+            std::cerr << "[MPEG:diag] GetPicture mpeg=0x" << std::hex << mpegAddr << " image=0x" << imageAddr
+                      << " mbcount=0x" << entryMbCount << std::dec << " have=" << haveFrame << " frame=" << frameCount
+                      << " size=" << width << "x" << height << " pts=" << frame.pts90k << " sum=" << sum << std::endl;
+        }
         if (haveFrame)
         {
-            writeDecodedFrameToGuest(rdram, imageAddr, frame);
+            writeDecodedFrameToGuest(rdram, imageAddr, frame, static_cast<size_t>(entryMbCount) * 1024u);
         }
         else if (frameCount == 0u)
         {
-            writeBlankMpegFrame(rdram, imageAddr, width, height);
+            writeBlankMpegFrame(rdram, imageAddr, width, height, static_cast<size_t>(entryMbCount) * 1024u);
         }
 
         setReturnS32(ctx, 0);

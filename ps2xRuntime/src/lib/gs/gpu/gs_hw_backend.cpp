@@ -929,17 +929,21 @@ struct GSHwBackend::Impl
             const uint32_t tlo = t.fbp * 32u, thi = tlo + spanBlocks(t.psm, t.fbw, t.usedH);
             if (tbp < tlo || tbp >= thi)
                 continue;
-            bool overwritten = false;
-            for (const UploadRecord &u : uploadLog)
-                if (u.seq > t.lastDrawSeq && u.lo <= tbp && tbp < u.hi)
-                {
-                    overwritten = true;
-                    break;
-                }
-            if (!overwritten)
+            if (!uploadedSinceDraw(t, tbp))
                 return &t;
         }
         return nullptr;
+    }
+
+    // True when the game uploaded new pixels at `tbp` after the target's last draw: the memory then holds the upload,
+    // not the target's picture (e.g. FMV frames uploaded where a temporary target lived), so the texture comes from
+    // the store.
+    bool uploadedSinceDraw(const RenderTarget &t, uint32_t tbp) const
+    {
+        for (const UploadRecord &u : uploadLog)
+            if (u.seq > t.lastDrawSeq && u.lo <= tbp && tbp < u.hi)
+                return true;
+        return false;
     }
 
     void setupReinterpret(const GSDrawState &s, RenderTarget &rt)
@@ -1643,7 +1647,7 @@ struct GSHwBackend::Impl
             const auto family = [](uint8_t psm) { return (psm == GS_PSM_CT16 || psm == GS_PSM_CT16S) ? 16 : (psm == GS_PSM_CT32 || psm == GS_PSM_CT24) ? 32 : 0; };
             if (family(c.tex0.psm) != 0 && (c.tex0.tbp0 % 32u) == 0u)
                 if (RenderTarget *candidate = findTarget(c.tex0.tbp0 / 32u))
-                    if (family(candidate->psm) == family(c.tex0.psm))
+                    if (family(candidate->psm) == family(c.tex0.psm) && !uploadedSinceDraw(*candidate, c.tex0.tbp0))
                         src = candidate;
             if (src == &rt)
                 g.TextureBarrier();
@@ -1920,6 +1924,7 @@ void GSHwBackend::BeginTransfer(const GSTransferCommand &command)
     d.flushPending();
     d.store.BeginTransfer(command);
     d.noteTransfer(command);
+    }
     if (command.direction == 0u || command.direction == 2u)
     {
         const uint32_t rows = static_cast<uint32_t>(command.trxpos.dsay) + command.trxreg.rrh;
