@@ -316,10 +316,13 @@ namespace ps2x::iop::detail
         std::memcpy(&l, s.base + block + index * 2u, 2u);
         std::memcpy(&r, s.base + block + 0x200u + index * 2u, 2u);
         const Core &c = m_cores[core];
+        // BVOL (sound-data input volume) is a plain 16-bit signed level (0x7FFF = 1.0), not the voice volume format
+        // with fixed/sweep modes; 989snd sets 0x7FFE for the movie stream.
+        const auto inputVolume = [](uint16_t v) { return static_cast<int32_t>(static_cast<int16_t>(v)) >> 1; };
         if ((c.mmix & 0x0080u) != 0u) // MMIX sound-input bits: the driver enables them while its stream runs
-            left += (l * volumeOf(c.bvolL)) >> 14;
+            left += (l * inputVolume(c.bvolL)) >> 14;
         if ((c.mmix & 0x0040u) != 0u)
-            right += (r * volumeOf(c.bvolR)) >> 14;
+            right += (r * inputVolume(c.bvolR)) >> 14;
         const uint32_t before = s.position;
         s.position = block + ((index + 1u) * 2u);
         if (index + 1u == 256u)
