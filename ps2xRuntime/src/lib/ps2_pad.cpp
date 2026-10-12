@@ -3,6 +3,10 @@
 #include <cstdio>
 #include <cstring>
 
+#ifdef _WIN32
+bool ps2PadXInputRumble(uint16_t lowFrequency, uint16_t highFrequency); // ps2_pad_xinput.cpp
+#endif
+
 namespace
 {
     constexpr uint8_t kPadAnalogMarker = 0x73;
@@ -148,5 +152,43 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
 
     data[2] = static_cast<uint8_t>(btns & 0xFF);
     data[3] = static_cast<uint8_t>(btns >> 8);
+
+    if (kGamepad != m_activeGamepad)
+    {
+        m_activeGamepad = kGamepad;
+        applyRumble(false); // the new gamepad takes over the current actuator state
+    }
+    else
+        applyRumble(true);
     return true;
+}
+
+void PSPadBackend::setActuators(int port, bool small, uint8_t large)
+{
+    if (port != 0 || (small == m_small && large == m_large))
+        return;
+    m_small = small;
+    m_large = large;
+    applyRumble(false);
+}
+
+// refresh = periodic call from readState: only backends whose rumble times out need it resent.
+void PSPadBackend::applyRumble(bool refresh)
+{
+#ifdef _WIN32
+    // raylib's GLFW backend has no vibration: XInput directly. XInput keeps the motors running until changed.
+    if (refresh)
+        return;
+    ps2PadXInputRumble(static_cast<uint16_t>(m_large * 257u), m_small ? 0xFFFFu : 0u);
+#else
+    // Other platforms (SDL, Switch): raylib's rumble, which stops after at most 2 s, so it is resent every second.
+    if (m_activeGamepad < 0 || !IsWindowReady())
+        return;
+    const bool on = m_small || m_large;
+    const double now = GetTime();
+    if (refresh && (!on || now - m_rumbleSentAt < 1.0))
+        return;
+    m_rumbleSentAt = now;
+    SetGamepadVibration(m_activeGamepad, m_large / 255.0f, m_small ? 1.0f : 0.0f, on ? 2.0f : 0.1f); // zero motors with any duration stop it
+#endif
 }
