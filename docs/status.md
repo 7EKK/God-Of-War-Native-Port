@@ -796,3 +796,7 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   savetest ok (sound on). Intro, Semo02, Semo05 play at real speed with sound (A/V: audio ~0.1 s behind, constant).
   play.cmd now plays the movies (GOW_SKIP_FMV removed); tests still skip them. Unchecked: a01mp05 (ship trigger
   not reached by the script), BONUS movies.
+- 16:4x: user order "do all except the Switch build, the PC port must be perfect". Three forks from ext 1fc7911:
+  agent/newgame2 (new game past the ship start, a01mp05 trigger), agent/movies2 (BONUS movies, IPU/DMA ch3/4
+  register stores in the movie path, Kratos tint frame-exact), agent/vibration (DualShock actuators -> native
+  gamepad rumble, the 9 IOP startup register stores). Each merges after the usual gate (zones 0-4, savetest).
