@@ -1368,9 +1368,11 @@ struct GSHwBackend::Impl
         const GSPrimType type = s.prim.type;
         const bool tri = type == GS_PRIM_TRIANGLE || type == GS_PRIM_TRISTRIP || type == GS_PRIM_TRIFAN;
         const bool sprite = type == GS_PRIM_SPRITE;
-        if (!tri && !sprite)
+        const bool line = type == GS_PRIM_LINE || type == GS_PRIM_LINESTRIP;
+        if (!tri && !sprite && !line)
         {
             ++stats.skippedPrim;
+            dumpSkipped(s, b, "prim");
             return;
         }
         const uint8_t fpsm = s.context.frame.psm;
@@ -1413,7 +1415,35 @@ struct GSHwBackend::Impl
                 t = 0.0f;
             }
         };
-        if (tri)
+        if (line)
+        {
+            // a GS line covers about one pixel across its length: drawn as a quad one PS2 pixel wide around the segment
+            // (at least one pixel long), colour/Z/texture coordinates taken from the nearer end point. The game uses
+            // them for the sand streaks and for the per-frame black line that clears row 0 of the frame buffer.
+            const GSVertex &a = b.vertices[0], &c = b.vertices[1];
+            float dx = c.x - a.x, dy = c.y - a.y;
+            const float len = std::sqrt(dx * dx + dy * dy);
+            if (len < 1e-4f)
+                dx = 1.0f, dy = 0.0f;
+            else
+                dx /= len, dy /= len;
+            const float ext = len < 1.0f ? (1.0f - len) * 0.5f : 0.0f; // short lines still cover one pixel
+            const float nx = -dy * 0.5f, ny = dx * 0.5f;
+            GSVertex e[2] = {a, c};
+            e[0].x -= dx * ext; e[0].y -= dy * ext;
+            e[1].x += dx * ext; e[1].y += dy * ext;
+            const int order[6][2] = {{0, 1}, {1, 1}, {0, -1}, {1, 1}, {1, -1}, {0, -1}};
+            for (const auto &o : order)
+            {
+                GSVertex v = e[o[0]];
+                v.x += nx * static_cast<float>(o[1]);
+                v.y += ny * static_cast<float>(o[1]);
+                float u, t;
+                texelUV(v, u, t);
+                addVertex(s, v, u, t, zmax);
+            }
+        }
+        else if (tri)
         {
             for (int i = 0; i < 3; ++i)
             {
