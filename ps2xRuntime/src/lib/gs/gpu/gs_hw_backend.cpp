@@ -810,14 +810,39 @@ struct GSHwBackend::Impl
         out.resize(static_cast<size_t>(w) * h);
         for (uint32_t y = 0; y < h; ++y)
         {
-            const GSSwizzle::AxisPart row = GSSwizzle::RowPart(f, t.tbp0, t.tbw, y);
             uint32_t *line = out.data() + static_cast<size_t>(y) * w;
-            for (uint32_t x = 0; x < w; ++x)
+            // One row at a time with the format resolved once (GSMem::ReadColorRun, same page tables as GSSwizzle):
+            // big direct-colour textures (CT24 views of CT32 uploads in the Aegean Sea) were decoded per texel.
+            if (!GSMem::ReadColorRun(vram, t.psm, t.tbp0, t.tbw, 0u, y, w, line))
             {
-                const GSSwizzle::Location at = GSSwizzle::Combine(f, row, GSSwizzle::ColumnPart(f, x));
-                const uint32_t raw = GSSwizzle::LoadAt(f, vram + at.byte, at.shift);
-                line[x] = GSCpuInternal::applyTexa(s.texa, t.psm, sixteen ? GSCpuInternal::Rgba5551ToRgba8888(static_cast<uint16_t>(raw)) : raw);
+                const GSSwizzle::AxisPart row = GSSwizzle::RowPart(f, t.tbp0, t.tbw, y);
+                for (uint32_t x = 0; x < w; ++x)
+                {
+                    const GSSwizzle::Location at = GSSwizzle::Combine(f, row, GSSwizzle::ColumnPart(f, x));
+                    line[x] = GSSwizzle::LoadAt(f, vram + at.byte, at.shift);
+                }
             }
+            for (uint32_t x = 0; x < w; ++x)
+                line[x] = GSCpuInternal::applyTexa(s.texa, t.psm, sixteen ? GSCpuInternal::Rgba5551ToRgba8888(static_cast<uint16_t>(line[x])) : line[x]);
+        }
+        static const bool check = std::getenv("GOW_GS_TEXCHECK") != nullptr;
+        if (check)
+        {
+            static int mismatches = 0, checked = 0;
+            for (uint32_t y = 0; y < h; ++y)
+            {
+                const GSSwizzle::AxisPart row = GSSwizzle::RowPart(f, t.tbp0, t.tbw, y);
+                for (uint32_t x = 0; x < w; ++x)
+                {
+                    const GSSwizzle::Location at = GSSwizzle::Combine(f, row, GSSwizzle::ColumnPart(f, x));
+                    const uint32_t raw = GSSwizzle::LoadAt(f, vram + at.byte, at.shift);
+                    const uint32_t ref = GSCpuInternal::applyTexa(s.texa, t.psm, sixteen ? GSCpuInternal::Rgba5551ToRgba8888(static_cast<uint16_t>(raw)) : raw);
+                    if (ref != out[static_cast<size_t>(y) * w + x] && mismatches++ < 20)
+                        std::fprintf(stderr, "[gs-texcheck] psm=%u tbp=%x tbw=%u %ux%u at %u,%u ref=%08x run=%08x\n", t.psm, t.tbp0, t.tbw, w, h, x, y, ref, out[static_cast<size_t>(y) * w + x]);
+                }
+            }
+            if (++checked % 200 == 0)
+                std::fprintf(stderr, "[gs-texcheck] %d textures checked, %d mismatching texels\n", checked, mismatches);
         }
     }
 
