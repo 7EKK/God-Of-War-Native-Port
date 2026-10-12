@@ -501,6 +501,42 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
     std::memcpy(rdram + offset, &value, sizeof(value));
 }
 
+// GOW-Port: the scratchpad (16 KB at 0x70000000, alias 0xF0000000) is plain memory with no side effects, so aligned
+// accesses go straight to it instead of through runtime->Load/Store (37-156 M accesses per zone run; see
+// docs/performance.md). Unaligned ones still take the runtime path, which raises the address error.
+static inline uint8_t *Ps2ScratchpadFastPtr(uint32_t addr, uint32_t bytes)
+{
+    const uint32_t offset = (addr & 0x7FFFFFFFu) - PS2_SCRATCHPAD_BASE;
+    if (offset >= PS2_SCRATCHPAD_SIZE || (addr & (bytes - 1u)) != 0u)
+        return nullptr;
+    uint8_t *base = ps2GetScratchpadHostPtr();
+    return base ? base + offset : nullptr;
+}
+
+// Special-address read: the scratchpad directly, anything else through `slow` (runtime->LoadN).
+template <typename T, typename Slow>
+static inline T Ps2ReadSpecial(uint32_t addr, Slow &&slow)
+{
+    if (const uint8_t *p = Ps2ScratchpadFastPtr(addr, sizeof(T)))
+    {
+        T value;
+        std::memcpy(&value, p, sizeof(T));
+        return value;
+    }
+    return slow();
+}
+
+// Special-address write: the scratchpad directly (returns true), anything else is left to the caller.
+template <typename T>
+static inline bool Ps2WriteScratchpad(uint32_t addr, const T &value)
+{
+    uint8_t *p = Ps2ScratchpadFastPtr(addr, sizeof(T));
+    if (!p)
+        return false;
+    std::memcpy(p, &value, sizeof(T));
+    return true;
+}
+
 #define FAST_READ8(addr) Ps2FastRead8(rdram, (uint32_t)(addr))
 #define FAST_READ16(addr) Ps2FastRead16(rdram, (uint32_t)(addr))
 #define FAST_READ32(addr) Ps2FastRead32(rdram, (uint32_t)(addr))
@@ -513,34 +549,45 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
 #define FAST_WRITE64(addr, val) Ps2FastWrite64(rdram, (uint32_t)(addr), (uint64_t)(val))
 #define FAST_WRITE128(addr, val) Ps2FastWrite128(rdram, (uint32_t)(addr), (val))
 
+#define PS2_READ_SPECIAL(T, N, _addr) \
+    Ps2ReadSpecial<T>(_addr, [&]() -> T { return runtime->Load##N(rdram, ctx, _addr); })
+
+#define PS2_STORE_SPECIAL(T, N, _addr, val)                               \
+    do                                                                    \
+    {                                                                     \
+        const T _sprValue = (T)(val);                                            \
+        if (!Ps2WriteScratchpad<T>(_addr, _sprValue))                            \
+            runtime->Store##N(rdram, ctx, _addr, _sprValue);                     \
+    } while (0)
+
 #define READ8(addr) ([&]() -> uint8_t {                       \
     uint32_t _addr = (uint32_t)(addr);                        \
     return PS2Runtime::isSpecialAddress(_addr)                \
-        ? runtime->Load8(rdram, ctx, _addr)                   \
+        ? PS2_READ_SPECIAL(uint8_t, 8, _addr)                 \
         : FAST_READ8(_addr); }())
 
 #define READ16(addr) ([&]() -> uint16_t {                     \
     uint32_t _addr = (uint32_t)(addr);                        \
     return PS2Runtime::isSpecialAddress(_addr)                \
-        ? runtime->Load16(rdram, ctx, _addr)                  \
+        ? PS2_READ_SPECIAL(uint16_t, 16, _addr)               \
         : FAST_READ16(_addr); }())
 
 #define READ32(addr) ([&]() -> uint32_t {                     \
     uint32_t _addr = (uint32_t)(addr);                        \
     return PS2Runtime::isSpecialAddress(_addr)                \
-        ? runtime->Load32(rdram, ctx, _addr)                  \
+        ? PS2_READ_SPECIAL(uint32_t, 32, _addr)               \
         : FAST_READ32(_addr); }())
 
 #define READ64(addr) ([&]() -> uint64_t {                     \
     uint32_t _addr = (uint32_t)(addr);                        \
     return PS2Runtime::isSpecialAddress(_addr)                \
-        ? runtime->Load64(rdram, ctx, _addr)                  \
+        ? PS2_READ_SPECIAL(uint64_t, 64, _addr)               \
         : FAST_READ64(_addr); }())
 
 #define READ128(addr) ([&]() -> __m128i {                     \
     uint32_t _addr = (uint32_t)(addr) & ~0xFu;                \
     return PS2Runtime::isSpecialAddress(_addr)                \
-        ? runtime->Load128(rdram, ctx, _addr)                 \
+        ? PS2_READ_SPECIAL(__m128i, 128, _addr)               \
         : FAST_READ128(_addr); }())
 
 #define WRITE8(addr, val)                                                            \
@@ -548,7 +595,7 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
     {                                                                                \
         uint32_t _addr = (addr);                                                     \
         if (PS2Runtime::isSpecialAddress(_addr))                                     \
-            runtime->Store8(rdram, ctx, _addr, (val));                               \
+            PS2_STORE_SPECIAL(uint8_t, 8, _addr, (val));                               \
         else                                                                         \
         {                                                                            \
             ps2TraceGuestWrite(rdram, _addr, 1u, (uint8_t)(val), 0u, "WRITE8", ctx); \
@@ -561,7 +608,7 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
     {                                                                                  \
         uint32_t _addr = (addr);                                                       \
         if (PS2Runtime::isSpecialAddress(_addr))                                       \
-            runtime->Store16(rdram, ctx, _addr, (val));                                \
+            PS2_STORE_SPECIAL(uint16_t, 16, _addr, (val));                                \
         else                                                                           \
         {                                                                              \
             ps2TraceGuestWrite(rdram, _addr, 2u, (uint16_t)(val), 0u, "WRITE16", ctx); \
@@ -574,7 +621,7 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
     {                                                                                  \
         uint32_t _addr = (addr);                                                       \
         if (PS2Runtime::isSpecialAddress(_addr))                                       \
-            runtime->Store32(rdram, ctx, _addr, (val));                                \
+            PS2_STORE_SPECIAL(uint32_t, 32, _addr, (val));                                \
         else                                                                           \
         {                                                                              \
             ps2TraceGuestWrite(rdram, _addr, 4u, (uint32_t)(val), 0u, "WRITE32", ctx); \
@@ -587,7 +634,7 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
     {                                                                                  \
         uint32_t _addr = (addr);                                                       \
         if (PS2Runtime::isSpecialAddress(_addr))                                       \
-            runtime->Store64(rdram, ctx, _addr, (val));                                \
+            PS2_STORE_SPECIAL(uint64_t, 64, _addr, (val));                                \
         else                                                                           \
         {                                                                              \
             ps2TraceGuestWrite(rdram, _addr, 8u, (uint64_t)(val), 0u, "WRITE64", ctx); \
@@ -601,7 +648,7 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
         uint32_t _addr = (uint32_t)(addr) & ~0xFu;                                   \
         __m128i _value = (val);                                                      \
         if (PS2Runtime::isSpecialAddress(_addr))                                     \
-            runtime->Store128(rdram, ctx, _addr, _value);                            \
+            PS2_STORE_SPECIAL(__m128i, 128, _addr, _value);                            \
         else                                                                         \
         {                                                                            \
             const uint64_t _lo = static_cast<uint64_t>(PS2_EXTRACT_EPI64_0(_value)); \
