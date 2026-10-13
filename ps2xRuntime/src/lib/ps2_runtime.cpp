@@ -78,8 +78,12 @@ namespace
 
     void startSpu2Audio(ps2x::iop::IopSubsystem *source)
     {
+        // GOW_AUDIO=0 mutes: no stream, except with GOW_AUDIO_PCM, where the stream runs at volume 0 so the recording is
+        // paced and drained exactly as when it is heard (tools/movies.py)
         const char *setting = std::getenv("GOW_AUDIO");
-        if (g_spu2StreamActive || source == nullptr || !IsAudioDeviceReady() || (setting && setting[0] == '0'))
+        const bool muted = setting && setting[0] == '0';
+        const bool recording = std::getenv("GOW_AUDIO_PCM") != nullptr;
+        if (g_spu2StreamActive || source == nullptr || !IsAudioDeviceReady() || (muted && !recording))
             return;
         SetAudioStreamBufferSizeDefault(1024);
         g_spu2Stream = LoadAudioStream(48000u, 16u, 2u);
@@ -88,6 +92,8 @@ namespace
             return;
         g_spu2AudioSource.store(source, std::memory_order_release);
         SetAudioStreamCallback(g_spu2Stream, spu2AudioCallback);
+        if (muted)
+            SetAudioStreamVolume(g_spu2Stream, 0.0f);
         PlayAudioStream(g_spu2Stream);
         g_spu2StreamActive = true;
         std::cerr << "[SPU2] salida de audio a 48 kHz activa (GOW_AUDIO=0 la desactiva)" << std::endl;

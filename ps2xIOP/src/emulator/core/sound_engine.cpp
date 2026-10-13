@@ -79,6 +79,15 @@ namespace ps2x::iop::detail
         static const bool regLog = std::getenv("GOW_SND_REGLOG") != nullptr;
         if (regLog && idOf(entry) >= IdMmix && idOf(entry) <= IdBvolR)
             std::fprintf(stderr, "[snd-reg] core=%u id=%02x value=%04x\n", coreOf(entry), idOf(entry), value);
+        // GOW_SND_CALLLOG=1: voice volume / pitch writes that change the value
+        static const bool callLog = std::getenv("GOW_SND_CALLLOG") != nullptr;
+        if (callLog && voice < VoicesPerCore && idOf(entry) <= IdPitch)
+        {
+            const Voice &v = c.voices[voice];
+            const uint16_t old = idOf(entry) == IdVolL ? v.volL : idOf(entry) == IdVolR ? v.volR : v.pitch;
+            if (old != value)
+                std::fprintf(stderr, "[snd-call] core=%u voice=%u id=%02x %04x -> %04x\n", coreOf(entry), voice, idOf(entry), old, value);
+        }
         switch (idOf(entry))
         {
         case IdVolL: if (voice < VoicesPerCore) c.voices[voice].volL = value; break;
@@ -135,6 +144,9 @@ namespace ps2x::iop::detail
     {
         Core &c = m_cores[coreOf(entry)];
         mask &= 0xFFFFFFu;
+        static const bool callLog = std::getenv("GOW_SND_CALLLOG") != nullptr;
+        if (callLog && (idOf(entry) == IdKon || idOf(entry) == IdKoff) && mask != 0u)
+            std::fprintf(stderr, "[snd-call] core=%u %s %06x\n", coreOf(entry), idOf(entry) == IdKon ? "KON" : "KOFF", mask);
         switch (idOf(entry))
         {
         case IdPmon: c.pmon = mask; break;
@@ -563,6 +575,20 @@ namespace ps2x::iop::detail
         {
             const int32_t core0 = (coreOut[0][side] * master[0][side]) >> 14;
             m_output.push_back(clamp16(((core0 + coreOut[1][side]) * master[1][side]) >> 14));
+        }
+        // GOW_AUDIO_RAW=<file>: the mixed samples as produced (s16le stereo 48 kHz), before the output's rate adaptation,
+        // so a recording can be compared sample by sample with its source (tools/movies.py)
+        static std::FILE *raw = [] { const char *path = std::getenv("GOW_AUDIO_RAW"); return path ? std::fopen(path, "wb") : nullptr; }();
+        if (raw)
+        {
+            static std::vector<int16_t> pending;
+            pending.insert(pending.end(), m_output.end() - 2, m_output.end());
+            if (pending.size() >= 8192u)
+            {
+                std::fwrite(pending.data(), sizeof(int16_t), pending.size(), raw);
+                std::fflush(raw);
+                pending.clear();
+            }
         }
         if (m_output.size() > kMaxBufferedFrames * 2u)
             m_output.erase(m_output.begin(), m_output.begin() + static_cast<std::ptrdiff_t>(m_output.size() / 2u & ~size_t{1}));
