@@ -52,11 +52,13 @@ layout(location = 1) in float aZ;      // 0..1
 layout(location = 2) in vec4 aCol;     // 0..255
 layout(location = 3) in vec3 aSTQ;
 layout(location = 4) in vec2 aUV;      // texels
+layout(location = 5) in vec4 aUVClamp; // texels: the range the GS samples (sprites), else unbounded
 uniform vec2 uInvSize;
 noperspective out vec4 vCol;
 flat out vec4 vColFlat;
 noperspective out vec3 vSTQ;
 noperspective out vec2 vUV;
+flat out vec4 vUVClamp;
 void main()
 {
     gl_Position = vec4(aPos * uInvSize * 2.0 - 1.0, aZ * 2.0 - 1.0, 1.0);
@@ -64,6 +66,7 @@ void main()
     vColFlat = aCol;
     vSTQ = aSTQ;
     vUV = aUV;
+    vUVClamp = aUVClamp;
 }
 )";
 
@@ -72,6 +75,7 @@ noperspective in vec4 vCol;
 flat in vec4 vColFlat;
 noperspective in vec3 vSTQ;
 noperspective in vec2 vUV;
+flat in vec4 vUVClamp;
 layout(location = 0, index = 0) out vec4 oColor;
 layout(location = 0, index = 1) out vec4 oBlend;
 uniform sampler2D uTex;
@@ -223,6 +227,9 @@ void main()
         // U = S/Q with the sign of Q: a negative Q flips both coordinates (the menu Kratos has one)
         float q = (abs(vSTQ.z) < 1e-30) ? 1e-30 : vSTQ.z;
         vec2 uv = (uFst != 0) ? vUV : (vSTQ.xy / q) * uTexDim;
+        // at the internal scale a pixel samples between the GS's sample points: keep it inside the range the GS samples
+        // (sprites), so filtering never reaches the texel beyond the primitive's last one
+        uv = clamp(uv, vUVClamp.xy, vUVClamp.zw);
         vec4 t;
         if (uReinterp != 0)
         {
@@ -403,6 +410,7 @@ void main()
         float r, g, b, a;
         float s, t, q;
         float u, v;
+        float cu0 = -1e30f, cv0 = -1e30f, cu1 = 1e30f, cv1 = 1e30f; // texel range the GS samples (sprites)
     };
 
     struct Texture
@@ -581,7 +589,8 @@ struct GSHwBackend::Impl
         g.VertexAttribPointer(2, 4, kFloat, kFalse, stride, reinterpret_cast<const void *>(offsetof(HwVertex, r)));
         g.VertexAttribPointer(3, 3, kFloat, kFalse, stride, reinterpret_cast<const void *>(offsetof(HwVertex, s)));
         g.VertexAttribPointer(4, 2, kFloat, kFalse, stride, reinterpret_cast<const void *>(offsetof(HwVertex, u)));
-        for (GLuint i = 0; i < 5; ++i)
+        g.VertexAttribPointer(5, 4, kFloat, kFalse, stride, reinterpret_cast<const void *>(offsetof(HwVertex, cu0)));
+        for (GLuint i = 0; i < 6; ++i)
             g.EnableVertexAttribArray(i);
         buildTables();
         {
@@ -1562,6 +1571,22 @@ struct GSHwBackend::Impl
             GSVertex corner[4] = {a, a, a, a};
             const float xs[2] = {a.x, c.x}, ys[2] = {a.y, c.y};
             const float us[2] = {u0, u1}, vs[2] = {v0, v1};
+            // the texel coordinates of the first and last pixel the GS covers (pixel n is covered when lo <= n < hi);
+            // a sprite covering no pixel on the GS keeps its whole range
+            const auto sampled = [](float p0, float p1, float t0, float t1, float &lo, float &hi)
+            {
+                lo = std::min(t0, t1);
+                hi = std::max(t0, t1);
+                const float first = std::ceil(std::min(p0, p1)), last = std::ceil(std::max(p0, p1)) - 1.0f;
+                if (last < first || p1 == p0)
+                    return;
+                const float ta = t0 + (first - p0) * (t1 - t0) / (p1 - p0), tb = t0 + (last - p0) * (t1 - t0) / (p1 - p0);
+                lo = std::min(ta, tb);
+                hi = std::max(ta, tb);
+            };
+            float cu0, cu1, cv0, cv1;
+            sampled(a.x - s.context.xyoffset.ofx / 16.0f, c.x - s.context.xyoffset.ofx / 16.0f, u0, u1, cu0, cu1);
+            sampled(a.y - s.context.xyoffset.ofy / 16.0f, c.y - s.context.xyoffset.ofy / 16.0f, v0, v1, cv0, cv1);
             const int order[6][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 0}, {1, 1}, {0, 1}};
             for (const auto &o : order)
             {
@@ -1572,6 +1597,10 @@ struct GSHwBackend::Impl
                 pending.back().s = us[o[0]] / texW;
                 pending.back().t = vs[o[1]] / texH;
                 pending.back().q = 1.0f;
+                pending.back().cu0 = cu0;
+                pending.back().cv0 = cv0;
+                pending.back().cu1 = cu1;
+                pending.back().cv1 = cv1;
             }
             (void)corner;
         }
@@ -2044,10 +2073,12 @@ struct GSHwBackend::Impl
         static const char *rtRange = std::getenv("GOW_GS_HW_RTDUMPRANGE");
         static const int rtDumpLo = rtRange ? std::atoi(rtRange) : 26;
         static const int rtDumpHi = rtRange && std::strchr(rtRange, '-') ? std::atoi(std::strchr(rtRange, '-') + 1) : 46;
+        // GOW_GS_HW_RTDUMPFBP=<n>: dump that render target instead of fbp 0 / 208
+        static const long rtDumpFbp = std::getenv("GOW_GS_HW_RTDUMPFBP") ? std::strtol(std::getenv("GOW_GS_HW_RTDUMPFBP"), nullptr, 0) : -1;
         static std::vector<bool> rtDumped(1024, false); // with the GOW_GS_HW_DUMP window: the first frame that reaches a batch wins
         if (rtDumpSec >= 0.0 && rtDumpPresent < 0 && frameBatch == 1 && std::chrono::duration<double>(std::chrono::steady_clock::now() - rtT0).count() >= rtDumpSec)
             rtDumpPresent = presentCount;
-        if (((rtDumpAt >= 0 && presentCount == rtDumpAt) || (rtDumpPresent >= 0 && presentCount >= rtDumpPresent && presentCount <= rtDumpPresent + 1) || (rtRange && dumpPresents >= 0 && presentCount >= dumpPresents && presentCount < dumpPresents + 3 && !rtDumped[frameBatch & 1023])) && (rt.fbp == 0 || rt.fbp == 208) && frameBatch >= rtDumpLo && frameBatch <= rtDumpHi)
+        if (((rtDumpAt >= 0 && presentCount == rtDumpAt) || (rtDumpPresent >= 0 && presentCount >= rtDumpPresent && presentCount <= rtDumpPresent + 1) || (rtRange && dumpPresents >= 0 && presentCount >= dumpPresents && presentCount < dumpPresents + 3 && !rtDumped[frameBatch & 1023])) && (rtDumpFbp >= 0 ? static_cast<long>(rt.fbp) == rtDumpFbp : (rt.fbp == 0 || rt.fbp == 208)) && frameBatch >= rtDumpLo && frameBatch <= rtDumpHi)
         {
             std::vector<uint8_t> px(static_cast<size_t>(rt.glW) * rt.glH * 4u);
             g.BindFramebuffer(kFramebuffer, rt.fbo);
@@ -2350,6 +2381,18 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
         h = (static_cast<uint32_t>((display >> 44) & 0x7FFu) + 1u) / vdiv;
         return enabled && display != 0u && w != 0u && h != 0u;
     };
+    // GOW_GS_HW_DISPLOG=1: the display registers each time they change (picture size and placement per mode)
+    static const bool dispLog = std::getenv("GOW_GS_HW_DISPLOG") != nullptr;
+    static uint64_t lastDisp[6] = {};
+    if (dispLog && (request.pmode != lastDisp[0] || request.dispfb1 != lastDisp[1] || request.display1 != lastDisp[2] ||
+                    request.dispfb2 != lastDisp[3] || request.display2 != lastDisp[4] || request.smode2 != lastDisp[5]))
+    {
+        lastDisp[0] = request.pmode; lastDisp[1] = request.dispfb1; lastDisp[2] = request.display1;
+        lastDisp[3] = request.dispfb2; lastDisp[4] = request.display2; lastDisp[5] = request.smode2;
+        std::fprintf(stderr, "[gs-hw-disp] present=%d pmode=%llx smode2=%llx dispfb1=%llx display1=%llx dispfb2=%llx display2=%llx\n",
+                     d.presentCount, (unsigned long long)request.pmode, (unsigned long long)request.smode2, (unsigned long long)request.dispfb1,
+                     (unsigned long long)request.display1, (unsigned long long)request.dispfb2, (unsigned long long)request.display2);
+    }
     if (d.statsEnabled)
     {
         static int shown = 0;
@@ -2369,9 +2412,41 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
             GSGL::PublishSharedTexture(d.gl(), 0u, 0u, 0u, d.presentCount, 0u, 0u, request.vsyncTick);
         return frame;
     }
-    const uint32_t fbp = ok1 ? fbp1 : fbp2, w = ok1 ? w1 : w2, h = ok1 ? h1 : h2;
+    // The host window shows the TV area of the game's own picture: 448 lines from DY 50 (gameplay, menus). The movies set
+    // a 480-line display at the same DY; their streams are 640x480 with the picture in the top 448 lines and 32 black
+    // lines below, which a TV shows in its bottom border. Taller displays are cut to 448 lines, so a movie fills the
+    // window like the game does instead of leaving a black band under it.
+    constexpr uint32_t kTvLines = 448u;
+    const uint32_t fbp = ok1 ? fbp1 : fbp2, w = ok1 ? w1 : w2, h = std::min(ok1 ? h1 : h2, kTvLines);
     frame.displayFbp = fbp;
     frame.sourceFbp = fbp;
+    // GOW_GS_HW_DISPDUMP=<n>: the n-th present after the displayed buffer's size changed (e.g. a movie starts) writes that
+    // whole render target to gs_hw_disp_<fbp>_<w>x<h>.ppm (what the read circuit can reach, beyond the displayed area)
+    static const int dispDumpAt = std::getenv("GOW_GS_HW_DISPDUMP") ? std::atoi(std::getenv("GOW_GS_HW_DISPDUMP")) : -1;
+    static uint32_t dispDumpSize = 0;
+    static int dispDumpCount = 0;
+    if (dispDumpAt >= 0)
+    {
+        if ((w << 16 | h) != dispDumpSize)
+            dispDumpSize = w << 16 | h, dispDumpCount = 0;
+        if (dispDumpCount++ == dispDumpAt)
+            if (RenderTarget *rt = d.findTarget(fbp))
+            {
+                std::vector<uint8_t> px(static_cast<size_t>(rt->glW) * rt->glH * 4u);
+                d.gl().BindFramebuffer(kFramebuffer, rt->fbo);
+                d.gl().PixelStorei(kPackAlignment, 1);
+                d.gl().ReadPixels(0, 0, rt->glW, rt->glH, kRgba, kUnsignedByte, px.data());
+                char name[64];
+                std::snprintf(name, sizeof(name), "gs_hw_disp_%u_%ux%u.ppm", fbp, w, h);
+                if (FILE *f = std::fopen(name, "wb"))
+                {
+                    std::fprintf(f, "P6 %u %u 255 ", rt->glW, rt->glH);
+                    for (size_t i = 0; i + 3 < px.size(); i += 4)
+                        std::fwrite(&px[i], 1, 3, f);
+                    std::fclose(f);
+                }
+            }
+    }
     const uint32_t outW = static_cast<uint32_t>(std::ceil(w * d.scale)), outH = static_cast<uint32_t>(std::ceil(h * d.scale));
     frame.width = outW;
     frame.height = outH;

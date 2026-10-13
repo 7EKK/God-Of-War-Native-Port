@@ -2773,6 +2773,20 @@ namespace ps2_stubs
                 std::cerr << std::endl;
             }
         }
+        // GOW_MPEG_PICDUMP=<n>: write decoded picture n of each movie to mpeg_pic_<n>.ppm (decoder output check)
+        static const long s_picDump = std::getenv("GOW_MPEG_PICDUMP") ? std::atol(std::getenv("GOW_MPEG_PICDUMP")) : -1L;
+        if (haveFrame && static_cast<long>(frameCount) == s_picDump && frame.rgba.size() >= static_cast<size_t>(width) * height * 4u)
+        {
+            char name[48];
+            std::snprintf(name, sizeof(name), "mpeg_pic_%ld.ppm", s_picDump);
+            if (FILE *f = std::fopen(name, "wb"))
+            {
+                std::fprintf(f, "P6 %u %u 255 ", static_cast<unsigned>(width), static_cast<unsigned>(height));
+                for (size_t i = 0; i < static_cast<size_t>(width) * height * 4u; i += 4u)
+                    std::fwrite(&frame.rgba[i], 1, 3, f);
+                std::fclose(f);
+            }
+        }
         if (haveFrame)
         {
             writeDecodedFrameToGuest(rdram, imageAddr, frame, static_cast<size_t>(entryMbCount) * 1024u);
