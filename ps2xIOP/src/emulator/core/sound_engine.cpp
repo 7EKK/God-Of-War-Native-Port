@@ -576,6 +576,29 @@ namespace ps2x::iop::detail
             const int32_t core0 = (coreOut[0][side] * master[0][side]) >> 14;
             m_output.push_back(clamp16(((core0 + coreOut[1][side]) * master[1][side]) >> 14));
         }
+        // GOW_SND_VOICEDUMP=1: while a core input stream (a movie) plays, once per second for its first 10 seconds, every
+        // voice that is still sounding (active, pitch and envelope non-zero) with its volumes and sample addresses
+        static const bool voiceDump = std::getenv("GOW_SND_VOICEDUMP") != nullptr;
+        if (voiceDump)
+        {
+            static uint64_t streamSamples = 0;
+            const bool streaming = m_stream[0].active || m_stream[1].active;
+            streamSamples = streaming ? streamSamples + 1u : 0u;
+            if (streaming && streamSamples % 48000u == 1u && streamSamples < 48000u * 10u)
+            {
+                std::fprintf(stderr, "[snd-voices] t=%llus mvol0=%04x/%04x mvol1=%04x/%04x\n",
+                             static_cast<unsigned long long>(streamSamples / 48000u), m_cores[0].mvolL, m_cores[0].mvolR,
+                             m_cores[1].mvolL, m_cores[1].mvolR);
+                for (uint32_t core = 0; core < 2u; ++core)
+                    for (uint32_t index = 0; index < VoicesPerCore; ++index)
+                    {
+                        const Voice &v = m_cores[core].voices[index];
+                        if (v.active && v.pitch != 0u && v.envelope != 0)
+                            std::fprintf(stderr, "[snd-voices]   core=%u voice=%u pitch=%04x vol=%04x/%04x env=%d ssa=%x lsa=%x nax=%x\n",
+                                         core, index, v.pitch, v.volL, v.volR, v.envelope, v.ssa * 2u, v.lsa * 2u, v.nax * 2u);
+                    }
+            }
+        }
         // GOW_AUDIO_RAW=<file>: the mixed samples as produced (s16le stereo 48 kHz), before the output's rate adaptation,
         // so a recording can be compared sample by sample with its source (tools/movies.py)
         static std::FILE *raw = [] { const char *path = std::getenv("GOW_AUDIO_RAW"); return path ? std::fopen(path, "wb") : nullptr; }();
