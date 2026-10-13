@@ -865,3 +865,7 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
 - 10-13 ~23:00: user ordered the Nintendo Switch test port now, everything else on standby (agent/menuclock, agent/levels
   told to commit WIP and stop). A01MP02 cause located (docs/fmv.md Open): L/R swap + 123-sample misalignment of the
   movie PCM on the real path. Merged agent/movies5 (P04MP05 720/743 pictures); its gate not yet re-run on main.
+- agent/levels on standby (port/levels/STATE.md): ATHN01E 4/4 single-warp boots ok (the old crash was a chained warp,
+  a test-tool limit); ATHN01D (ship deck, save altar) 37.6-40.4 fps alone, VU1 worker saturated (open, needs a VU1
+  profile); ATHN03A / PAND04G low fps measured with another runner (recheck alone); movie rechecks (SEMO08,
+  P06MP01, SATINTRO, SEMO01-04) not run.
