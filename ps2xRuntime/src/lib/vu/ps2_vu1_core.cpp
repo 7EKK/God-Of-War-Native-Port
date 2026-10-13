@@ -1156,6 +1156,47 @@ void VU1Interpreter::finishXgkick()
         return;
     }
 
+    // GOW_VU1_KICKPRIM=<hex prim>: debug, for XGKICK packets with a GIF tag that sets that PRIM (PRE = 1), print the VU1 PC,
+    // the source address and how many XYZ2 vertices of those tags kick (ADC = 0) or not
+    static const long kickPrim = std::getenv("GOW_VU1_KICKPRIM") ? std::strtol(std::getenv("GOW_VU1_KICKPRIM"), nullptr, 16) : -1;
+    if (kickPrim >= 0)
+    {
+        static int kickShown = 0;
+        const uint8_t *pk = m_xgkick.packet.data();
+        uint32_t off = 0, kicks = 0, noKicks = 0;
+        bool match = false;
+        while (off + 16u <= m_xgkick.totalBytes)
+        {
+            uint64_t lo = 0, hi = 0;
+            std::memcpy(&lo, pk + off, 8u);
+            std::memcpy(&hi, pk + off + 8u, 8u);
+            off += 16u;
+            const uint32_t nloop = static_cast<uint32_t>(lo & 0x7FFFu), flg = static_cast<uint32_t>((lo >> 58) & 3u);
+            const uint32_t nreg = ((lo >> 60) & 0xFu) ? static_cast<uint32_t>((lo >> 60) & 0xFu) : 16u;
+            const bool tagMatch = ((lo >> 46) & 1u) != 0u && static_cast<long>((lo >> 47) & 0x7FFu) == kickPrim;
+            match = match || tagMatch;
+            if (flg == 0u)
+            {
+                for (uint32_t i = 0; i < nloop * nreg && off + 16u <= m_xgkick.totalBytes; ++i, off += 16u)
+                    if (tagMatch && ((hi >> (4u * (i % nreg))) & 0xFu) == 5u)
+                    {
+                        uint32_t w3 = 0;
+                        std::memcpy(&w3, pk + off + 12u, 4u);
+                        ++(((w3 >> 15) & 1u) ? noKicks : kicks);
+                    }
+            }
+            else if (flg == 1u)
+                off += ((nloop * nreg * 8u) + 15u) & ~15u;
+            else
+                off += nloop * 16u;
+        }
+        if (match && kickShown < 60)
+        {
+            ++kickShown;
+            std::fprintf(stderr, "[vu1-kickprim] pc=0x%X src=0x%X bytes=%u kicked=%u adc=%u\n", m_state.pc, m_xgkick.sourceAddress,
+                         m_xgkick.totalBytes, kicks, noKicks);
+        }
+    }
     if (m_activeMemory)
         m_activeMemory->submitGifPacket(GifPathId::Path1, m_xgkick.packet.data(), m_xgkick.totalBytes);
     else if (m_activeGs)
@@ -1870,6 +1911,17 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     const bool useVuRounding = std::fesetround(FE_TOWARDZERO) == 0;
     StepContext context{vuCode, codeSize, vuData, dataSize, &gs, memory, m_cycle + maxCycles, false};
     m_lastRunHitBudget = false; // GOW-Port: funciona también con un despachador compilado.
+    const uint32_t runStartPc = m_state.pc;
+    // GOW_VU1_STARTMAC=1: debug, the MAC and clip flags a startPc 0 program starts with (committed / with pending writes)
+    static const bool startMacLog = std::getenv("GOW_VU1_STARTMAC") != nullptr;
+    static unsigned startMacShown = 0;
+    if (startMacLog && m_unit == Unit::VU1 && m_state.pc == 0u && startMacShown < 4000u && (startMacShown++ % 50u) == 0u)
+    {
+        VU1Interpreter probe(*this);
+        probe.commitEverythingNow();
+        std::fprintf(stderr, "[vu1-startmac] ours mac=%x clip=%x (after committing pending: mac=%x clip=%x)\n", m_state.mac & 0xFFFFu,
+                     m_state.clip & 0xFFFFFFu, probe.m_state.mac & 0xFFFFu, probe.m_state.clip & 0xFFFFFFu);
+    }
     // GOW-Port: GOW_VU1_STATS=1 prints, every 5 s, MSCAL runs, VU1 cycles, interpreted steps and host time in run().
     static const bool vuStats = std::getenv("GOW_VU1_STATS") != nullptr;
     const uint64_t statCycle0 = vuStats ? m_cycle : 0u;
@@ -1953,7 +2005,9 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                 return false;
             return std::fabs(fa - fb) <= 2e-4f * std::max(1.0f, std::max(std::fabs(fa), std::fabs(fb)));
         };
-        static unsigned reports = 0, checked = 0, bad = 0;
+        // integer-like words (zero exponent: GIF data, the XYZ2 ADC bit, VI-stored values) compare exactly
+        const auto same = [&close](uint32_t a, uint32_t b) { return ((a | b) & 0x7F800000u) == 0u ? a == b : close(a, b); };
+        static unsigned reports = 0, checked = 0, bad = 0, bisected = 0;
         ++checked;
         std::string why;
         char buf[160];
@@ -2008,7 +2062,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
             uint32_t a, b;
             std::memcpy(&a, dataA.data() + o, 4);
             std::memcpy(&b, dataB.data() + o, 4);
-            if (!close(a, b))
+            if (!same(a, b))
             {
                 if (memDiff++ < 3u)
                 {
@@ -2035,7 +2089,10 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                 uint32_t a, b;
                 std::memcpy(&a, packetsA.data() + o, 4);
                 std::memcpy(&b, packetsB.data() + o, 4);
-                if (!close(a, b) && pd++ < 2u)
+                // integer words (zero exponent: GIF tags, XYZ2 coordinates and the ADC bit, colours) must match exactly;
+                // the float tolerance would accept a flipped ADC bit as a tiny denormal difference
+                const bool integerWord = ((a | b) & 0x7F800000u) == 0u;
+                if ((integerWord ? a != b : !close(a, b)) && pd++ < 2u)
                 {
                     std::snprintf(buf, sizeof(buf), " pkt[%zx] %08x/%08x", o, a, b);
                     why += buf;
@@ -2045,9 +2102,9 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         if (!why.empty())
         {
             ++bad;
-            if (reports++ < 40u)
+            if (reports++ < 40u || (why.find("0000ffff") != std::string::npos && bisected < 6u))
                 std::fprintf(stderr, "[vu1n-verify] run %u (bad %u) startPc=%x MISMATCH:%s\n", checked, bad, startPc, why.c_str());
-            if (reports <= 6u)
+            if (why.find("0000ffff") != std::string::npos && bisected++ < 6u) // ADC words (0xFFFF) set on one side only
             {
                 // bisect: smallest number of native blocks (rest exact) whose result already differs from the pure exact run
                 const auto differs = [&](unsigned limit)
@@ -2078,7 +2135,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                         uint32_t a, b;
                         std::memcpy(&a, vuData + o, 4);
                         std::memcpy(&b, dataB.data() + o, 4);
-                        d = !close(a, b);
+                        d = !same(a, b);
                     }
                     return d;
                 };
@@ -2095,6 +2152,14 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                     std::fprintf(stderr, "[vu1n-verify]   first bad block #%u at pc=%x\n", hi, m_native->trace.empty() ? 0u : m_native->trace.back());
                     if (std::getenv("GOW_VU1N_DUMP"))
                     {
+                        // the micro memory of the run, to disassemble the bad block
+                        char codeName[64];
+                        std::snprintf(codeName, sizeof(codeName), "vu1n_bad_%x_run%u.bin", m_native->trace.empty() ? 0u : m_native->trace.back(), checked);
+                        if (FILE *cf = std::fopen(codeName, "wb"))
+                        {
+                            std::fwrite(vuCode, 1, codeSize, cf);
+                            std::fclose(cf);
+                        }
                         const VU1State &e = m_native->snap;
                         for (int r : {1, 2, 23})
                             std::fprintf(stderr, "[vu1n-verify]   exact-final vf%d = %08x %08x %08x %08x\n", r, *reinterpret_cast<const uint32_t *>(&stateB.vf[r][0]), *reinterpret_cast<const uint32_t *>(&stateB.vf[r][1]), *reinterpret_cast<const uint32_t *>(&stateB.vf[r][2]), *reinterpret_cast<const uint32_t *>(&stateB.vf[r][3]));
@@ -2160,6 +2225,16 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     m_lastRunHitBudget = !programEnded && !m_stopRequested && m_cycle >= context.budgetEnd; // GOW-Port
     commitReadyFlags(); // GOW-Port: el estado visible tras la ejecución
     m_state.cycles = m_cycle;
+    // GOW_VU1_STARTMAC=1 also counts the MAC flag a startPc 0 program ends with (A/B with PCSX2's interpreter)
+    static const bool endMacLog = std::getenv("GOW_VU1_STARTMAC") != nullptr;
+    static unsigned endMacCount[3] = {}, endMacRuns = 0;
+    if (endMacLog && m_unit == Unit::VU1 && runStartPc == 0u && programEnded)
+    {
+        const uint32_t mac = m_state.mac & 0xFFFFu;
+        ++endMacCount[mac == 0x12u ? 0 : mac == 0u ? 1 : 2];
+        if (++endMacRuns % 20000u == 0u)
+            std::fprintf(stderr, "[vu1-endmac] ours runs=%u mac12=%u mac0=%u other=%u\n", endMacRuns, endMacCount[0], endMacCount[1], endMacCount[2]);
+    }
     if (useVuRounding && previousRoundingMode != -1)
         std::fesetround(previousRoundingMode);
 }

@@ -159,6 +159,11 @@ namespace pcsx2vu1
             vu.branch = 0;
             vu.ebit = 0;
         }
+        // GOW-Port: GOW_VU1_STARTMAC=1: debug, the MAC and clip flags a startPc 0 program starts with (A/B with VU1Interpreter)
+        static const bool startMacLog = std::getenv("GOW_VU1_STARTMAC") != nullptr;
+        static unsigned startMacShown = 0;
+        if (startMacLog && startPc == 0 && startMacShown < 4000u && (startMacShown++ % 50u) == 0u)
+            std::fprintf(stderr, "[vu1-startmac] pcsx2 mac=%x clip=%x\n", vu.VI[REG_MAC_FLAG].UL & 0xFFFFu, vu.VI[REG_CLIP_FLAG].UL & 0xFFFFFFu);
         vpuStat |= 0x100u; // VU1 running
 
         BadKickTrace &trace = badTrace();
@@ -214,6 +219,16 @@ namespace pcsx2vu1
         {
             checkedSubmit(s_kickPacket.data(), static_cast<uint32_t>(s_kickPacket.size()));
             s_kickPacket.clear();
+        }
+        // GOW-Port: GOW_VU1_STARTMAC=1 also counts the MAC flag a startPc 0 program ends with
+        static const bool endMacLog = std::getenv("GOW_VU1_STARTMAC") != nullptr;
+        static unsigned endMacCount[3] = {}, endMacRuns = 0;
+        if (endMacLog && startPc == 0)
+        {
+            const u32 mac = vu.VI[REG_MAC_FLAG].UL & 0xFFFFu;
+            ++endMacCount[mac == 0x12u ? 0 : mac == 0u ? 1 : 2];
+            if (++endMacRuns % 20000u == 0u)
+                std::fprintf(stderr, "[vu1-endmac] pcsx2 runs=%u mac12=%u mac0=%u other=%u\n", endMacRuns, endMacCount[0], endMacCount[1], endMacCount[2]);
         }
         return result;
     }

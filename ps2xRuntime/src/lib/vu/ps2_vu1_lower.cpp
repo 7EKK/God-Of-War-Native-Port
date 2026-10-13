@@ -263,6 +263,16 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
         uint8_t is = VIS(instr);
         if (it != 0)
             m_state.vi[it] = (int32_t)(m_state.mac & (uint32_t)(uint16_t)m_state.vi[is]);
+        // GOW_VU1_FMANDPC=<hex pc>: debug, print the MAC flag FMAND reads at that pc (A/B with PCSX2's interpreter)
+        static const long fmandPc = std::getenv("GOW_VU1_FMANDPC") ? std::strtol(std::getenv("GOW_VU1_FMANDPC"), nullptr, 16) : -1;
+        static int fmandShown = 0;
+        if ((fmandPc == 0xFFFF || (fmandPc >= 0 && (static_cast<long>(m_state.pc) == fmandPc || static_cast<long>(m_state.pc) == fmandPc + 8))) && fmandShown < 40)
+        {
+            ++fmandShown;
+            std::fprintf(stderr, "[vu1-fmand] pc=%x mac=%04x mask=%04x -> %04x cycle=%llu\n", m_state.pc, m_state.mac & 0xFFFFu,
+                         static_cast<unsigned>(static_cast<uint16_t>(m_state.vi[is])), static_cast<unsigned>(static_cast<uint16_t>(m_state.vi[it])),
+                         static_cast<unsigned long long>(m_cycle));
+        }
         return;
     }
     case 0x1B: // FMOR

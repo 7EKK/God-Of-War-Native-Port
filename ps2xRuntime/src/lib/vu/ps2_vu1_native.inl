@@ -9,7 +9,9 @@ namespace
     struct NativeEntry
     {
         VU1NativeFn fn;
+        VU1NativeFn fnFormer;
         uint32_t pairs;
+        bool readsEntryFlags; // reads MAC/clip flags written before the block (vu1n_gen.py: bit 16 of pairs)
         std::vector<uint8_t> cyc; // issue cycle of each pair (block entry = 0), filled on first use
     };
     std::unordered_map<uint64_t, NativeEntry> &nativeRegistry()
@@ -66,9 +68,9 @@ namespace
     }
 }
 
-void vu1nRegisterBlock(uint64_t key, VU1NativeFn fn, uint32_t pairs)
+void vu1nRegisterBlock(uint64_t key, VU1NativeFn fn, VU1NativeFn fnFormer, uint32_t pairs)
 {
-    nativeRegistry()[key] = {fn, pairs, {}};
+    nativeRegistry()[key] = {fn, fnFormer, pairs & 0xFFFFu, (pairs & 0x10000u) != 0u, {}};
 }
 
 // Issue cycles of the pairs of a block as the exact engine would see them (operand/pipeline stalls included), assuming
@@ -117,7 +119,13 @@ void VU1NativeAccess::callLower(VU1NativeCtx &n, uint32_t pc, uint32_t lower, ui
     auto &c = *static_cast<VU1Interpreter::StepContext *>(n.context);
     vu.m_state.pc = pc;
     vu.execLower(lower, c.vuData, c.dataSize, *c.gs, c.memory, upper);
-    vu.commitEverythingNow();
+    if (vu1nFlagLatency())
+    {
+        VU1NativeAccess::commitValuesKeepTiming(vu);
+        VU1NativeAccess::importFlags(vu); // the callout's flag writes join the native blocks' ones
+    }
+    else
+        vu.commitEverythingNow();
 }
 
 void VU1NativeAccess::callUpper(VU1NativeCtx &n, uint32_t pc, uint32_t upper)
@@ -125,7 +133,13 @@ void VU1NativeAccess::callUpper(VU1NativeCtx &n, uint32_t pc, uint32_t upper)
     VU1Interpreter &vu = *n.vu;
     vu.m_state.pc = pc;
     vu.execUpper(upper);
-    vu.commitEverythingNow();
+    if (vu1nFlagLatency())
+    {
+        VU1NativeAccess::commitValuesKeepTiming(vu);
+        VU1NativeAccess::importFlags(vu); // the callout's flag writes join the native blocks' ones
+    }
+    else
+        vu.commitEverythingNow();
 }
 
 void VU1NativeAccess::xgkick(VU1NativeCtx &n, uint32_t qwordAddress)
@@ -201,6 +215,366 @@ void VU1NativeAccess::xgkick(VU1NativeCtx &n, uint32_t qwordAddress)
     vu.progressXgkick();
 }
 
+// Native entry (and after an exact callout inside a block): the exact engine's flag pipeline moves into the rings
+// (status / sticky updates, not modelled by the native blocks, are applied at once like before).
+void VU1NativeAccess::importFlags(VU1Interpreter &vu)
+{
+    VU1Interpreter::NativeState &ns = *vu.m_native;
+    if (!ns.flagsInRings)
+    {
+        ns.macRing = {};
+        ns.clipRing = {};
+        ns.macRing.base = vu.m_state.mac;
+        ns.clipRing.base = vu.m_state.clip;
+        ns.flagsInRings = true;
+    }
+    while (vu.m_flagCount != 0u)
+    {
+        auto &e = vu.m_flagPipeline[vu.m_flagHead];
+        vu.m_flagHead = (vu.m_flagHead + 1u) % VU1Interpreter::kMaxFlagEntries;
+        --vu.m_flagCount;
+        if (e.writesMac)
+            ringPush(ns.macRing, e.issueCycle, e.mac);
+        if (e.writesClip)
+            ringPush(ns.clipRing, e.issueCycle, e.clip);
+        if (e.writesStatus)
+        {
+            const uint32_t current = e.status & 0xFu;
+            vu.m_state.status = (vu.m_state.status & 0xFF0u) | current | ((current | e.extraSticky) << 6);
+        }
+        if (e.writesSticky)
+            vu.m_state.status = (vu.m_state.status & 0x03Fu) | (e.status & 0xFC0u);
+        e.valid = false;
+    }
+}
+
+// The exact engine continues: visible flags become its committed values, writers still in flight its flag pipeline.
+void VU1NativeAccess::exportFlags(VU1Interpreter &vu)
+{
+    VU1Interpreter::NativeState &ns = *vu.m_native;
+    if (!ns.flagsInRings)
+        return;
+    ns.flagsInRings = false;
+    vu.m_state.mac = ringAt(ns.macRing, vu.m_cycle);
+    vu.m_state.clip = ringAt(ns.clipRing, vu.m_cycle);
+    // pending writers of both rings, oldest first
+    struct P { uint64_t issue; uint32_t value; bool clip; };
+    P pending[8];
+    uint32_t count = 0;
+    for (const auto *r : {&ns.macRing, &ns.clipRing})
+        for (uint32_t k = r->count; k >= 1u; --k)
+        {
+            const uint32_t i = (r->next + 4u - k) & 3u;
+            if (r->issue[i] + VU1Interpreter::kFmacLatency > vu.m_cycle)
+                pending[count++] = {r->issue[i], r->value[i], r == &ns.clipRing};
+        }
+    std::sort(pending, pending + count, [](const P &a, const P &b) { return a.issue < b.issue; });
+    for (uint32_t k = 0; k < count; ++k)
+    {
+        if (vu.m_flagCount >= VU1Interpreter::kMaxFlagEntries)
+            break;
+        auto &e = vu.m_flagPipeline[(vu.m_flagHead + vu.m_flagCount) % VU1Interpreter::kMaxFlagEntries];
+        ++vu.m_flagCount;
+        e.mac = pending[k].clip ? 0u : pending[k].value;
+        e.clip = pending[k].clip ? pending[k].value : 0u;
+        e.status = e.extraSticky = 0u;
+        e.writesMac = !pending[k].clip;
+        e.writesClip = pending[k].clip;
+        e.writesStatus = e.writesSticky = false;
+        e.valid = true;
+        e.issueCycle = pending[k].issue;
+        e.readyCycle = pending[k].issue + VU1Interpreter::kFmacLatency;
+    }
+}
+
+// Values of results in flight are written at once (a reader would stall until they are ready anyway, so it sees the
+// same value), but their timing state stays: the flag queue, and FDIV/EFU marked busy until their ready cycle.
+void VU1NativeAccess::commitValuesKeepTiming(VU1Interpreter &vu)
+{
+    const uint32_t flagHead = vu.m_flagHead, flagCount = vu.m_flagCount;
+    const VU1Interpreter::ScalarPipelineEntry fdiv = vu.m_fdiv;
+    const auto efu = vu.m_efu;
+    vu.m_flagCount = 0u;
+    vu.commitEverythingNow();
+    vu.m_flagHead = flagHead;
+    vu.m_flagCount = flagCount;
+    vu.m_fdiv = fdiv;
+    vu.m_efu = efu;
+    if (vu.m_fdiv.valid)
+        vu.m_nextCommitCycle = std::min(vu.m_nextCommitCycle, vu.m_fdiv.readyCycle);
+    for (const VU1Interpreter::ScalarPipelineEntry &e : vu.m_efu)
+        if (e.valid)
+            vu.m_nextCommitCycle = std::min(vu.m_nextCommitCycle, e.readyCycle);
+}
+
+// First use of a block: decoded pairs, the lanes it reads before writing them (with the idle-schedule cycle of that
+// first read) and the writes that may outlive it.
+void VU1NativeAccess::prepareBlockTiming(VU1Interpreter &vu, VU1Interpreter::NativeState::BlockTiming &bt, const uint8_t *code, uint32_t pc, uint32_t count,
+                                        const uint8_t *idle)
+{
+    using NS = VU1Interpreter::NativeState;
+    bt.idle = idle;
+    bt.dec.clear();
+    bt.tail.clear();
+    bt.scalarPairs.clear();
+    bool read[NS::kLanes] = {}, written[NS::kLanes] = {};
+    int last[NS::kLanes];
+    std::fill(std::begin(last), std::end(last), -1);
+    uint8_t lastLat[NS::kLanes] = {};
+    bool scalarWritten[3] = {};
+    const auto onRead = [&](uint32_t lane, uint8_t at) {
+        if (read[lane] || written[lane])
+            return;
+        read[lane] = true;
+        bt.readMask[lane >> 6] |= 1ull << (lane & 63u);
+        bt.readAt[lane] = at;
+    };
+    const auto onWrite = [&](uint32_t lane, uint32_t pair, uint32_t lat) {
+        written[lane] = true;
+        bt.writeMask[lane >> 6] |= 1ull << (lane & 63u);
+        last[lane] = static_cast<int>(pair);
+        lastLat[lane] = static_cast<uint8_t>(lat);
+    };
+    const auto onScalarRead = [&](uint32_t k, uint8_t at) {
+        if (scalarWritten[k] || (bt.scalarRead & (1u << k)))
+            return;
+        bt.scalarRead = static_cast<uint8_t>(bt.scalarRead | (1u << k));
+        bt.scalarAt[k] = at;
+    };
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        const VU1Interpreter::DecodedInstructionPair d = vu.decodeInstructionPair(code, pc + i * 8u);
+        bt.dec.push_back(d);
+        const uint8_t at = idle[i];
+        for (const VU1Interpreter::InstructionUsage *u : {&d.upperUsage, &d.lowerUsage})
+        {
+            for (uint32_t k = 0; k < u->vfReadCount; ++k)
+                for (uint32_t c = 0; c < 4u; ++c)
+                    if (u->vfRead[k].lanes & (1u << (3u - c)))
+                        onRead(u->vfRead[k].reg * 4u + c, at);
+            for (uint32_t r = 1; r < 16u; ++r)
+                if (u->viRead & (1u << r))
+                    onRead(128u + r, at);
+            for (uint32_t c = 0; c < 4u; ++c)
+                if (u->accRead & (1u << (3u - c)))
+                    onRead(144u + c, at);
+        }
+        if (d.lowerUsage.pipeline == VU1Interpreter::PipelineFdiv || d.lowerUsage.waitQ)
+            onScalarRead(0, at);
+        if (d.lowerUsage.pipeline == VU1Interpreter::PipelineEfu)
+            onScalarRead(1, at);
+        if (d.lowerUsage.waitP)
+            onScalarRead(2, at);
+        // writes, in markPairWrites' order (lower VF, upper VF, VI, ACC)
+        const auto vfWrite = [&](const VU1Interpreter::InstructionUsage &u, bool lower) {
+            const VU1Interpreter::VfAccess w = u.vfWrite;
+            if (w.reg == 0u || (lower && d.suppressedLowerVf == w.reg))
+                return;
+            const uint32_t lat = u.vfLatency != 0u ? u.vfLatency : u.latency;
+            for (uint32_t c = 0; c < 4u; ++c)
+                if (w.lanes & (1u << (3u - c)))
+                    onWrite(w.reg * 4u + c, i, lat);
+        };
+        vfWrite(d.lowerUsage, true);
+        vfWrite(d.upperUsage, false);
+        for (uint32_t r = 1; r < 16u; ++r)
+            if (d.lowerUsage.viWrite & (1u << r))
+                onWrite(128u + r, i, d.lowerUsage.viLatency != 0u ? d.lowerUsage.viLatency : d.lowerUsage.latency);
+        for (uint32_t c = 0; c < 4u; ++c)
+            if (d.upperUsage.accWrite & (1u << (3u - c)))
+                onWrite(144u + c, i, VU1Interpreter::kAccForwardLatency);
+        const bool fdivOp = d.lowerUsage.pipeline == VU1Interpreter::PipelineFdiv && !d.lowerUsage.waitQ;
+        const bool efuOp = d.lowerUsage.pipeline == VU1Interpreter::PipelineEfu && !d.lowerUsage.waitP;
+        if (fdivOp || efuOp)
+        {
+            bt.scalarPairs.push_back(static_cast<uint8_t>(i));
+            scalarWritten[fdivOp ? 0 : 1] = true;
+            if (efuOp)
+                scalarWritten[2] = true;
+        }
+    }
+    // a write outlives the block only if its latency exceeds the distance to the block end (stalls only widen it)
+    const uint32_t end = static_cast<uint32_t>(idle[count - 1u]) + 1u;
+    for (uint32_t lane = 0; lane < NS::kLanes; ++lane)
+        if (last[lane] >= 0 && static_cast<uint32_t>(idle[last[lane]]) + lastLat[lane] > end)
+        {
+            bt.tail.push_back({static_cast<uint8_t>(lane), static_cast<uint8_t>(last[lane]), lastLat[lane]});
+            bt.tailMask[lane >> 6] |= 1ull << (lane & 63u);
+        }
+}
+
+static inline uint64_t &vu1nLaneWord(VU1Interpreter &vu, uint32_t lane)
+{
+    return VU1NativeAccess::laneWord(vu, lane);
+}
+
+uint64_t &VU1NativeAccess::laneWord(VU1Interpreter &vu, uint32_t lane)
+{
+    if (lane < 128u)
+        return vu.m_vfReady[lane >> 2][lane & 3u];
+    if (lane < 144u)
+        return vu.m_viReady[lane - 128u];
+    return vu.m_accReady[lane - 144u];
+}
+
+// Native entry: the exact engine's results still in flight become the in-flight lanes.
+void VU1NativeAccess::importInflight(VU1Interpreter &vu)
+{
+    VU1Interpreter::NativeState &ns = *vu.m_native;
+    ns.inflight[0] = ns.inflight[1] = ns.inflight[2] = 0u;
+    ns.touched[0] = ns.touched[1] = ns.touched[2] = 0u;
+    for (uint32_t lane = 0; lane < VU1Interpreter::NativeState::kLanes; ++lane)
+    {
+        const uint64_t ready = vu1nLaneWord(vu, lane);
+        if (ready > vu.m_cycle)
+        {
+            ns.laneReady[lane] = ready;
+            ns.inflight[lane >> 6] |= 1ull << (lane & 63u);
+        }
+    }
+}
+
+// Before the exact engine looks at its readiness arrays: lanes the native blocks wrote get their real ready cycle.
+void VU1NativeAccess::syncInflight(VU1Interpreter &vu)
+{
+    VU1Interpreter::NativeState &ns = *vu.m_native;
+    for (uint32_t w = 0; w < 3u; ++w)
+        for (uint64_t bits = ns.touched[w]; bits != 0u; bits &= bits - 1u)
+        {
+            const uint32_t lane = w * 64u + static_cast<uint32_t>(std::countr_zero(bits));
+            vu1nLaneWord(vu, lane) = (ns.inflight[w] >> (lane & 63u)) & 1u ? ns.laneReady[lane] : 0u;
+        }
+    ns.touched[0] = ns.touched[1] = ns.touched[2] = 0u;
+}
+
+// Issue cycles (relative to vu.m_cycle) of the block's pairs: the idle table unless a lane it reads is still in flight
+// past that read; then the exact engine's stall model, run once per distinct (lane, slack) set and cached.
+const uint8_t *VU1NativeAccess::blockTiming(VU1Interpreter &vu, VU1Interpreter::NativeState::BlockTiming &bt)
+{
+    VU1Interpreter::NativeState &ns = *vu.m_native;
+    const uint64_t start = vu.m_cycle;
+    ns.sig.clear();
+    for (uint32_t w = 0; w < 3u; ++w)
+    {
+        // lanes ready by now are harmless (no slack); they are cleared here, when the block reads them, or when written
+        for (uint64_t bits = ns.inflight[w] & bt.readMask[w]; bits != 0u; bits &= bits - 1u)
+        {
+            const uint32_t lane = w * 64u + static_cast<uint32_t>(std::countr_zero(bits));
+            const uint64_t readAt = start + bt.readAt[lane];
+            if (ns.laneReady[lane] <= start)
+                ns.inflight[w] &= ~(1ull << (lane & 63u));
+            else if (ns.laneReady[lane] > readAt)
+                ns.sig.push_back(static_cast<uint16_t>((lane << 8) | std::min<uint64_t>(ns.laneReady[lane] - readAt, 255u)));
+        }
+    }
+    if (bt.scalarRead)
+    {
+        uint64_t ready[3] = {vu.m_fdiv.valid ? vu.m_fdiv.readyCycle : 0u, vu.m_efuResourceReady, 0u};
+        for (const VU1Interpreter::ScalarPipelineEntry &e : vu.m_efu)
+            if (e.valid)
+                ready[2] = std::max(ready[2], e.readyCycle);
+        for (uint32_t k = 0; k < 3u; ++k)
+            if ((bt.scalarRead & (1u << k)) && ready[k] > start + bt.scalarAt[k])
+                ns.sig.push_back(static_cast<uint16_t>(((200u + k) << 8) | std::min<uint64_t>(ready[k] - start - bt.scalarAt[k], 255u)));
+    }
+    if (ns.sig.empty())
+        return bt.idle;
+    for (const auto &c : bt.cache)
+        if (c.sig == ns.sig)
+            return c.cyc.data();
+    // simulate on the exact engine's pipeline state (synced), then restore it
+    syncInflight(vu);
+    const uint64_t keepCycle = vu.m_cycle;
+    const auto vfReady = vu.m_vfReady;
+    const auto viReady = vu.m_viReady;
+    const auto accReady = vu.m_accReady;
+    const VU1Interpreter::ScalarPipelineEntry fdiv = vu.m_fdiv;
+    const auto efu = vu.m_efu;
+    const uint64_t efuResource = vu.m_efuResourceReady;
+    const bool xgkick = vu.m_xgkick.active;
+    vu.m_xgkick.active = false;
+    std::vector<uint8_t> cyc(bt.dec.size());
+    for (size_t i = 0; i < bt.dec.size(); ++i)
+    {
+        const VU1Interpreter::DecodedInstructionPair &d = bt.dec[i];
+        const uint64_t ready = vu.calculatePairReadyCycle(d);
+        if (ready > vu.m_cycle)
+            vu.m_cycle = ready;
+        cyc[i] = static_cast<uint8_t>(std::min<uint64_t>(vu.m_cycle - keepCycle, 255u));
+        vu.markPairWrites(d);
+        if (d.lowerUsage.pipeline == VU1Interpreter::PipelineFdiv && !d.lowerUsage.waitQ)
+        {
+            vu.m_fdiv.valid = true;
+            vu.m_fdiv.readyCycle = vu.m_cycle + d.lowerUsage.latency;
+        }
+        else if (d.lowerUsage.pipeline == VU1Interpreter::PipelineEfu && !d.lowerUsage.waitP)
+        {
+            vu.m_efu[0].valid = true;
+            vu.m_efu[0].readyCycle = vu.m_cycle + d.lowerUsage.latency;
+            vu.m_efuResourceReady = vu.m_cycle + (d.lowerUsage.latency > 0u ? d.lowerUsage.latency - 1u : 0u);
+        }
+        ++vu.m_cycle;
+    }
+    vu.m_cycle = keepCycle;
+    vu.m_vfReady = vfReady;
+    vu.m_viReady = viReady;
+    vu.m_accReady = accReady;
+    vu.m_fdiv = fdiv;
+    vu.m_efu = efu;
+    vu.m_efuResourceReady = efuResource;
+    vu.m_xgkick.active = xgkick;
+    VU1Interpreter::NativeState::BlockTiming::Cached &slot = bt.cache.size() < 16u ? bt.cache.emplace_back() : bt.cache[bt.next++ % 16u];
+    slot.sig = ns.sig;
+    slot.cyc = std::move(cyc);
+    return slot.cyc.data();
+}
+
+// After a native block: its results that outlive it become in-flight lanes at their real ready cycles (the values are
+// computed already); FDIV/EFU stay busy until their ready cycle.
+void VU1NativeAccess::finishBlockTiming(VU1Interpreter &vu, const VU1Interpreter::NativeState::BlockTiming &bt, const uint8_t *cyc, uint64_t start)
+{
+    VU1Interpreter::NativeState &ns = *vu.m_native;
+    const uint64_t end = start + cyc[bt.dec.size() - 1u] + 1u;
+    for (uint32_t w = 0; w < 3u; ++w)
+    {
+        ns.inflight[w] &= ~bt.writeMask[w];
+        ns.touched[w] |= bt.writeMask[w];
+    }
+    for (uint32_t w = 0; w < 3u; ++w)
+        ns.inflight[w] |= bt.tailMask[w];
+    for (const auto &t : bt.tail)
+        ns.laneReady[t.lane] = start + cyc[t.pair] + t.lat;
+    for (const uint8_t i : bt.scalarPairs)
+    {
+        const VU1Interpreter::DecodedInstructionPair &d = bt.dec[i];
+        const uint64_t issue = start + cyc[i];
+        if (d.lowerUsage.pipeline == VU1Interpreter::PipelineFdiv)
+        {
+            vu.m_fdiv.valid = true;
+            vu.m_fdiv.readyCycle = issue + d.lowerUsage.latency;
+            vu.m_fdiv.value = vu.m_state.q;
+            vu.m_fdiv.statusDi = vu.m_state.status & 0x30u;
+            vu.m_nextCommitCycle = std::min(vu.m_nextCommitCycle, vu.m_fdiv.readyCycle);
+        }
+        else
+        {
+            // EFU instructions run through callLower, which queued their result at the block's start cycle: move the
+            // newest entry to the pair's real issue cycle
+            VU1Interpreter::ScalarPipelineEntry *newest = nullptr;
+            for (VU1Interpreter::ScalarPipelineEntry &e : vu.m_efu)
+                if (e.valid && (!newest || e.readyCycle >= newest->readyCycle))
+                    newest = &e;
+            if (newest)
+            {
+                newest->readyCycle = issue + d.lowerUsage.latency;
+                vu.m_nextCommitCycle = std::min(vu.m_nextCommitCycle, newest->readyCycle);
+            }
+            vu.m_efuResourceReady = issue + (d.lowerUsage.latency > 0u ? d.lowerUsage.latency - 1u : 0u);
+        }
+    }
+    vu.m_cycle = end;
+}
+
 void VU1Interpreter::commitEverythingNow()
 {
     const uint64_t keep = m_cycle;
@@ -258,16 +632,22 @@ bool VU1Interpreter::runNative(StepContext &context)
             const uint32_t count = nativeExtent(context.vuCode, context.codeSize, pc, words);
             ns.known[slot] = true;
             ns.fn[slot] = nullptr;
+            ns.bt[slot] = nullptr;
             ns.pairs[slot] = static_cast<uint16_t>(count);
             if (count != 0u)
             {
                 const auto it = nativeRegistry().find(vu1n::blockKey(pc, words, count * 2u));
                 if (it != nativeRegistry().end())
                 {
-                    ns.fn[slot] = it->second.fn;
+                    ns.fn[slot] = vu1nFlagLatency() ? it->second.fn : it->second.fnFormer;
                     if (it->second.cyc.empty())
                         nativeTiming(context.vuCode, pc, count, it->second.cyc);
                     ns.cyc[slot] = it->second.cyc.data();
+                    NativeState::BlockTiming &bt = ns.timings[it->first];
+                    if (bt.dec.empty())
+                        VU1NativeAccess::prepareBlockTiming(*this, bt, context.vuCode, pc, count, it->second.cyc.data());
+                    ns.bt[slot] = &bt;
+                    bt.readsEntryFlags = it->second.readsEntryFlags;
                 }
                 else if (ns.diag)
                     ++ns.missPcs[pc];
@@ -283,7 +663,18 @@ bool VU1Interpreter::runNative(StepContext &context)
         }
         if (!armed)
         {
-            commitEverythingNow();
+            // Results in flight from the exact engine: values now, timing kept (blockTiming / the flag queue), so the
+            // blocks stall on them and see their flags at the same cycles as the exact engine.
+            commitReadyPipelines();
+            commitReadyFlags();
+            if (vu1nFlagLatency())
+            {
+                VU1NativeAccess::commitValuesKeepTiming(*this);
+                VU1NativeAccess::importInflight(*this);
+                VU1NativeAccess::importFlags(*this);
+            }
+            else
+                commitEverythingNow();
             _mm_setcsr((savedCsr & ~0x6000u) | 0x6000u | 0x8000u | 0x0040u); // round toward zero, FTZ, DAZ
             armed = true;
         }
@@ -296,10 +687,22 @@ bool VU1Interpreter::runNative(StepContext &context)
             ++ns.count;
             ns.trace.push_back(pc);
         }
-        ctx.cyc = ns.cyc[slot];
+        const uint64_t start = m_cycle;
+        // Values never depend on timing, only flag reads do. A block that reads flags written before it gets its exact
+        // issue cycles from the pipeline state at entry (the stalls decide which of those flags it sees); the others use
+        // their idle-pipeline table and only hand their results and flags in flight on.
+        const uint8_t *cyc = vu1nFlagLatency() && ns.bt[slot]->readsEntryFlags ? VU1NativeAccess::blockTiming(*this, *ns.bt[slot])
+                                                                               : ns.bt[slot]->idle;
+        ctx.cyc = cyc;
+        ctx.start = start;
         const uint32_t result = fn(ctx);
-        m_cycle += ns.cyc[slot][ns.pairs[slot] - 1u] + 1u;
+        if (vu1nFlagLatency())
+            VU1NativeAccess::finishBlockTiming(*this, *ns.bt[slot], cyc, start);
+        else
+            m_cycle = start + cyc[ns.pairs[slot] - 1u] + 1u;
         m_state.cycles = m_cycle;
+        if (vu1nFlagLatency() && m_cycle >= m_nextCommitCycle)
+            commitReadyPipelines(); // FDIV/EFU entries kept for timing retire when ready (values are written already)
         ns.nativePairs += ns.pairs[slot];
         m_state.pc = result & 0x3FFFu;
         if (result & kVu1nEnded)
@@ -310,6 +713,12 @@ bool VU1Interpreter::runNative(StepContext &context)
         }
         if (result & kVu1nBail)
             break;
+    }
+    if (armed)
+    {
+        if (vu1nFlagLatency())
+            VU1NativeAccess::syncInflight(*this); // the exact engine continues: its readiness arrays become current
+        VU1NativeAccess::exportFlags(*this);
     }
     _mm_setcsr(savedCsr);
     if (ns.diag)
