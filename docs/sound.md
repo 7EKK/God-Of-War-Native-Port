@@ -31,8 +31,24 @@ model: the SPU2 register-level model and the IOP's SPU DMA channels were removed
   handler `handler(channel, arg)` (989snd 0x78bc: releases its transfer lock and wakes the waiting thread) 512 IOP cycles
   later through `IopNativeServices::callGuestLater`, as the DMA interrupt did. VoiceTransStatus returns 1.
 - One stereo sample per 768 IOP cycles (`advanceTo`), drained by the host audio thread (`drainOutput`).
+- Sample clock = the IOP cycles the EE granted (`IopEmulator::runCycles`), each call clamped to its grant: IOP work
+  outside runCycles (EE-side RPC calls into IOP servers; a dbcman RPC at 0x12BCC costs ~10 M IOP cycles/s on the
+  title screen and menus) and overshoot inside it move the IOP clock ahead of the EE but produce no samples.
+- Output rate adaptation (`drainOutput`): the latency target is 100 ms (`kSpu2MaxLatencyFrames`). Above it the
+  buffer is played up to 5 % faster with linear interpolation; at or below it the samples are copied unchanged. A
+  buffer more than 4 targets above (after a stall) is cut back once. On the menus the guest clock runs ~3.7 % ahead
+  of the wall clock (EE cycles per field above the VBlank period; open), so the menus play at ~1.038; gameplay ~1.001.
+- Former behaviour (until 2026-10-12): the output cut blocks of samples whenever the buffer exceeded the target.
+  Combined with the clock above it dropped ~30 % of the samples on the menus: the audible crackle ("clipping").
+  `GOW_AUDIO_STATS=1` prints requested/missing/dropped frames, the highest rate and the buffer level every ~5 s;
+  `GOW_IOP_DRIFT=1` prints granted vs advanced IOP cycles and the top outside calls; `GOW_SND_REGLOG=1` logs the
+  core register writes (MMIX, MVOL, EVOL, AVOL, BVOL).
 - Not mixed yet: reverb (parameters stored), volume sweeps (target applied at once), gaussian interpolation.
 
 ## Verified (2026-10-11)
 Desert zone with `GOW_AUDIO_PCM`: 158.9 s of audio in a 160 s run (former model 156.5 s), same level profile, same 2
 short silences (port/audio_native1 vs audio_native2); zone ok at 60 fps; save test ok.
+
+## Verified (2026-10-12, crackle fix)
+Desert run (port/aud9): 0 dropped frames, 0 underruns, 0 saturated samples (was 2.5/s), 0 sample jumps > 12000 (was
+1.6/s); per-10 s RMS matches the former recording where both cover the same part (2791/3160/3621 vs 2808/3163/3597).

@@ -811,3 +811,10 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   Open: shadows (fork agent/shadows: Olympus floor rectangle, black blobs in slot 4/3), souls unchecked (no orb
   pickup in the scripted runs), audio clipping (user report; present since the native sound engine, intro movie
   62 clipped samples/s), visual audit list in docs/visual-audit.md.
+- 22:3x audio crackle fixed (ext 2342429, user report "the audio is clipping"): the output dropped ~30 % of the
+  samples on the title screen and menus. The sound engine's sample clock followed the IOP's own cycle count, which
+  runs ahead of the EE (a dbcman RPC at 0x12BCC costs ~10 M IOP cycles/s on the menus); it now follows the cycles the
+  EE granted. The menus' guest clock is still ~3.7 % ahead of the wall clock (open: EE cycles per field above the
+  VBlank period there); the output absorbs that with up to 5 % faster interpolated playback instead of cutting
+  sample blocks. Desert: 0 drops, 0 saturated samples, 0 jumps. docs/sound.md. Merged agent/movies2 (all 14 BONUS
+  movies at real speed with sound; movie path without hardware registers); combined gate pending.
