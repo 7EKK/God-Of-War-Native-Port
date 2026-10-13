@@ -4,7 +4,7 @@
 #include <cstring>
 
 #ifdef _WIN32
-bool ps2PadXInputRumble(uint16_t lowFrequency, uint16_t highFrequency); // ps2_pad_xinput.cpp
+bool ps2PadWindowsRumble(uint8_t large, bool small); // ps2_pad_rumble_win.cpp
 #endif
 
 namespace
@@ -176,10 +176,10 @@ void PSPadBackend::setActuators(int port, bool small, uint8_t large)
 void PSPadBackend::applyRumble(bool refresh)
 {
 #ifdef _WIN32
-    // raylib's GLFW backend has no vibration: XInput directly. XInput keeps the motors running until changed.
+    // raylib's GLFW backend has no vibration: XInput and Sony HID pads directly. Both keep the motors running until changed.
     if (refresh)
         return;
-    ps2PadXInputRumble(static_cast<uint16_t>(m_large * 257u), m_small ? 0xFFFFu : 0u);
+    ps2PadWindowsRumble(m_large, m_small);
 #else
     // Other platforms (SDL, Switch): raylib's rumble, which stops after at most 2 s, so it is resent every second.
     if (m_activeGamepad < 0 || !IsWindowReady())
