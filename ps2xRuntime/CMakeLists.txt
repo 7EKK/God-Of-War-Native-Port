@@ -405,6 +405,7 @@ src/lib/gs/gpu/gs_texture_store.cpp
     src/lib/ps2_iop_host.cpp
     src/lib/ps2_memory.cpp
     src/lib/ps2_pad.cpp
+    src/lib/ps2_audio_device.cpp # GOW-Port: sound output on a chosen device
     src/lib/ps2_pad_rumble_win.cpp # GOW-Port: Windows gamepad rumble (XInput, DualShock 4 / DualSense)
     src/lib/ps2_rom_device.cpp
     src/lib/ps2_vfs.cpp

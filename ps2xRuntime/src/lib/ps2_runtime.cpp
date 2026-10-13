@@ -44,6 +44,8 @@ static bool gowUsePcsx2Vu1(); // GOW_VU1_PCSX2=1, defined before PS2Runtime::ini
 std::atomic<uint64_t> g_gowAudioFramesPlayed{0};
 std::atomic<uint64_t> g_gowAudioFramesProduced{0};
 #if !defined(PLATFORM_VITA)
+bool ps2AudioOpenNamedDevice(void (*fill)(void *, unsigned int), unsigned int sampleRate); // ps2_audio_device.cpp
+void ps2AudioCloseNamedDevice();
 namespace
 {
     // GOW-Port: salida del SPU2 emulado por el IOP. raylib pide las muestras desde su hilo de audio; el IOP las
@@ -51,6 +53,7 @@ namespace
     std::atomic<ps2x::iop::IopSubsystem *> g_spu2AudioSource{nullptr};
     AudioStream g_spu2Stream{};
     bool g_spu2StreamActive = false;
+    bool g_spu2NamedDevice = false; // playing on a chosen device (ps2_audio_device.cpp), not the raylib stream
     constexpr size_t kSpu2MaxLatencyFrames = 4800u; // 100 ms a 48 kHz
 
     void spu2AudioCallback(void *buffer, unsigned int frames)
@@ -81,6 +84,12 @@ namespace
         const char *setting = std::getenv("GOW_AUDIO");
         if (g_spu2StreamActive || source == nullptr || !IsAudioDeviceReady() || (setting && setting[0] == '0'))
             return;
+        g_spu2AudioSource.store(source, std::memory_order_release);
+        if (ps2AudioOpenNamedDevice(spu2AudioCallback, 48000u))
+        {
+            g_spu2NamedDevice = g_spu2StreamActive = true;
+            return;
+        }
         SetAudioStreamBufferSizeDefault(1024);
         g_spu2Stream = LoadAudioStream(48000u, 16u, 2u);
         SetAudioStreamBufferSizeDefault(0); // el resto de flujos conserva el tamano por defecto
@@ -97,8 +106,14 @@ namespace
     {
         if (!g_spu2StreamActive)
             return;
-        StopAudioStream(g_spu2Stream);
-        UnloadAudioStream(g_spu2Stream); // raylib espera a que termine el callback en curso
+        if (g_spu2NamedDevice)
+            ps2AudioCloseNamedDevice();
+        else
+        {
+            StopAudioStream(g_spu2Stream);
+            UnloadAudioStream(g_spu2Stream); // raylib espera a que termine el callback en curso
+        }
+        g_spu2NamedDevice = false;
         g_spu2AudioSource.store(nullptr, std::memory_order_release);
         g_spu2StreamActive = false;
     }
