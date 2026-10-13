@@ -1,6 +1,7 @@
 // GOW-Port: sound output on a chosen device. raylib's audio always opens the system default output; when a device is
 // named (GOW_AUDIO_DEVICE=<part of its name>, or the first line of %LOCALAPPDATA%\GodOfWarNative\audio_device.txt so
-// every instance follows it), the sound engine's stream is played on that device through miniaudio directly. The
+// every instance follows it: test runs; play.cmd sets GOW_AUDIO_DEVICE=default for the system default output), the
+// sound engine's stream is played on that device through miniaudio directly. The
 // miniaudio implementation is raylib's own (compiled in raudio.c); the configuration macros below must stay identical
 // to raudio.c's, because they change miniaudio's structure layouts.
 #if !defined(PLATFORM_VITA)
@@ -61,7 +62,7 @@ void dataCallback(ma_device *, void *output, const void *, ma_uint32 frames)
 bool ps2AudioOpenNamedDevice(void (*fill)(void *, unsigned int), unsigned int sampleRate)
 {
     const std::string wanted = lower(configuredName());
-    if (wanted.empty() || g_open)
+    if (wanted.empty() || wanted == "default" || g_open) // "default": the system default output (play.cmd)
         return false;
     if (ma_context_init(nullptr, 0, nullptr, &g_context) != MA_SUCCESS)
         return false;
