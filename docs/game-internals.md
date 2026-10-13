@@ -161,3 +161,44 @@ every case: 11 frees, 11 reports. The game kept running (port/shipcrash/selftest
 - `GOW_THREAD_LOG=1`.
 - Status: contained by the guard; root cause (the early delete site) still open, waiting for a user log with
   `[gow-heapguard]` lines from a fight that shows the enemy meter.
+
+## Zones and the debug level warp
+- A level is a chain of zones, one WAD each (GODOFWAR.TOC: the zone WAD followed by its resource WADs `R_*`;
+  108 zone WADs: ATHN01-08, SEWR, DEST, PAND, ARENA, OLYMP, ATRET, HDES). Two zones are loaded at a time (slot table
+  0x335280, flags +0x68: 1 in use, 4 loaded). The current zone object is 0x29CAC8; its name (`Athn01A`, the WAD name
+  without `WAD_`) comes from 0x1A97C8.
+- The ship (new game) is ATHN01A-F: start in 01A/01B, 01C stairs below deck, 01D deck with the save altar (resource
+  WADs R_AHA/R_AH2: Hydra), 01E deck outside the captain's cabin, 01EE (R_AH3; its warp point is far below the deck,
+  Kratos falls), 01F captain's cabin. ATHN02A-D is the start of Athens, ATHN03A Ares in Athens, DEST00 the desert.
+- Level scripts call builtins through the script VM dispatcher 0x1AFAD0 (a1 = id, 59 ids, jump table 0x2B46D0,
+  arguments popped from the VM stack: VM +0x140 depth, entries at VM +0): 2 `Load(zone, zone)`, 3 `LoadWad(zone)`,
+  4 `LoadForWarp(zone)`, 5 `Warp()`, 6 `LoadCheck(zone)`. Each prints a debug line ("======== LoadForWarp ('%s')").
+- Warp: LoadForWarp loads the zone into the slot that does NOT hold the current zone (0x1BB7E8(zone, current)) and
+  resets the warp state (0x29CAB0 slot or -1, 0x29CAB4 zone loaded, 0x29CAB8 warp requested, 0x29CAFC warp due).
+  Warp() sets 0x29CAB8 and, if the zone is loaded, 0x29CAFC (0x1B25B8); the executor 0x1B25C8 then makes the new zone
+  current and moves Kratos to the zone's warp point (0x1B26F0, "Jumping to warp point") and clears the state. A
+  Warp() before the load completes has to be repeated.
+- Limit: the current zone (0x29CAC8) follows Kratos with a delay. A warp issued while he already stands in the
+  neighbour zone evicts the zone he is in: its objects stay linked in the render lists (0x1309C0 dispatcher, crash
+  JALR 0x130CAC -> 1) or the game stops presenting. Warping 0.5 s after gameplay starts (Kratos still in the start
+  zone, the current one) works for every zone tried, including other areas (PAND04G, HDES01A, DEST00, ATHN03A).
+- Save restore 0x22CB18 (stream magic 0xCAFEBAD1) reads the two saved zone names (10 chars each) and loads them with
+  0x1B3E08 (names to 0x335288, then 0x1BB7E8): the path a clean multi-zone warp would have to use.
+
+### Flash UI action queue (the heap guard's double delete)
+- Each Flash UI player has an action queue (player +0xCD8 head, +0xCDC tail; nodes {item, owner, next}, 12 bytes from
+  operator new). 0x1460C0 appends at the tail (a2 != 0, from 0x146FB8) or the head (a2 = 0, from 0x149958 and
+  0x146FB8). 0x146158 drains it at the end of each player update (0x14A560): for each node the action runs
+  (0x1452F8(item, owner)), the next pointer is read, the node is deleted (call at 0x1461A4, return 0x1461AC); after the
+  walk head and tail are cleared; with +0xCFC set the queue is dropped without deleting the nodes.
+- `[gow-heapguard] second delete ignored ... at=0x1461ac freed-by=0x1461ac` reproduces with the warp
+  (`GOW_WARP=ATHN01EE`, Kratos falls and the death HUD runs; node 0x780AD0 in our runs): after a drain deleted the
+  node, the next append found it still as head and tail of player 0x7A40D0's queue, so it was in the list of the next
+  drain and deleted again. A nested drain of the same player is not the cause (none occurs). The queue head/tail are
+  written only by 0x1460C0, the drain's clears (0x1461B8/0x1461BC, 0x146178 for +0xCFC) and the player init 0x14A290.
+  Open: which sequence leaves the freed node as head; the guard keeps it harmless.
+- Note for overrides: recompiled functions return to the dispatcher early at EE checkpoints (ctx->pc = the resume
+  point; resume addresses have their own table slots that point to the original function, not to a replacement). A
+  C++ wrapper that calls the original and then does more work runs that work before the original has finished, and
+  a guest function called on a copied context must be dispatched again until it returns (gow_overrides.cpp
+  gowRunGuest).

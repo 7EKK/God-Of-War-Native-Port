@@ -20,6 +20,7 @@ void sub_00149340_0x149340(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
 void gowDumpBranchRing(const char *why);
 #include <map>
 #include <unordered_map>
+#include <cctype>
 #include <cmath>
 #include <xmmintrin.h>
 #include <thread>
@@ -111,7 +112,176 @@ namespace
         padReturn(ctx, 4u);
     }
 
+    // GOW-Port: GOW_WARP=<zone>[;<zone>...] (debug/test): the game's own level warp. The level scripts' builtins
+    // LoadForWarp(zone) and Warp() (script VM builtin dispatcher 0x1AFAD0, ids 4 and 5) load the zone's WAD next to
+    // the current one (0x1BB7E8) and, once it is loaded, move Kratos to the zone's warp point (0x1B25C8 ->
+    // 0x1B26F0, "Jumping to warp point"). They are called here, from the pad read (main loop, once per frame), with a
+    // scratch VM stack below the guest stack. Zone names are the WAD names without ".WAD" (GODOFWAR.TOC, e.g.
+    // PAND04G). GOW_WARP_DELAY=<s> (default 0.5): gameplay seconds before the first warp; GOW_WARP_STAY=<s> (default
+    // 60): seconds in each zone before the next one. Logs `[gow-warp] request|arrived|timeout|done`.
+    // Warp state (0x29CAB0 slot / -1, 0x29CAB4 zone loaded, 0x29CAB8 warp requested, 0x29CAFC warp due) and the
+    // current zone object (0x29CAC8, name via 0x1A97C8) as decoded from 0x1AFAD0 / 0x1B25C8.
+    void gowRunGuest(uint8_t *rdram, R5900Context &call, PS2Runtime *runtime, uint32_t entry);
+
+    std::string gowCurrentZone(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t zone = readGuest32(rdram, 0x29CAC8u) & 0x01FFFFFFu;
+        if (zone < 0x100000u)
+            { char text[32]; std::snprintf(text, sizeof(text), "?(zone=%x)", readGuest32(rdram, 0x29CAC8u)); return text; }
+        R5900Context call = *ctx;
+        SET_GPR_U32(&call, 4, zone);
+        SET_GPR_U32(&call, 29, (GPR_U32(ctx, 29) - 0x400u) & ~0xFu);
+        gowRunGuest(rdram, call, runtime, 0x001A97C8u);
+        const uint32_t name = GPR_U32((&call), 2) & 0x01FFFFFFu;
+        if (name < 0x100000u)
+        {
+            char text[48];
+            std::snprintf(text, sizeof(text), "?(zone=%x name=%x)", zone, name);
+            return text;
+        }
+        return std::string(reinterpret_cast<const char *>(rdram + name), strnlen(reinterpret_cast<const char *>(rdram + name), 32));
+    }
+
+    // Runs a guest function on a copy of the context to its return: a recompiled function hands control back early at
+    // an EE checkpoint (ctx->pc = where to resume), so the copy is dispatched again until it returns to ra = 0.
+    void gowRunGuest(uint8_t *rdram, R5900Context &call, PS2Runtime *runtime, uint32_t entry)
+    {
+        SET_GPR_U32(&call, 31, 0u);
+        call.pc = entry;
+        for (int steps = 0; call.pc != 0u && steps < 100000 && !runtime->isStopRequested(); ++steps)
+            runtime->lookupFunction(call.pc)(rdram, &call, runtime);
+    }
+
+    // LoadForWarp(zone) (id 4) or Warp() (id 5) through the script VM builtin dispatcher, with a scratch VM stack
+    // (0x140 bytes + depth word), result word and zone name below the guest stack.
+    void gowWarpBuiltin(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t id, const std::string &zone)
+    {
+        const uint32_t vm = (GPR_U32(ctx, 29) - 0x800u) & ~0xFu, result = vm + 0x150u, name = vm + 0x160u;
+        std::memset(rdram + vm, 0, 0x200);
+        std::memcpy(rdram + name, zone.c_str(), std::min<size_t>(zone.size(), 31));
+        writeGuest32(rdram, vm, name);
+        writeGuest32(rdram, vm + 0x140u, zone.empty() ? 0u : 1u);
+        R5900Context call = *ctx;
+        SET_GPR_U32(&call, 4, 0u);
+        SET_GPR_U32(&call, 5, id);
+        SET_GPR_U32(&call, 6, result);
+        SET_GPR_U32(&call, 7, vm);
+        SET_GPR_U32(&call, 29, vm - 0x40u);
+        gowRunGuest(rdram, call, runtime, 0x001AFAD0u);
+    }
+
+    void gowWarpPoll(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static const std::vector<std::string> zones = [] {
+            std::vector<std::string> list;
+            if (const char *text = std::getenv("GOW_WARP"))
+            {
+                std::string item;
+                std::istringstream stream(text);
+                while (std::getline(stream, item, ';'))
+                    if (!item.empty())
+                        list.push_back(item);
+            }
+            return list;
+        }();
+        if (zones.empty())
+            return;
+        static const double delay = std::getenv("GOW_WARP_DELAY") ? std::atof(std::getenv("GOW_WARP_DELAY")) : 0.5;
+        static const double stay = std::getenv("GOW_WARP_STAY") ? std::atof(std::getenv("GOW_WARP_STAY")) : 60.0;
+        static const auto start = std::chrono::steady_clock::now();
+        const double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        static size_t next = 0;
+        static double due = -1.0, requested = -1.0;
+        static bool waiting = false;
+        const bool gameplay = readGuest32(rdram, 0x29E560u) == 11u && readGuest32(rdram, 0x29E574u) == 0u;
+        // two captures per zone (5 s after arrival and half way through the stay): gow_warp_<n>_<zone>_<k>.ppm
+        static double captureAt[2] = {-1.0, -1.0};
+        for (int k = 0; k < 2; ++k)
+            if (captureAt[k] >= 0.0 && now >= captureAt[k])
+            {
+                captureAt[k] = -1.0;
+                std::vector<uint8_t> pixels;
+                uint32_t width = 0, height = 0;
+                if (runtime->gs().copyLatchedHostPresentationFrame(pixels, width, height, nullptr, nullptr, nullptr))
+                {
+                    const std::string name = "gow_warp_" + std::to_string(next) + "_" + zones[next - 1] + "_" + std::to_string(k) + ".ppm";
+                    std::ofstream file(name, std::ios::binary);
+                    file << "P6\n" << width << ' ' << height << "\n255\n";
+                    for (size_t i = 0; i + 3 < pixels.size(); i += 4)
+                        file.write(reinterpret_cast<const char *>(pixels.data() + i), 3);
+                    std::fprintf(stderr, "[gow-warp] capture %s at %.1f s\n", name.c_str(), now);
+                }
+            }
+        if (due < 0.0)
+        {
+            if (gameplay)
+                due = now + delay;
+            return;
+        }
+        if (waiting)
+        {
+            // the warp executor (0x1B25C8) clears the request and the slot when Kratos has been moved
+            const bool done = readGuest32(rdram, 0x29CAB8u) == 0u && static_cast<int32_t>(readGuest32(rdram, 0x29CAB0u)) < 0;
+            // Warp() only makes the warp due when the zone is already loaded; a script calls it again later
+            if (!done && readGuest32(rdram, 0x29CAB4u) != 0u && readGuest32(rdram, 0x29CAFCu) == 0u && gameplay)
+                gowWarpBuiltin(rdram, ctx, runtime, 5u, {});
+            if (done && gameplay)
+            {
+                std::fprintf(stderr, "[gow-warp] arrived %s at %.1f s (%.1f s) zone=%s\n", zones[next - 1].c_str(), now,
+                             now - requested, gowCurrentZone(rdram, ctx, runtime).c_str());
+                waiting = false;
+                due = now + stay;
+                captureAt[0] = now + 5.0;
+                captureAt[1] = now + std::max(6.0, stay / 2.0);
+            }
+            else if (now - requested > 90.0)
+            {
+                std::fprintf(stderr, "[gow-warp] timeout %s at %.1f s (slot=%d loaded=%u request=%u due=%u) zone=%s\n",
+                             zones[next - 1].c_str(), now, static_cast<int32_t>(readGuest32(rdram, 0x29CAB0u)),
+                             readGuest32(rdram, 0x29CAB4u), readGuest32(rdram, 0x29CAB8u), readGuest32(rdram, 0x29CAFCu),
+                             gowCurrentZone(rdram, ctx, runtime).c_str());
+                waiting = false;
+                due = now;
+            }
+            return;
+        }
+        if (now < due || !gameplay)
+            return;
+        if (next >= zones.size())
+        {
+            std::fprintf(stderr, "[gow-warp] done at %.1f s\n", now);
+            due = 1e30;
+            return;
+        }
+        const std::string &zone = zones[next++];
+        const std::string current = gowCurrentZone(rdram, ctx, runtime);
+        std::fprintf(stderr, "[gow-warp] request %s at %.1f s from zone=%s\n", zone.c_str(), now, current.c_str());
+        // LoadForWarp ignores the zone Kratos is in
+        if (std::equal(zone.begin(), zone.end(), current.begin(), current.end(),
+                       [](char a, char b) { return std::toupper(static_cast<unsigned char>(a)) == std::toupper(static_cast<unsigned char>(b)); }))
+        {
+            std::fprintf(stderr, "[gow-warp] arrived %s at %.1f s (0.0 s) zone=%s (already there)\n", zone.c_str(), now, current.c_str());
+            requested = now;
+            due = now + stay;
+            captureAt[0] = now + 5.0;
+            captureAt[1] = now + std::max(6.0, stay / 2.0);
+            return;
+        }
+        requested = now;
+        waiting = true;
+        gowWarpBuiltin(rdram, ctx, runtime, 4u, zone); // LoadForWarp(zone)
+        gowWarpBuiltin(rdram, ctx, runtime, 5u, {});   // Warp()
+    }
+
+    void gowPad2ReadState(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+
     void gowPad2Read(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        gowPad2ReadState(rdram, ctx, runtime);
+        gowWarpPoll(rdram, ctx, runtime);
+    }
+
+    void gowPad2ReadState(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         // GOW-Port: always 16:9 (4:3 is not supported any more) — the data part of PCSX2's SCUS-97399_D6385328.pnach
         // "Widescreen 16:9": the game's own widescreen flag and three 16:9 aspect floats, re-applied every frame like
@@ -248,9 +418,10 @@ namespace
                 float health = 0;
                 if (creature >= 0x100000u)
                     std::memcpy(&health, rdram + creature + 0x198u, 4);
-                std::fprintf(stderr, "[gow-player] t=%.1f g=%.1f obj=%x pos=%.1f,%.1f,%.1f hp=%.0f state=%u movie=%u\n", seconds,
+                std::fprintf(stderr, "[gow-player] t=%.1f g=%.1f obj=%x pos=%.1f,%.1f,%.1f hp=%.0f state=%u movie=%u zone=%s\n", seconds,
                              gameplayStart >= 0.0 ? seconds - gameplayStart : -1.0, player, pos[0], pos[1], pos[2], health,
-                             readGuest32(rdram, 0x29E560u), readGuest32(rdram, 0x29C838u));
+                             readGuest32(rdram, 0x29E560u), readGuest32(rdram, 0x29C838u),
+                             gowCurrentZone(rdram, ctx, runtime).c_str());
             }
             static double nextStateReport = 0;
             static const bool primDiag = [] { const char *diag=std::getenv("GOW_EE_PRIM_DIAG"); return diag && std::strcmp(diag,"1")==0; }();
@@ -617,11 +788,23 @@ namespace
         }
     }
 
+    // GOW_FLASHQ_WATCH=<hex block> (debug): logs new/delete of that block and every Flash queue append/drain holding it
+    uint32_t flashqWatch()
+    {
+        static const uint32_t watch = std::getenv("GOW_FLASHQ_WATCH") ? std::strtoul(std::getenv("GOW_FLASHQ_WATCH"), nullptr, 16) : 0u;
+        return watch;
+    }
+
     void gowOperatorNew(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        const uint32_t ra = GPR_U32(ctx, 31);
         sub_0014C278_0x14c278(rdram, ctx, runtime);
         if (const uint32_t block = GPR_U32(ctx, 2))
+        {
             heap_guard::blocks[block] = {};
+            if (block == flashqWatch())
+                std::fprintf(stderr, "[gow-flashq] new 0x%x ra=0x%x\n", block, ra);
+        }
     }
 
     void gowOperatorDelete(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -629,6 +812,8 @@ namespace
         const uint32_t block = GPR_U32(ctx, 4), ra = GPR_U32(ctx, 31);
         // 0x143C78 (string delete) keeps its caller at 0($sp)
         const uint32_t caller = ra == 0x00143C8Cu ? readGuest32(rdram, GPR_U32(ctx, 29)) : ra;
+        if (block == flashqWatch())
+            std::fprintf(stderr, "[gow-flashq] delete 0x%x by 0x%x\n", block, caller);
         const auto it = heap_guard::blocks.find(block);
         if (it != heap_guard::blocks.end())
         {
@@ -641,6 +826,37 @@ namespace
             it->second = {false, caller};
         }
         sub_0014C2F0_0x14c2f0(rdram, ctx, runtime);
+    }
+
+    // GOW_FLASHQ_WATCH=<hex block> (debug) also wraps the Flash UI player's action queue: 0x1460C0 appends a node
+    // {item, owner, next} (12 bytes, operator new) at the tail (a2 != 0) or the head of the owner's player queue (player
+    // +0xCD8 head, +0xCDC tail); 0x146158 drains it at the end of each player update (0x14A560): each action runs
+    // (0x1452F8), its node is deleted (0x1461AC), and head/tail are cleared after the walk (+0xCFC set: dropped
+    // undeleted). Logged: every append, and every drain whose queue holds the watched block (with the list). The
+    // heap guard's "second delete ... at=0x1461ac" is a node still in a queue after a drain deleted it (docs/game-internals.md).
+    void gowFlashQueueDrain(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t player = GPR_U32(ctx, 4), watch = flashqWatch();
+        std::string list;
+        bool has = false;
+        for (uint32_t node = readGuest32(rdram, player + 0xCD8u), n = 0; node && n < 64; node = readGuest32(rdram, node + 8u), ++n)
+        {
+            char text[16];
+            std::snprintf(text, sizeof(text), " %x", node);
+            list += text;
+            has |= node == watch;
+        }
+        if (has)
+            std::fprintf(stderr, "[gow-flashq] drain player 0x%x ra=0x%x tail=0x%x list:%s\n", player, GPR_U32(ctx, 31),
+                         readGuest32(rdram, player + 0xCDCu), list.c_str());
+        sub_00146158_0x146158(rdram, ctx, runtime);
+    }
+
+    void gowFlashQueueAppend(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        std::fprintf(stderr, "[gow-flashq] append item=0x%x owner=0x%x tail=%u ra=0x%x\n", GPR_U32(ctx, 4), GPR_U32(ctx, 5),
+                     GPR_U32(ctx, 6), GPR_U32(ctx, 31));
+        sub_001460C0_0x1460c0(rdram, ctx, runtime);
     }
 
     // 0x147520(a0 track header: channel count u16 at +2, a2 channel entries {node, key} of 8 bytes)
@@ -1707,6 +1923,11 @@ namespace
         runtime.replaceFunction(0x00147520u, gowGuardTimelineChannels);
         runtime.replaceFunction(0x0023B6A0u, gowGuardNodeDestructor);
         runtime.replaceFunction(0x00149340u, gowGuardCloneList);
+        if (std::getenv("GOW_FLASHQ_WATCH"))
+        {
+            runtime.replaceFunction(0x00146158u, gowFlashQueueDrain);
+            runtime.replaceFunction(0x001460C0u, gowFlashQueueAppend);
+        }
         if (std::getenv("GOW_CTRL_DIAG"))
             runtime.replaceFunction(0x00116EF0u, gowDiagController);
         if (std::getenv("GOW_BLEND_DIAG"))

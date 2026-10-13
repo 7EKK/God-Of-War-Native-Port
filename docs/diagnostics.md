@@ -35,9 +35,18 @@ All are opt-in environment variables (added by us; implementations noted).
 | `PS2X_GS_TRACE_TBP=<tbp0>` (`-2`, `-3`) | vertices drawn with that texture active; `-2` untextured triangle fans, `-3` textured fans, with the vertex colour | ps2xRuntime/src/lib/gs/gs_frontend.cpp |
 | `GOW_BONUS_MOVIE=<NN>` | plays BONUS movie NN through the Treasures-menu path (docs/fmv.md) | runner gow_overrides.cpp |
 | `GOW_VIB_LOG=1`, `GOW_PAD_BT_RUMBLE=1` | every rumble command of the game (`[gow-vib] small= large=`); rumble also for DualShock 4 / DualSense pads connected by Bluetooth (off by default: the first output report switches the pad to its extended input report, which DirectInput may not read) | runner gow_overrides.cpp; ps2xRuntime/src/lib/ps2_pad_rumble_win.cpp |
+| `GOW_WARP=<zone>[;<zone>...]`, `GOW_WARP_DELAY=<s>` (default 0.5), `GOW_WARP_STAY=<s>` (default 60) | debug level warp: `GOW_WARP_DELAY` seconds after gameplay starts, the game's own script builtins LoadForWarp(zone) + Warp() load the zone and move Kratos to its warp point; after `GOW_WARP_STAY` seconds the next zone. Logs `[gow-warp] request/arrived/timeout/done` and writes two captures per zone (`gow_warp_<n>_<zone>_<k>.ppm`, 5 s after arrival and half way). Zone names = WAD names of GODOFWAR.TOC without ".WAD" (e.g. `PAND04G`). One warp per boot is reliable; chained warps can crash or hang (docs/game-internals.md) | runner gow_overrides.cpp (gowWarpPoll, called after the pad read) |
+| `GOW_FLASHQ_WATCH=<hex block>` | Flash UI action-queue trace: every queue append, every drain whose queue holds that block (with the node list), and new/delete of that block. For the heap guard's "second delete ... at=0x1461ac" | runner gow_overrides.cpp |
 | `GOW_PLAYER_TRACE=1`, `GOW_GOD_MODE=1` | once per second Kratos's position, game state and movie state (steering scripted runs); test runs only: Kratos's health refilled every poll | runner gow_overrides.cpp |
 
 Always-on: `[gow-heapguard] <what> object= at= freed-by=` (runner gow_overrides.cpp heap_guard): a double delete or a deleted child of the UI timeline player was dropped instead of crashing; the first three also dump the last guest branches. `freed-by` names the early delete (docs/game-internals.md).
+
+`GOW_PLAYER_TRACE=1` now also prints `zone=<current zone name>`.
+`tools/levels.py`: level check. For each zone, one runner boot: new game (as zones.py slot 0), warp
+0.5 s after gameplay starts, stay `--stay` seconds (default 30) moving and attacking with GOW_GOD_MODE, then judge:
+arrived or timed out, load time, fps and game speed while there, `[guest-branch:missing-target]`,
+`[gow-heapguard]`, the zones.py error patterns, two captures. `--zones all` = the 108 zone WADs of the TOC
+(~1 min each); `--batch N` chains N warps per boot (faster, but see the limits). `--exe-dir` selects the runner.
 
 Always-on logs we added: `[SIF module] load-failed/load-unhandled` (RPC.cpp), `fioOpen failed:`.
 
