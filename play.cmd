@@ -11,6 +11,8 @@ if not exist "%ROOT%disc-usa\play.mcd" (
 )
 set PS2X_GS_WORKER=1
 set GOW_GS_FINISH_ASINCRONO=1
+rem sound on the system default output (test runs use the device in %LOCALAPPDATA%\GodOfWarNative\audio_device.txt)
+set GOW_AUDIO_DEVICE=default
 set "GOW_MC0=%ROOT%disc-usa\play.mcd"
 cd /d "%EXE_DIR%"
 "%EXE_DIR%\ps2EntryRunner.exe" "%ROOT%disc-usa\SCUS_973.99"

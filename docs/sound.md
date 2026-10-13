@@ -59,4 +59,5 @@ its name>` or the first line of `%LOCALAPPDATA%\GodOfWarNativeudio_device.txt` 
 worktree build follows it; e.g. `Oculus` for "Cuffie (Oculus Virtual Audio Device)"). The stream is then played on
 that device through miniaudio directly (ps2xRuntime/src/lib/ps2_audio_device.cpp, raylib's miniaudio build: its
 configuration macros must match raudio.c). No match: the log lists the devices and the default output is used.
-`GOW_AUDIO=0` (zones.py --silent) still mutes.
+`play.cmd` sets `GOW_AUDIO_DEVICE=default` (the system default output), so the per-user file only routes test runs
+(user 2026-10-13: tests on the Oculus output, playing on the main output). `GOW_AUDIO=0` (zones.py --silent) still mutes.
