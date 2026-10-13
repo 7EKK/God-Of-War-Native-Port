@@ -834,3 +834,10 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   only model, cost ~+23 % VU1 time vs the old model (block history ring, flags computed only when read). Gate
   port/merged22/20261013_085616: zones 0-4 60 fps, speed 1.00, savetest ok; soft shadows under Kratos in Desert and
   slot 4, no wedges. Switch GOW_VU1N_FLAG_LATENCY removed. Profiler: tools/sample_prof.py (link with /MAP).
+- 10-13 ~13:00: user playthrough with a DualShock 4: rumble verified (USB; direct HID output reports, ext cb896df).
+  User found a combat freeze (ship after the Hydra fights, Cliffs within a minute of a fight): use-after-free in
+  the UI timeline player of the enemy-meter HUD movie (docs/game-internals.md). Contained by a heap guard in
+  gow_overrides.cpp (double deletes ignored, deleted children dropped, `[gow-heapguard]` log names the early delete);
+  root cause open until a user log with the guard lines. Merged agent/visual3 (intro movie fills the picture,
+  sprite sampling clamped: no RGB lines at the movie edges). Gate port/merged24/20261013_125553: zones 0-4 60 fps,
+  speed 1.00, savetest ok. Hydra-grab fog not reproduced (needs a save before the fight).

@@ -108,6 +108,18 @@ the CSR read is `gsStatusLoad`, the DMA stores go to the native DMA request serv
 D_ENABLEW dropped; fromIPU/toIPU starts have nothing to move). `GOW_IO_HIST` during BONUS17: 0 accesses (before, during
 BONUS03: ~11k each of SMODE2/DISPLAY1/DISPLAY2 per 400 s, plus the DMA registers).
 
+## Picture size and edges (2026-10-13, agent/visual3)
+- Every movie stream is 640x480 (`GetPicture size=640x480`), but the picture is the top 448 lines; the last 32 lines
+  are black in the stream itself (`GOW_MPEG_PICDUMP`). The movie sets a 480-line display (DISPLAY2 DH 479, MAGH 3) at
+  the same DY (50) as gameplay (448 lines), so a TV shows the movie picture where the game picture is and the black
+  band in its bottom border. The host present cuts displays to the 448-line TV area (`kTvLines`, gs_hw_backend.cpp
+  Present): the movie fills the window like the game does (before: a black band under the movie, user report).
+- The picture is uploaded to TBP 0x2800 (TBW 12) and drawn as one sprite, UV 0.5-640.5 x 0.5-480.5 over 640x480,
+  bilinear. At the 2x internal scale the last host column and row sampled 25 % of the texel beyond the picture (the
+  memory after it in the 768-wide buffer): a thin coloured line on the right edge and under the picture (user
+  report). Every sprite now clamps its sampling to the texel range of the first and last pixel the GS covers (per
+  vertex `aUVClamp`), so filtering stays inside what the GS samples. Fixed for all sprites, not only movies.
+
 ## Open
 - In-level movies (a01mp05...) are checked only through `GOW_MOVIE_OVERRIDE` (same player); the level trigger was not
   reached by the scripted walk.

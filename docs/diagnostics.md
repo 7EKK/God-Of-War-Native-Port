@@ -25,6 +25,10 @@ All are opt-in environment variables (added by us; implementations noted).
 | `GOW_SND_DIAG=1` | LIBSD: every `sceSdBlockTrans` (core input stream) and every MMIX/MVOL/EVOL/AVOL/BVOL write; the stream start also prints the audio device position | ps2xIOP src/native/iop_native_overrides.cpp |
 | `GOW_AUDIO_STATS=1`, `GOW_IOP_DRIFT=1`, `GOW_SND_REGLOG=1` | sound output: requested/missing/dropped frames, highest resample rate and buffer level every ~5 s; IOP cycles granted by the EE vs advanced (with wall time) and the top IOP calls made outside `runCycles`; core volume/mix register writes. Details: docs/sound.md | ps2xIOP sound_engine.cpp, iop_emulator.cpp |
 | `GOW_GS_HW_PALDUMPMAX=<n>` | with `GOW_GS_HW_PALDUMP`: number of index-texture decodes of that block written as PGM (default 4); the palette is dumped even when it comes from the cache | ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp |
+| `GOW_GS_HW_DISPLOG=1` | the display registers (PMODE, SMODE2, DISPFB1/2, DISPLAY1/2) each time they change, with the present number | gs_hw_backend.cpp (Present) |
+| `GOW_GS_HW_DISPDUMP=<n>` | the n-th present after the displayed size changed (e.g. a movie starts) writes the whole displayed render target to `gs_hw_disp_<fbp>_<w>x<h>.ppm` | gs_hw_backend.cpp (Present) |
+| `GOW_GS_HW_RTDUMPFBP=<n>` | with `GOW_GS_HW_RTDUMP`/`RTDUMPAT`: dump that render target instead of fbp 0 / 208 | gs_hw_backend.cpp |
+| `GOW_MPEG_PICDUMP=<n>` | decoded picture n of each movie to `mpeg_pic_<n>.ppm` (decoder output, before the GS) | ps2xRuntime Kernel/Stubs/MPEG.cpp |
 | `GOW_GS_HW_RTLOG=1` | each render target created or grown (`[gs-hw-rt] new/grow fbp fbw`) | gs_hw_backend.cpp |
 | `GOW_GS_HW_XFERWATCH=<hex block>`, `GOW_GS_HW_XFERRANGE=<lo>-<hi>` | log the image transfers whose block range holds that block / whose destination lies in [lo, hi), with the first bytes of the next upload | gs_hw_backend.cpp |
 | `GOW_GS_HW_EDGELOG=1` | every 300 presents: the displayed buffer's first host rows and columns before composition (edge-line artefacts) | gs_hw_backend.cpp (present) |
@@ -32,6 +36,8 @@ All are opt-in environment variables (added by us; implementations noted).
 | `GOW_BONUS_MOVIE=<NN>` | plays BONUS movie NN through the Treasures-menu path (docs/fmv.md) | runner gow_overrides.cpp |
 | `GOW_VIB_LOG=1`, `GOW_PAD_BT_RUMBLE=1` | every rumble command of the game (`[gow-vib] small= large=`); rumble also for DualShock 4 / DualSense pads connected by Bluetooth (off by default: the first output report switches the pad to its extended input report, which DirectInput may not read) | runner gow_overrides.cpp; ps2xRuntime/src/lib/ps2_pad_rumble_win.cpp |
 | `GOW_PLAYER_TRACE=1`, `GOW_GOD_MODE=1` | once per second Kratos's position, game state and movie state (steering scripted runs); test runs only: Kratos's health refilled every poll | runner gow_overrides.cpp |
+
+Always-on: `[gow-heapguard] <what> object= at= freed-by=` (runner gow_overrides.cpp heap_guard): a double delete or a deleted child of the UI timeline player was dropped instead of crashing; the first three also dump the last guest branches. `freed-by` names the early delete (docs/game-internals.md).
 
 Always-on logs we added: `[SIF module] load-failed/load-unhandled` (RPC.cpp), `fioOpen failed:`.
 

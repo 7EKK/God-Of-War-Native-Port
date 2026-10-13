@@ -196,7 +196,10 @@ def run_zone(slot, args, outdir):
             dst = os.path.join(zone, f.replace('.ppm', '.png'))
             subprocess.run([sys.executable, '-I', os.path.join(ROOT, 'tools', 'ppm2png.py'), os.path.join(EXE_DIR, f), dst],
                            check=False)
-            pngs.append(dst)
+            if os.path.exists(dst):
+                pngs.append(dst)
+            else:  # e.g. a capture still being written when the runner was stopped
+                res['warnings'].append(f'capture {f} not converted')
     res['captures'] = len(pngs)
     blank = 0
     for p in pngs:

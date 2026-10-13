@@ -11,7 +11,15 @@
 void sub_00110E40_0x110e40(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime); // GOW-Port: pose blend entry, for GOW_BLEND_DIAG
 void sub_00116EF0_0x116ef0(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime); // GOW-Port: anim controller time update, for GOW_CTRL_DIAG
 void sub_0013DC78_0x13dc78(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime); // GOW-Port: game heap alloc, for GOW_HEAP_ZERO
+// GOW-Port: object guard (heap_guard): operator new/delete and the UI timeline containers
+void sub_0014C278_0x14c278(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+void sub_0014C2F0_0x14c2f0(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+void sub_00147520_0x147520(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+void sub_0023B6A0_0x23b6a0(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+void sub_00149340_0x149340(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+void gowDumpBranchRing(const char *why);
 #include <map>
+#include <unordered_map>
 #include <cmath>
 #include <xmmintrin.h>
 #include <thread>
@@ -558,6 +566,153 @@ namespace
         const uint32_t block = GPR_U32(ctx, 2) & 0x01FFFFFFu;
         if (block && bytes && bytes < 0x01000000u && block + bytes <= 0x02000000u)
             std::memset(rdram + block, 0, bytes);
+    }
+
+    // GOW-Port: object guard for the game's operator new (0x14C278, fixed-block pools) and delete (0x14C2F0).
+    // The Flash-style UI player (timeline nodes, vtable 0x2BF4C0: 0x147520 evaluates a node's channels, 0x23B6A0 is
+    // the node destructor, 0x149340 empties a node's duplicated-clip list) can be left holding a child that was already
+    // deleted; the boss/enemy meter HUD (HydraMeter, "_level0/:CheckForGlow2") did it in the user's runs (ship after the
+    // Hydra fights, Cliffs combat). Deleting that child again runs a destructor through whatever now occupies the block
+    // (a string: jump to 0x3F; or a zeroed list: jump to 0) and frees the block a second time, which links it into the
+    // pool's free list twice and hands it to two owners later. The guard tracks every block of operator new, ignores a
+    // second delete of the same block, and drops a stale or NULL child from those three containers before the game
+    // deletes it. Each case is logged ([gow-heapguard], the first ones with the last guest branches) to find the cause.
+    namespace heap_guard
+    {
+        struct Block
+        {
+            bool live = true;
+            uint32_t freedBy = 0; // caller of the delete that freed it
+        };
+        std::unordered_map<uint32_t, Block> blocks;
+        unsigned reports = 0;
+
+        void report(const char *what, uint32_t object, uint32_t where)
+        {
+            if (reports >= 200u)
+                return;
+            ++reports;
+            const auto it = blocks.find(object);
+            std::fprintf(stderr, "[gow-heapguard] %s object=0x%x at=0x%x freed-by=0x%x\n", what, object, where,
+                         it == blocks.end() ? 0u : it->second.freedBy);
+            if (reports <= 3u)
+                gowDumpBranchRing(what);
+        }
+
+        bool stale(uint32_t object)
+        {
+            const auto it = blocks.find(object);
+            return it != blocks.end() && !it->second.live;
+        }
+
+        // A child the game may delete: a live block whose virtual destructor (vtable at +4, entry +0xC) is game code.
+        bool deletable(const uint8_t *rdram, PS2Runtime *runtime, uint32_t object)
+        {
+            if (object == 0u || object >= 0x02000000u || (object & 3u) != 0u || stale(object))
+                return false;
+            const uint32_t vtable = readGuest32(rdram, object + 4u);
+            if (vtable < 0x00100000u || vtable >= 0x02000000u || (vtable & 3u) != 0u)
+                return false;
+            return runtime->hasFunction(readGuest32(rdram, vtable + 0xCu));
+        }
+    }
+
+    void gowOperatorNew(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        sub_0014C278_0x14c278(rdram, ctx, runtime);
+        if (const uint32_t block = GPR_U32(ctx, 2))
+            heap_guard::blocks[block] = {};
+    }
+
+    void gowOperatorDelete(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t block = GPR_U32(ctx, 4), ra = GPR_U32(ctx, 31);
+        // 0x143C78 (string delete) keeps its caller at 0($sp)
+        const uint32_t caller = ra == 0x00143C8Cu ? readGuest32(rdram, GPR_U32(ctx, 29)) : ra;
+        const auto it = heap_guard::blocks.find(block);
+        if (it != heap_guard::blocks.end())
+        {
+            if (!it->second.live)
+            {
+                heap_guard::report("second delete ignored", block, caller);
+                ctx->pc = ra;
+                return;
+            }
+            it->second = {false, caller};
+        }
+        sub_0014C2F0_0x14c2f0(rdram, ctx, runtime);
+    }
+
+    // 0x147520(a0 track header: channel count u16 at +2, a2 channel entries {node, key} of 8 bytes)
+    void gowGuardTimelineChannels(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t header = GPR_U32(ctx, 4), entries = GPR_U32(ctx, 6);
+        if (header != 0u && header < 0x02000000u && entries != 0u && entries < 0x02000000u)
+        {
+            const uint32_t count = readGuest32(rdram, header) >> 16;
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const uint32_t node = readGuest32(rdram, entries + i * 8u);
+                if (node != 0u && !heap_guard::deletable(rdram, runtime, node))
+                {
+                    heap_guard::report("timeline channel holds a deleted node", node, GPR_U32(ctx, 31));
+                    writeGuest32(rdram, entries + i * 8u, 0u);
+                }
+            }
+        }
+        sub_00147520_0x147520(rdram, ctx, runtime);
+    }
+
+    // 0x23B6A0(a0 node): child entries {node, key} at *(node+0x28), count u16 at *(node+0x1C)+2
+    void gowGuardNodeDestructor(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t node = GPR_U32(ctx, 4);
+        const uint32_t definition = node < 0x02000000u ? readGuest32(rdram, node + 0x1Cu) : 0u;
+        const uint32_t entries = node < 0x02000000u ? readGuest32(rdram, node + 0x28u) : 0u;
+        if (definition != 0u && definition < 0x02000000u && entries != 0u && entries < 0x02000000u)
+        {
+            const uint32_t count = readGuest32(rdram, definition) >> 16;
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const uint32_t child = readGuest32(rdram, entries + i * 8u);
+                if (child != 0u && !heap_guard::deletable(rdram, runtime, child))
+                {
+                    heap_guard::report("node destructor: deleted child dropped", child, node);
+                    writeGuest32(rdram, entries + i * 8u, 0u);
+                }
+            }
+        }
+        sub_0023B6A0_0x23b6a0(rdram, ctx, runtime);
+    }
+
+    // 0x149340(a0 list: first index +0x18, count +0x1C, entries {node, key} at +0x20); it has no NULL check, so
+    // missing entries are removed and the rest moved up.
+    void gowGuardCloneList(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t list = GPR_U32(ctx, 4);
+        const uint32_t first = list < 0x02000000u ? readGuest32(rdram, list + 0x18u) : 0u;
+        const int32_t count = list < 0x02000000u ? static_cast<int32_t>(readGuest32(rdram, list + 0x1Cu)) : 0;
+        const uint32_t entries = list < 0x02000000u ? readGuest32(rdram, list + 0x20u) : 0u;
+        if (count > 0 && count < 0x10000 && entries != 0u && entries < 0x02000000u)
+        {
+            uint32_t kept = 0;
+            for (uint32_t i = 0; i < static_cast<uint32_t>(count); ++i)
+            {
+                const uint32_t at = entries + (first + i) * 8u;
+                const uint32_t node = readGuest32(rdram, at);
+                if (!heap_guard::deletable(rdram, runtime, node))
+                {
+                    heap_guard::report("clone list: deleted or missing node dropped", node, list);
+                    continue;
+                }
+                const uint32_t key = readGuest32(rdram, at + 4u), to = entries + (first + kept) * 8u;
+                writeGuest32(rdram, to, node);
+                writeGuest32(rdram, to + 4u, key);
+                ++kept;
+            }
+            writeGuest32(rdram, list + 0x1Cu, kept);
+        }
+        sub_00149340_0x149340(rdram, ctx, runtime);
     }
 
     void gowRand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -1547,6 +1702,11 @@ namespace
         runtime.setPrivateGuestHeap(0x000A0000u, 0x000FF000u);
         runtime.replaceFunction(0x00279600u, gowIpuInit);
         runtime.replaceFunction(0x0028C0C8u, gowRand);
+        runtime.replaceFunction(0x0014C278u, gowOperatorNew);         // object guard (heap_guard)
+        runtime.replaceFunction(0x0014C2F0u, gowOperatorDelete);
+        runtime.replaceFunction(0x00147520u, gowGuardTimelineChannels);
+        runtime.replaceFunction(0x0023B6A0u, gowGuardNodeDestructor);
+        runtime.replaceFunction(0x00149340u, gowGuardCloneList);
         if (std::getenv("GOW_CTRL_DIAG"))
             runtime.replaceFunction(0x00116EF0u, gowDiagController);
         if (std::getenv("GOW_BLEND_DIAG"))

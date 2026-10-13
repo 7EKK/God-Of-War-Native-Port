@@ -91,3 +91,73 @@ Game continues only if load ≥ 0 and (result & ~3) == 0; otherwise spins at 0x1
   FIFO out lbu 0x8264); transfer 0x1D4: set SEND1/2 (4), SEND3 (16), push in-bytes to FIFO, then
   dmacman#28 dmac_request(ch 11, …)+#32 dmac_transfer(11) and #28(ch 12, …)+#32(12), then CTRL|=1 (0x2FC).
   Init 0x77C: RegisterIntrHandler(0x11, handler 0x584), EnableIntr(0x11), dmacman#35(11,3)/(12,3).
+
+## UI timeline player: combat freeze (use-after-free), 2026-10-13
+
+### Crashes analysed
+
+- **crash1.log (ship, after the 2 Hydra fights)**
+  - Error: `JALR 0x23b700 -> 0x3f`.
+  - 0x23B6A0 is the destructor of a timeline node (vtable 0x2BF4C0, 0x58 bytes, operator new class 144). It walks the
+    node's child entries `{node, key}` (8 bytes each) at `*(node+0x28)`; the count is the u16 at `*(node+0x1C)+2`.
+    For each child it calls the virtual destructor (vtable at +4, entry +8/+0xC) and then operator delete 0x14C2F0.
+  - Child 0x780bb0 (operator new class 32) had already been deleted. Its block was then reused for the string
+    "CheckForGlow2", from `_level0/:CheckForGlow2` (strdup 0x143C58), and freed again: free-list link at +0, "kForGlow2"
+    at +4 where the vtable was.
+- **crash2.log (Cliffs combat)**
+  - Error: `JALR 0x149390 -> 0`.
+  - 0x149340 empties a node's duplicated-clip list (first index +0x18, count +0x1C, entries `{node, key}` at +0x20).
+    It has no NULL check, and the list's entries had been zeroed: the storage was reused.
+
+### Which system it is
+
+The strings belong to the Flash-style HUD movie of the boss/enemy meter: HydraMeter1/2, EnemySetMeter, EnemyEyeGlow,
+SimKeyEvent, `_level0/:CheckForGlow1/2`. This movie is in every level WAD.
+
+| Function | Role |
+|---|---|
+| 0x147520 | Evaluates a node's channels (keyframe search). When the key changes it deletes and recreates the channel's node. |
+| 0x148458 | Property/event keys: string values, script calls. |
+| 0x1493E8 | Parses "name[...]" and builds the clone list. |
+| 0x1491C8 | Creates the clones. |
+| 0x14C278 / 0x14C2F0 | operator new/delete on 5 fixed-block pools. The class table is at 0x29C030: 32x500, 64x100, 144x220, 288x20, 512x6. A small request falls back to a bigger class when its own class is full. |
+
+### What was ruled out
+
+| Candidate | How it was checked | Result |
+|---|---|---|
+| Recompiler miscompile in the involved functions | EE differential tester, 150 calls each (port/shipcrash/diff1) | Only 1-ulp float noise and VU0 flag noise. Covered: 0x147520, 0x146DE8, 0x146FB8, 0x148458, 0x149B10, 0x23B6A0, 0x1493E8, 0x149340, 0x149958, 0x149FA0, 0x23B778, 0x14A560, 0x1491C8, 0x13DA10, 0x13DB18, 0x14C278, 0x14C2F0. |
+| Thread races | Thread log | The game has only main (priority 2) and libdbc (priority 1). The runtime's same-priority time slice never applies. |
+| Pool exhaustion or a leak | Pool usage log | Class 32 holds about 200 of 500 blocks in ship fights; usage is stable. |
+| Double frees in ordinary combat | Pool checker, 5-minute ship fights | None. |
+
+**Not reproduced.**
+- The saves on the card are all at quiet save altars, and scripted exploration found no enemies.
+- The ship start (new game) has fights but no enemy meter.
+- The trigger needs a fight that shows the enemy meter, such as the Hydra fights or the Cliffs combat the user played.
+
+### Fix
+
+The fix is an object guard in gow_overrides.cpp (heap_guard), and it is always on:
+
+- operator new/delete track every block they hand out.
+- A second delete of a block that is already free is ignored. Without the guard it links the block into the free list
+  twice, which later gives it to two owners.
+- Before 0x147520, 0x23B6A0 and 0x149340 run, a child that was deleted is dropped:
+  - in 0x147520 and 0x23B6A0 its entry is zeroed;
+  - in 0x149340 the entry is removed and the rest move up, since that function has no NULL check.
+- A child counts as deleted if its block is free, or its vtable does not point to game code.
+- Each case logs `[gow-heapguard] <what> object= at= freed-by=`. The first three also dump the last guest branches, so
+  a user log names the delete site that freed the child too early. That site is the remaining root cause.
+
+**Self-test (temporary build).** A node still referenced by a channel was freed every 5000 calls. The guard caught
+every case: 11 frees, 11 reports. The game kept running (port/shipcrash/selftest).
+
+### Diagnostics
+
+`gow_overrides_diag.cpp` is the investigation version and is not for the merge. It adds:
+
+- `GOW_POOL_CHECK=1`: a pool-level double-free and live-block checker, plus a class usage log;
+- `GOW_THREAD_LOG=1`.
+- Status: contained by the guard; root cause (the early delete site) still open, waiting for a user log with
+  `[gow-heapguard]` lines from a fight that shows the enemy meter.
