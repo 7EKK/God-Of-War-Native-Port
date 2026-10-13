@@ -232,7 +232,13 @@ namespace ps2x::iop::detail
                 return true;
 
             case 6: // sceCdRead
-                if (readSectors(a0, a1, a2))
+            {
+                const bool ok = readSectors(a0, a1, a2);
+                // GOW_CD_TRACE=1 (debug): every sceCdRead (lsn, sectors, IOP destination, result)
+                static const bool trace = std::getenv("GOW_CD_TRACE") != nullptr;
+                if (trace)
+                    std::fprintf(stderr, "[cd-read] lsn=%u sectors=%u dst=%x ok=%d\n", a0, a1, a2, ok ? 1 : 0);
+                if (ok)
                 {
                     signalCommandComplete();
                     if (callback.address != 0u)
@@ -248,6 +254,7 @@ namespace ps2x::iop::detail
                 else
                     cpu.gpr[2] = 0u;
                 return true;
+            }
 
             case 7: // sceCdSeek
                 currentLsn = a0;
