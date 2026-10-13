@@ -1107,28 +1107,52 @@ namespace
         padReturn(ctx, 0u);
     }
 
-    // GOW-Port: GOW_MOVIE_OVERRIDE=<name> (debug) plays that movie (e.g. Semo02, BONUS03) instead of the first one the
-    // game loads, so any movie can be checked through the intro path. 0x188CA0 copies its name argument (a0) into the
-    // movie struct (0x304D10), so the override name is put on the guest stack below sp and a0 points there; the
-    // game's own buffer (the intro's holds 6 characters) is not written.
+    // GOW-Port: GOW_MOVIE_OVERRIDE=<name>[,<name>...] (debug) plays those movies (e.g. Semo02, BONUS03) instead of the
+    // ones the game loads, one per load: the first replaces the intro, the next ones are started from the title menu by
+    // gowDiagBonusMovie (tools/movies.py plays every movie of the disc in one session this way). 0x188CA0 copies its
+    // name argument (a0) into the movie struct (0x304D10), so the override name is put on the guest stack below sp and
+    // a0 points there; the game's own buffer (the intro's holds 6 characters) is not written.
+    std::vector<std::string> &movieOverrideList()
+    {
+        static std::vector<std::string> list = [] {
+            std::vector<std::string> names;
+            if (const char *value = std::getenv("GOW_MOVIE_OVERRIDE"))
+            {
+                std::string text(value);
+                for (size_t start = 0; start <= text.size();)
+                {
+                    const size_t end = std::min(text.find(',', start), text.size());
+                    if (end > start && end - start <= 31)
+                        names.push_back(text.substr(start, end - start));
+                    start = end + 1;
+                }
+            }
+            return names;
+        }();
+        return list;
+    }
+    size_t g_movieOverrideNext = 0;
+
     void gowMovieOverrideLoad(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        static bool done = false;
-        static const char *override = std::getenv("GOW_MOVIE_OVERRIDE");
-        const size_t len = override ? std::strlen(override) : 0;
-        if (done || len == 0 || len > 31)
+        const std::vector<std::string> &list = movieOverrideList();
+        if (g_movieOverrideNext >= list.size())
         {
+            // GOW_MPEG_DIAG: the movies the game loads itself (tools/movies.py --new-game tells them apart by this line)
+            if (const uint8_t *name = padBuffer(rdram, GPR_U32(ctx, 4), 1))
+                std::fprintf(stderr, "[gow-fmv] load %.31s\n", reinterpret_cast<const char *>(name));
             sub_00188CA0_0x188ca0(rdram, ctx, runtime);
             return;
         }
-        done = true;
+        const std::string &override = list[g_movieOverrideNext++];
         const uint32_t sp = GPR_U32(ctx, 29);
         const uint32_t name = sp - 32u;
         uint8_t *buffer = padBuffer(rdram, name, 32);
         const uint8_t *old = padBuffer(rdram, GPR_U32(ctx, 4), 1);
-        std::fprintf(stderr, "[gow-fmv] override %s -> %s\n", old ? reinterpret_cast<const char *>(old) : "?", override);
+        std::fprintf(stderr, "[gow-fmv] override %zu/%zu %s -> %s\n", g_movieOverrideNext, list.size(),
+                     old ? reinterpret_cast<const char *>(old) : "?", override.c_str());
         std::memset(buffer, 0, 32);
-        std::memcpy(buffer, override, len);
+        std::memcpy(buffer, override.data(), override.size());
         SET_GPR_U32(ctx, 4, name);
         SET_GPR_U32(ctx, 29, name);
         sub_00188CA0_0x188ca0(rdram, ctx, runtime);
@@ -1139,14 +1163,20 @@ namespace
     // the main menu the way the Treasures menu does, without unlocking it: its command handler 0x1BA2C8 writes the two
     // digits into the game's "BonusXX" buffer (0x29CC00) and sets the menu object's movie name (+0x1518) and +0x1520;
     // the menu update 0x1BA4F8 then starts it with 0x1B2D20(name, 3, 1) and returns to the menu when it ends. The
-    // request is made once, GOW_BONUS_MOVIE_DELAY seconds (default 10) after the menu update first runs.
+    // request is made once, GOW_BONUS_MOVIE_DELAY seconds (default 10) after the menu update first runs. With a
+    // GOW_MOVIE_OVERRIDE list, a request is made each time the movie thread is idle again (3 s after the previous movie
+    // ended) while list entries remain; the load override then plays the next entry instead of the bonus movie.
     void gowDiagBonusMovie(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        static const char *movie = std::getenv("GOW_BONUS_MOVIE");
+        static const char *movie = [] { const char *v = std::getenv("GOW_BONUS_MOVIE"); return v ? v : "24"; }();
         static const double delay = [] { const char *v = std::getenv("GOW_BONUS_MOVIE_DELAY"); return v ? std::atof(v) : 10.0; }();
-        static const auto first = std::chrono::steady_clock::now();
-        static bool done = false;
-        if (!done && std::chrono::duration<double>(std::chrono::steady_clock::now() - first).count() >= delay)
+        static auto readyAt = std::chrono::steady_clock::now() + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                                                        std::chrono::duration<double>(delay));
+        static bool done = false, inFlight = false;
+        const bool listMode = movieOverrideList().size() > 1;
+        const uint32_t movieState = readGuest32(rdram, 0x0029C838u);
+        const bool wanted = listMode ? g_movieOverrideNext < movieOverrideList().size() : !done;
+        if (wanted && !inFlight && movieState == 0u && std::chrono::steady_clock::now() >= readyAt)
         {
             done = true;
             uint8_t *name = padBuffer(rdram, 0x0029CC00u, 8);
@@ -1158,17 +1188,22 @@ namespace
                 const uint32_t address = 0x0029CC00u, one = 1u;
                 std::memcpy(menu + 0x1518, &address, 4);
                 std::memcpy(menu + 0x1520, &one, 4);
+                inFlight = true;
                 std::fprintf(stderr, "[gow-fmv] bonus request %.7s (menu %08x)\n", reinterpret_cast<char *>(name),
                              GPR_U32(ctx, 4));
             }
         }
         // movie thread state (0x29C838: 10 loaded, 11 playing, 0 idle) as seen by the menu, for the test scripts
         static uint32_t lastState = 0u;
-        const uint32_t state = readGuest32(rdram, 0x0029C838u);
-        if (done && state != lastState)
+        if (done && movieState != lastState)
         {
-            std::fprintf(stderr, "[gow-fmv] menu sees movie state %u -> %u\n", lastState, state);
-            lastState = state;
+            std::fprintf(stderr, "[gow-fmv] menu sees movie state %u -> %u\n", lastState, movieState);
+            if (movieState == 0u && inFlight)
+            {
+                inFlight = false;
+                readyAt = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            }
+            lastState = movieState;
         }
         sub_001BA4F8_0x1ba4f8(rdram, ctx, runtime);
     }
@@ -1177,8 +1212,57 @@ namespace
     // player 0x188848) as fast as it can. Guest time only advances by executed cycles, and the recompiled poll costs
     // more host time per guest cycle than a real EE, so guest time, the IOP and the movie sound fell to ~0.72x real
     // time (pictures at ~22 fps instead of 30). Each poll counts the host time that has passed as guest time.
+    // GOW_MPEG_DIAG (debug): the movie's stream reads (0x17AFE0(stream, buffer, size, ...)): size asked, file size and
+    // position, and the size returned, for reads close to the end of the file
+    void gowDiagStreamRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t stream = GPR_U32(ctx, 4), asked = GPR_U32(ctx, 6);
+        const uint32_t size = readGuest32(rdram, stream + 8u), position = readGuest32(rdram, stream + 0xCu);
+        sub_0017AFE0_0x17afe0(rdram, ctx, runtime);
+        // near the end of a file, or every read of a big stream (a movie) with GOW_MPEG_DIAG=2
+        static const bool allReads = [] { const char *v = std::getenv("GOW_MPEG_DIAG"); return v && v[0] == '2'; }();
+        if (size - position < 0x10000u || (allReads && size > 0x100000u))
+            std::fprintf(stderr, "[gow-fmv-read] stream=%x asked=%x size=%x position=%x -> %x flags=%x\n", stream, asked, size,
+                         position, GPR_U32(ctx, 2), readGuest32(rdram, stream + 4u));
+    }
+
+    // GOW_SND_CALLLOG=1 (debug): the game's sound-group pause/continue (0x175148(pause, mask)) with its caller
+    void gowDiagSoundGroups(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        std::fprintf(stderr, "[gow-snd-groups] pause=%u mask=%04x ra=%x\n", GPR_U32(ctx, 4), GPR_U32(ctx, 5), GPR_U32(ctx, 31));
+        sub_00175148_0x175148(rdram, ctx, runtime);
+    }
+
     void gowMovieStreamService(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        // GOW_MPEG_DIAG: once per second, the movie struct words (0x304D10 + 0x80..0x140) that changed, the movie
+        // thread state and the poll's caller (what a stuck player waits for)
+        static const bool diag = std::getenv("GOW_MPEG_DIAG") != nullptr;
+        if (diag)
+        {
+            static auto last = std::chrono::steady_clock::time_point{};
+            static uint32_t previous[0x30] = {};
+            static uint64_t polls = 0;
+            ++polls;
+            if (std::chrono::steady_clock::now() - last > std::chrono::seconds(1))
+            {
+                last = std::chrono::steady_clock::now();
+                std::string changed;
+                for (uint32_t i = 0; i < 0x30u; ++i)
+                {
+                    const uint32_t value = readGuest32(rdram, 0x00304D90u + i * 4u);
+                    if (value != previous[i])
+                    {
+                        char text[32];
+                        std::snprintf(text, sizeof(text), " +%02x=%x", 0x80u + i * 4u, value);
+                        changed += text;
+                        previous[i] = value;
+                    }
+                }
+                std::fprintf(stderr, "[gow-fmv-poll] polls=%llu state=%u ra=%x%s\n", static_cast<unsigned long long>(polls),
+                             readGuest32(rdram, 0x0029C838u), GPR_U32(ctx, 31), changed.c_str());
+            }
+        }
         runtime->eeScheduler().catchUpToHost(EeScheduler::kEeClockHz / 60u);
         sub_00188B80_0x188b80(rdram, ctx, runtime);
     }
@@ -1646,7 +1730,9 @@ namespace
         const uint32_t cmd = GPR_U32(ctx, 4);
         const uint32_t size = GPR_U32(ctx, 5);
         const uint32_t data = GPR_U32(ctx, 6);
-        if (++g_sndCmdCount <= 300)
+        // GOW_SND_CALLLOG=1: every command after the first 300 too, except the stream status poll 0x40
+        static const bool callLog = std::getenv("GOW_SND_CALLLOG") != nullptr;
+        if (++g_sndCmdCount <= 300 || (callLog && cmd != 0x40u))
         {
             if (cmd == 0x68u)
             {
@@ -1961,10 +2047,14 @@ namespace
         else
         {
             runtime.replaceFunction(0x00188B80u, gowMovieStreamService);
-            if (std::getenv("GOW_MOVIE_OVERRIDE"))
+            if (std::getenv("GOW_MOVIE_OVERRIDE") || std::getenv("GOW_MPEG_DIAG"))
                 runtime.replaceFunction(0x00188CA0u, gowMovieOverrideLoad);
-            if (std::getenv("GOW_BONUS_MOVIE"))
+            if (std::getenv("GOW_BONUS_MOVIE") || movieOverrideList().size() > 1)
                 runtime.replaceFunction(0x001BA4F8u, gowDiagBonusMovie);
+            if (std::getenv("GOW_SND_CALLLOG"))
+                runtime.replaceFunction(0x00175148u, gowDiagSoundGroups);
+            if (std::getenv("GOW_MPEG_DIAG"))
+                runtime.replaceFunction(0x0017AFE0u, gowDiagStreamRead);
         }
         if (std::getenv("GOW_RENDER_DIAG"))
             for (const uint32_t address : {0x001262C8u, 0x00126310u, 0x0012633Cu, 0x00126368u,

@@ -18,8 +18,17 @@ continues at once) to keep the runs short.
   A callback that does not return (thread switch) falls back to the queued invocation and logs `[mpeg] stream callback
   ... did not return`.
 - **End of stream**: libmpeg's `sceMpegIsEnd` is the game's own code (0x26FF70: returns the first word of `mp->sys`).
-  The stub sets that word when the PSS program end was seen and every decoded picture was handed out, and clears it in
-  `sceMpegCreate`. Without it the player stayed in its playing state forever after the last picture.
+  The stub sets that word when the video is over and every decoded picture was handed out, and clears it in
+  `sceMpegCreate`. Without it the player stayed in its playing state forever after the last picture. The video is over
+  at its **sequence end code** (`000001B7`, where libmpeg reports the end; the decoder is flushed there) or at the PSS
+  program end (`000001B9`), whichever is first; the demuxer still hands the audio packets after it to the game.
+  Until 2026-10-13 only the program end counted. Every movie file ends with a 4-byte tail holding that code (files are
+  16 KB blocks + 4 bytes); when the player's block reader (0x188848, 4 x 16 KB ring, reads through 0x17AFE0 = SMPD fn 6)
+  asked for one more block before the tail was demuxed, it spun on end-of-file reads (0 bytes) forever: A01MP01 (the
+  ship movie after the second Hydra fight) froze after its last picture while 989snd kept looping the last 16 KB of
+  its IOP sound ring (user report "audio totally broken"). Reproduced and fixed with tools/movies.py.
+- The game plays the widescreen files (`.PSW`, e.g. A01MP01.PSW) where they exist; the names it asks for have no
+  extension. 67 movies are on the disc (`*.PSS`), 53 of them also as `.PSW`.
 - GS renderer: `TEST.ZTE = 0` means no depth test (the GS ignores ZTST then). The movie draws its picture sprite with
   `TEST = 0`; it was treated as ZTST NEVER and rejected after the first frame, which froze the picture.
 - **Real-time playback**: the movie thread never blocks; it polls its stream service (0x188B80, called only by the
@@ -120,6 +129,56 @@ BONUS03: ~11k each of SMODE2/DISPLAY1/DISPLAY2 per 400 s, plus the DMA registers
   report). Every sprite now clamps its sampling to the texel range of the first and last pixel the GS covers (per
   vertex `aUVClamp`), so filtering stays inside what the GS samples. Fixed for all sprites, not only movies.
 
+## Every movie: tools/movies.py (2026-10-13)
+`python -I tools/movies.py [--only A,B] [--batch 12]` plays every movie of the disc through the game's own player and
+judges picture and sound (needs numpy). `GOW_MOVIE_OVERRIDE=<name>,<name>,...` replaces one movie load per entry; the
+title-menu hook (`gowDiagBonusMovie`) requests the next one each time the player is idle again, so the movies of a batch
+play one after another in one session. Sound is recorded with the output muted (`GOW_AUDIO=0` + `GOW_AUDIO_PCM`: the
+stream runs at volume 0, paced as when heard). Per movie: pictures and pictures/s (30), audio seconds vs picture
+seconds, A/V drift, silent seconds, clipped samples (bad above 0.5 %: A01MP05 clips ~0.1 % by design, below), smoothness (first difference / RMS; noise
+>= 1.2), repeated 512-frame blocks, dropped/missing output frames, runtime errors and movies that never end.
+`--reanalyse <run dir>` judges a finished run again; `GOW_AUDIO_RAW=<file>` records the mix before the output's rate
+adaptation, so a movie can be compared with its source track sample by sample.
+- Movie sound is exact: A01MP05 recorded raw matches its PCM track at gain 1.001, sample-aligned.
+- When a movie starts, the game pauses its sound groups with a per-movie mask (`0x175148(1, mask)` -> SMPD fn 0x10 ->
+  989snd export #67, which pauses every sound handle of those groups; table at 0x29C858: A01MP05 0x7CFD, A01MP02 and
+  A01MP03 0x7EFF, others the caller's value). A01MP05 leaves groups 1, 8 and 9 playing on purpose: the level music goes
+  on under that scene (in the menu test it is the title music, which is why A01MP05 measures some clipping).
+
+- `--new-game <seconds>`: the in-game path. A new game (title, New Game, Hero, the ship) fights around the deck with
+  god mode; the game plays the new-game intro (Semo01) and preloads A01MP05 when the ship loads, then plays it from
+  its level trigger (about 90 gameplay seconds in). The movies are found by `[gow-fmv] load <name>` (the load hook logs
+  every load under `GOW_MPEG_DIAG`); output statistics count only from a movie's first to its last picture (a
+  preloaded movie's log segment also holds gameplay).
+- In game, A01MP05's track is mixed sample-exact; under it plays the level's group-1 stream (a 4-voice music stream,
+  989snd handle group 1: core 1 voices 0/4/7/8), which the movie's mask 0x7CFD leaves running by design; every voice of
+  the paused groups is silenced by 989snd (pitch 0, volume 0). Mix: movie RMS ~6400 + music ~7000, 0.2 % clipped.
+- Story movies through the menu path (port/movies4/all, story, story2): 45 of 53 ok (A01MP05 clips ~0.1 % against the
+  title music, below the threshold); bad: P04MP05 (stops, below), SEMO08 (drift, below); not reached (behind P04MP05 in
+  their batch): P06MP01, SATINTRO, SEMO01-04 (SEMO01 is ok in the new-game runs). BONUS movies were verified by
+  agent/movies2.
+
 ## Open
-- In-level movies (a01mp05...) are checked only through `GOW_MOVIE_OVERRIDE` (same player); the level trigger was not
-  reached by the scripted walk.
+- **A01MP02 in game** (the ship scene where Kratos grabs the captain, user screenshot port/usertest1/movie1_game.png,
+  logs play3.log / play5.log; the third movie load of a new game, after Semo01 and the A01MP05 preload): the user
+  hears totally broken sound, the picture is fine. Through the menu path it plays sample-exact. Not reproduced in game:
+  the scripted new game (`--new-game`) reaches A01MP05's trigger but not A01MP02's, and replacing the ship's preload by
+  A01MP02 (`GOW_MOVIE_OVERRIDE=Semo01,A01MP02`) crashes the level script (jump to 0 at 0x161C68). The 20
+  `[dma] chain tag with SPR flag ... path=2` lines at its start (identical in both user logs) are GIF `cnt` tags
+  whose unused address word holds leftovers; the 17 values are not in the movie files.
+  The user's loopback recording (port/usertest1/live_audio.wav, play6.log) aligned piecewise with the A01MP02 track
+  (rec = src + 17.6 s, corr 0.7): the movie track is there at its normal level (gain 0.3-0.67, Windows volume 0.67),
+  and under it a loud smooth sound (music-like, up to ~7000 RMS in the recording, ~10000 at full scale) keeps playing;
+  the sum hard-clips at full scale for much of the movie. A01MP02's mask (0x7EFF) pauses groups 1 and 3 and leaves
+  group 8; 989snd's stream pause works in game (A01MP05 run: the paused streams' voices get pitch 0). Next: a save made
+  just before that scene (or the warp to its zone), then `GOW_SND_VOICEDUMP=1 GOW_SND_CALLLOG=1` at its start: which
+  handle (group, type) and voices keep sounding, and whether a pause or volume request for them was lost.
+- **P04MP05 stops after ~180-210 pictures** (of 743, about 6 s; reproducible, also on the main build before these
+  changes): no picture is requested any more while the sound plays on. The demuxer stays aligned (`[MPEG:skip]` none),
+  no picture is held (`[MPEG:hold]` none), and the movie reads none of its data through 0x17AFE0 (it is on disc layer 1,
+  PART2.PAK): another read path to follow.
+- SEMO08 measured 4.4 s A/V drift (214.6 s of audio for 210.2 s of pictures) in a batch that shared the machine with
+  other runs; to recheck alone.
+- In some in-game runs (port/movies4/newgame/20261013_171528) the GS stalled for seconds while A01MP05 waited
+  preloaded (host 11 fps): the sound starved (up to 3.8 s) and the backlog was then cut. Not reproduced in a run without
+  other runners on the machine (port/movies4/gsstats); the same fight with movies skipped did not stall.

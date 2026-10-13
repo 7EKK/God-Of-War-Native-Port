@@ -857,3 +857,8 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   reports in the whole session, so the original use-after-free did not recur at all (not just caught). Archers/captain
   movie audio still broken: loopback recording port/usertest1/live_audio.wav shows the movie at full scale (hard
   clipping) with hundreds of sample jumps per second, gameplay before/after clean; sent to agent/movies4.
+- 10-13 ~20:00: merged agent/movies4 (movie ends at the video sequence end: A01MP01 froze after the second Hydra
+  fight with its last sound buffer looping; tools/movies.py, 45/53 story movies ok; P04MP05 stops after ~180
+  pictures (open, also on main); SEMO08 drift to recheck). A01MP02 (captain) still clips: a loud group-8 sound plays
+  under it on the real path (mask 0x7EFF leaves group 8 on); next: voice dump at its real start. User: SKIP the
+  scripted new game past the trap door (the user plays those parts).

@@ -35,7 +35,9 @@
   (argv[2] = path to an .iso is still supported but the user does not want ISO reads.)
 - Test runs play sound (user 2026-10-12, "enable the audio"): `tools/zones.py` and `tools/savetest.py` mute only with
   `--silent` (GOW_AUDIO=0).
-- `play.cmd` plays the movies (cutscenes; docs/fmv.md). The test tools set `GOW_SKIP_FMV=1` to keep runs short.
+- `play.cmd` plays the movies (cutscenes; docs/fmv.md). The zone and save tests set `GOW_SKIP_FMV=1` to keep runs
+  short; `tools/movies.py` plays every movie of the disc (muted, sound recorded) and judges picture and sound
+  (docs/fmv.md; needs numpy).
 - Game data comes from the extracted disc in `disc-usa/` (docs/disc.md); `play.cmd` and the test tools never read the
   ISO (`--iso` in zones.py/savetest.py, or `GOW_ISO=<iso>`, for comparisons).
 - `tools/run.sh <seconds> <name> [ENV=VALUE ...]` — runs from disc/, waits, screenshots, kills;

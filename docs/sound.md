@@ -60,4 +60,17 @@ worktree build follows it; e.g. `Oculus` for "Cuffie (Oculus Virtual Audio Devic
 that device through miniaudio directly (ps2xRuntime/src/lib/ps2_audio_device.cpp, raylib's miniaudio build: its
 configuration macros must match raudio.c). No match: the log lists the devices and the default output is used.
 `play.cmd` sets `GOW_AUDIO_DEVICE=default` (the system default output), so the per-user file only routes test runs
-(user 2026-10-13: tests on the Oculus output, playing on the main output). `GOW_AUDIO=0` (zones.py --silent) still mutes.
+(user 2026-10-13: tests on the Oculus output, playing on the main output). `GOW_AUDIO=0` (zones.py --silent) still mutes;
+a muted recording (`GOW_AUDIO_PCM`) never uses the chosen device.
+
+## Sound groups and movies (2026-10-13)
+- 989snd keeps every sound handle in a group (handle +0x17). The game pauses and continues groups through SMPD fn 0x10
+  (`0x175148(pause, mask)` on the EE -> 989snd plugin call -> SMPD 0x66F4 -> 989snd export #67 pause / #68 continue),
+  e.g. all groups while loading (mask 0x7FFF) and, when a movie starts, a per-movie mask (docs/fmv.md). 989snd pauses a
+  sound by setting its voices' pitch and volume to 0 and a stream (type 4, 0x12398) by zeroing the voices of its
+  channels, all through the LIBSD calls the engine serves.
+- Checked with `GOW_SND_CALLLOG`, `GOW_SND_VOICEDUMP` and `GOW_AUDIO_RAW` (port/movies4): the movie stream is mixed
+  sample-exact (gain 1.001 against the PSS track); under A01MP05 the voices of the group-1 stream keep playing, as the
+  movie's mask asks.
+- Recording without hearing it: `GOW_AUDIO=0` with `GOW_AUDIO_PCM` runs the output at volume 0; `GOW_AUDIO_RAW` writes
+  the mix before the output's rate adaptation (the PCM file is after it, so it drifts up to 5 % against a source).

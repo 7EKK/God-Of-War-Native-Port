@@ -108,6 +108,7 @@ The project lives in two branches of this repository:
 ├── tools/
 │   ├── zones.py             # Zone regression test: load every save slot, walk, capture, judge fps
 │   ├── savetest.py          # Memory card save test
+│   ├── movies.py            # Movie test: play every movie of the disc, judge picture and sound
 │   ├── vu1/ iop/            # Ahead-of-time code generators (VU1 microcode, IOP modules)
 │   ├── dis.py, irxdis.py    # Disassemblers for the game ELF and IRX modules
 │   └── switch/              # Switch smoke-link helpers
@@ -134,7 +135,7 @@ The pipeline is still manual; the exact steps and their build cost are in
 3. Generate the native IOP and VU1 code (`tools/iop/iopn_gen.py`, `tools/vu1/`; see docs/native-port.md).
 4. Build `ps2EntryRunner` (Release) and run it with `play.cmd`.
 
-Test runs: `python tools/zones.py --slots 1,2,3,4` (sound on, `--silent` mutes) and `python tools/savetest.py`.
+Test runs: `python tools/zones.py --slots 1,2,3,4` (sound on, `--silent` mutes) and `python tools/savetest.py`; every movie of the disc: `python tools/movies.py` (muted, sound recorded and checked).
 
 ## How it works
 
