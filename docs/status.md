@@ -851,3 +851,5 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   original), the intro movie's darker last row; LATER: top edge row 0. Ask the user before starting the Switch build.
   Remaining: archers-movie audio (agent/movies4), combat freeze root cause (needs a meter fight log with the fixed
   guard), full levels.py run (108 zones, ATHN01E), new game past the trap door, menu guest clock 3.7 % fast.
+- 10-13 ~18:45: gate port/merged26/20261013_182214 (level warp overrides, fixed heap guard, audio device selection; sound
+  on the Oculus test device): zones 0-4 ok 58.8-60 fps, speed 1.00-1.02, savetest ok, 0 heap-guard reports.
