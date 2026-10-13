@@ -200,6 +200,7 @@ def emit_upper(u, pc, idx, mac_var, clip_var, prev_clip, clean=frozenset()):
     out = [f"__m128 r{idx} = {r};"]
     if kind in ('add', 'sub', 'mul', 'madd', 'msub') and mac_var:
         out.append(f"const uint32_t {mac_var} = vu1n::macVal<{m}>(r{idx});")
+        out.append(f"const __m128 q{idx} = r{idx};  // unclamped: flags computed later if it outlives the block")
     if kind not in ('max', 'min', 'mini'):
         out.append(f"r{idx} = vu1n::clampv(r{idx});")
     if toacc or fd:
@@ -428,10 +429,9 @@ def emit_lower(l, pc, upper, bkp, mac_expr, clip_expr, clip_var):
     return [f"VU1NativeAccess::callLower(n, {pc}u, 0x{l:08x}u, 0x{upper:08x}u);"]
 
 
-def gen_block(pc0, pairs, latency=True):
-    """latency: flags keep their latency across blocks (GOW_VU1N_FLAG_LATENCY); else the former model (a block commits its
-    newest flag writer at its exit and reads the committed flags)."""
-    """C++ body for a block, or None if the block uses something the native backend does not support."""
+def gen_block(pc0, pairs, tail_out=None):
+    """tail_out: list that receives the block's VU1TailDesc (mac pairs, mac masks, clip pairs) when it has one.
+    C++ body for a block, or None if the block uses something the native backend does not support."""
     n = len(pairs)
     infos = [lower_info(l) if not (u >> 31) else lower_info(0) for (l, u) in pairs]
     uinfo = [upper_info(u) for (l, u) in pairs]
@@ -475,33 +475,50 @@ def gen_block(pc0, pairs, latency=True):
         return expr
 
     def mac_src(i):
-        return visible(i, mac_w, "m", f"VU1NativeAccess::macAt(n, n.cyc[{i}])" if latency else "s.mac")
+        return visible(i, mac_w, "m", f"VU1NativeAccess::macAt(n, n.cyc[{i}])")
 
     def clip_src(i):
-        return visible(i, clip_w, "c", f"VU1NativeAccess::clipAt(n, n.cyc[{i}])" if latency else "s.clip")
+        return visible(i, clip_w, "c", f"VU1NativeAccess::clipAt(n, n.cyc[{i}])")
 
     def clip_prev(i):
         c = [j for j in clip_w if j < i]
-        return f"c{c[-1]}" if c else ("VU1NativeAccess::clipChain(n)" if latency else "s.clip")
+        return f"c{c[-1]}" if c else "VU1NativeAccess::clipChain(n)"
+
+    def flush_final(i):
+        """Block end: the newest MAC / clip writer is queued with the block's tail record (n.tail); the older writers that
+        can still be the visible one after the exit (successor in the last three pairs) are only stored there, the reader
+        decides (VU1FlagRing::tailVisible)."""
+        out, desc = [], {"m": [], "c": []}
+        for writers, prefix in ((mac_w, "m"), (clip_w, "c")):
+            w = [j for j in writers if j <= i]
+            older = [j for k, j in enumerate(w[:-1]) if i - w[k + 1] < FLAT - 1]
+            desc[prefix] = older
+            for k, j in enumerate(older):
+                out.append(f"n.tail->q[{k}] = q{j};" if prefix == "m" else f"n.tail->c[{k}] = c{j};")
+        has_tail = bool(desc["m"] or desc["c"])
+        tail = "n.tail" if has_tail else "nullptr"
+        if mac_w and mac_w[-1] <= i:
+            j = mac_w[-1]
+            out.append(f"VU1NativeAccess::pushMacRaw(n, n.cyc[{j}], q{j}, {REV4[(pairs[j][1] >> 21) & 0xF]}u, {tail});")
+        if clip_w and clip_w[-1] <= i:
+            j = clip_w[-1]
+            out.append(f"VU1NativeAccess::pushClipTail(n, n.cyc[{j}], c{j}, {tail});")
+        if has_tail and tail_out is not None:
+            tail_out.append((desc["m"], [REV4[(pairs[j][1] >> 21) & 0xF] for j in desc["m"]], desc["c"]))
+        return out
 
     def flush(i):
-        if not latency:
-            out = []
-            cm = [j for j in mac_w if j <= i]
-            cc = [j for j in clip_w if j <= i]
-            if cm:
-                out.append(f"s.mac = m{cm[-1]};")
-            if cc:
-                out.append(f"s.clip = c{cc[-1]};")
-            return out
-        """Block exit after pair i: queue every writer that can still be the visible one at or after the exit (the last one,
-        and older ones whose successor is not visible yet when the block ends)."""
+        """Block exit after pair i (D/T halt): queue every writer that can still be the visible one at or after the exit
+        (the last one, and older ones whose successor is not visible yet when the block ends)."""
         out = []
         end = f"n.cyc[{i}] + 1u"
         for writers, prefix, push in ((mac_w, "m", "pushMac"), (clip_w, "c", "pushClip")):
             w = [j for j in writers if j <= i]
             for k, j in enumerate(w):
-                call = f"VU1NativeAccess::{push}(n, n.cyc[{j}], {prefix}{j});"
+                if prefix == "m":  # MAC flags of a writer read after the block: computed by the reader (VU1FlagRing)
+                    call = f"VU1NativeAccess::pushMacRaw(n, n.cyc[{j}], q{j}, {REV4[(pairs[j][1] >> 21) & 0xF]}u, nullptr);"
+                else:
+                    call = f"VU1NativeAccess::{push}(n, n.cyc[{j}], {prefix}{j});"
                 if k == len(w) - 1:
                     out.append(call)
                 elif i - w[k + 1] < FLAT - 1:
@@ -598,9 +615,9 @@ def gen_block(pc0, pairs, latency=True):
             lines.append("if (s.dBitEnabled) { " + " ".join(flush(i)) + f" s.stoppedByD = true; return kVu1nEnded | {(pc + 8) & 0x3FFF}u; }}")
         if (u >> 27) & 1:
             lines.append("if (s.tBitEnabled) { " + " ".join(flush(i)) + f" s.stoppedByT = true; return kVu1nEnded | {(pc + 8) & 0x3FFF}u; }}")
-    lines.extend(flush(n - 1))
     end_pc = (pc0 + 8 * n) & 0x3FFF
     ebit = any((u >> 30) & 1 for (l, u) in pairs)
+    lines.extend(flush_final(n - 1))
     if last_is_branch_block:
         lines.append(f"return taken ? target : {end_pc}u;")
     elif ebit:
@@ -653,30 +670,34 @@ def main():
             key = fnv_block(pc, words)
             if key in blocks:
                 continue
-            body = gen_block(pc, pairs)
-            blocks[key] = (pc, len(pairs), body, gen_block(pc, pairs, latency=False) if body is not None else None)
+            tail = []
+            body = gen_block(pc, pairs, tail)
+            blocks[key] = (pc, len(pairs), body, tail[0] if tail else None)
             if body is None:
                 unsupported += 1
     os.makedirs(out, exist_ok=True)
     texts = [[] for _ in range(parts)]
     regs = [[] for _ in range(parts)]
     count = 0
-    for key, (pc, npairs, body, body_old) in sorted(blocks.items()):
+    for key, (pc, npairs, body, tail) in sorted(blocks.items()):
         if body is None:
             continue
         name = f"b{pc:04x}_{key & 0xFFFFFFFF:08x}"
         part = count % parts
         count += 1
-        t = [f"static uint32_t {name}(VU1NativeCtx &n)", "{", "    VU1State &s = *n.s;"]
+        t = []
+        if tail:
+            mp, mm, cp = (list(x) + [0] * (3 - len(x)) for x in tail)
+            t.append(f"static const VU1TailDesc {name}_tail = {{{len(tail[0])}, {len(tail[2])}, {{{mp[0]}, {mp[1]}, {mp[2]}}}, "
+                     f"{{{mm[0]}, {mm[1]}, {mm[2]}}}, {{{cp[0]}, {cp[1]}, {cp[2]}}}}};")
+        t += [f"static uint32_t {name}(VU1NativeCtx &n)", "{", "    VU1State &s = *n.s;"]
         t += ["    " + ln for ln in body]
-        t += ["}", ""]
-        t += [f"static uint32_t {name}_f(VU1NativeCtx &n)", "{", "    VU1State &s = *n.s;"]  # former flag model
-        t += ["    " + ln for ln in body_old]
         t += ["}", ""]
         texts[part].append("\n".join(t))
         # bit 16: the block reads flags written before it; only such blocks need exact entry timing (see runNative)
         reads_entry = any("macAt(" in ln or "clipAt(" in ln for ln in body)
-        regs[part].append(f"    vu1nRegisterBlock(0x{key:016x}ull, {name}, {name}_f, {npairs | (0x10000 if reads_entry else 0)}u);")
+        regs[part].append(f"    vu1nRegisterBlock(0x{key:016x}ull, {name}, {npairs | (0x10000 if reads_entry else 0)}u, "
+                          f"{'&' + name + '_tail' if tail else 'nullptr'});")
     header = ('// Generated by tools/vu1/vu1n_gen.py from the game\'s VU1 microcode. Do not publish.\n'
               '#include "runtime/ps2_vu1_native.h"\n#include <cmath>\n\n'
               '#if defined(_MSC_VER)\n#pragma float_control(precise, on, push)\n#pragma fp_contract(off)\n#endif\n\n')

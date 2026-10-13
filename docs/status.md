@@ -830,3 +830,7 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   opt-in (`GOW_VU1N_FLAG_LATENCY=1`): it draws the shadows (gate port/shadows2/gate_latency, zones 0-4 60 fps, savetest
   ok) but costs 2x VU1 time (heavy Olympus spot ~39 fps vs 56). Default unchanged. Fork agent/shadows3 profiles and
   makes it cheap enough to be the default. docs/vu1-native-flags.md.
+- 10-13 ~09:00: character shadows ON by default (agent/shadows3 merged): flag latency across native VU1 blocks is the
+  only model, cost ~+23 % VU1 time vs the old model (block history ring, flags computed only when read). Gate
+  port/merged22/20261013_085616: zones 0-4 60 fps, speed 1.00, savetest ok; soft shadows under Kratos in Desert and
+  slot 4, no wedges. Switch GOW_VU1N_FLAG_LATENCY removed. Profiler: tools/sample_prof.py (link with /MAP).
