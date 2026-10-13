@@ -223,6 +223,10 @@ void main()
         // U = S/Q with the sign of Q: a negative Q flips both coordinates (the menu Kratos has one)
         float q = (abs(vSTQ.z) < 1e-30) ? 1e-30 : vSTQ.z;
         vec2 uv = (uFst != 0) ? vUV : (vSTQ.xy / q) * uTexDim;
+        // point sampling picks texel floor(u) of the GS's 1/16 texel coordinate: truncate like the GS (the 1/64 step
+        // absorbs float interpolation error, a 1:1 copy lands exactly on texel edges)
+        if (uLinear == 0)
+            uv = floor(uv * 16.0 + 0.015625) / 16.0;
         vec4 t;
         if (uReinterp != 0)
         {
@@ -245,7 +249,8 @@ void main()
         }
         else if (uZTex != 0)
         {
-            float zf = texture(uTex, uv / uTexSize).r;
+            vec2 zhost = vec2(textureSize(uTex, 0)); // depth is always point sampled: the host texel's centre
+            float zf = texture(uTex, (floor(uv * zhost / uTexSize + 0.001) + 0.5) / zhost).r;
             uint zi = uint(clamp(zf, 0.0, 1.0) * uZMax + 0.5);
             if (uZTex == 16)
             {
@@ -254,6 +259,12 @@ void main()
             }
             else
                 t = vec4(float(zi & 255u), float((zi >> 8) & 255u), float((zi >> 16) & 255u), 128.0);
+        }
+        else if (uLinear == 0)
+        {
+            // the centre of the host texel (render targets are scaled) inside texel floor(u): never on a texel edge
+            vec2 host = vec2(textureSize(uTex, 0));
+            t = texture(uTex, (floor(uv * host / uTexSize + 0.001) + 0.5) / host) * 255.0;
         }
         else
             t = texture(uTex, uv / uTexSize) * 255.0;
@@ -1191,9 +1202,16 @@ struct GSHwBackend::Impl
         const GSContext &c = s.context;
         if (pending.empty())
             firstRawZ = v.z;
+        // The GS samples pixel (x, y) at the integer point (x, y); GL samples host pixel h at its centre h + 0.5. Shifting
+        // by half a HOST pixel maps the PS2 sample of pixel x onto the centre of host pixel scale * x, so a primitive
+        // covering PS2 pixels [x0, x1) covers host pixels [scale * x0, scale * x1) and its texture coordinates at host
+        // pixel scale * x equal the PS2's at x. (Half a PS2 pixel moved every primitive one host pixel down and right at
+        // 2x: host row/column 0 of every target stayed unpainted and each copy pass shifted the picture by a host pixel;
+        // the filtered passes smeared that stale edge into the picture, the bright bar along the top and left.)
+        const float half = 0.5f / scale;
         HwVertex h;
-        h.x = v.x - static_cast<float>(c.xyoffset.ofx) / 16.0f + 0.5f;
-        h.y = v.y - static_cast<float>(c.xyoffset.ofy) / 16.0f + 0.5f;
+        h.x = v.x - static_cast<float>(c.xyoffset.ofx) / 16.0f + half;
+        h.y = v.y - static_cast<float>(c.xyoffset.ofy) / 16.0f + half;
         // the Z buffer keeps only its low bits (Z24: 24, Z16: 16): a vertex Z of 1<<24 is stored as 0
         double zq = std::max(v.z, 0.0);
         if (zmax < 4294967295.0f)
@@ -1524,11 +1542,14 @@ struct GSHwBackend::Impl
             e[0].x -= dx * ext; e[0].y -= dy * ext;
             e[1].x += dx * ext; e[1].y += dy * ext;
             const int order[6][2] = {{0, 1}, {1, 1}, {0, -1}, {1, 1}, {1, -1}, {0, -1}};
+            // across the line the quad is centred on the PS2 pixel centre (sample + 0.5), so it covers every host pixel of
+            // the pixels it crosses; along the line it covers [start, end) like a sprite edge
+            const float centre = 0.5f - 0.5f / scale;
             for (const auto &o : order)
             {
                 GSVertex v = e[o[0]];
-                v.x += nx * static_cast<float>(o[1]);
-                v.y += ny * static_cast<float>(o[1]);
+                v.x += nx * static_cast<float>(o[1]) + centre * std::fabs(dy);
+                v.y += ny * static_cast<float>(o[1]) + centre * std::fabs(dx);
                 float u, t;
                 texelUV(v, u, t);
                 addVertex(s, v, u, t, zmax);
@@ -1893,12 +1914,12 @@ struct GSHwBackend::Impl
             const bool indexed = !(src || rsrc || zsrc) && isIndexed(c.tex0.psm) && vram != nullptr;
             Texture &tex = (src || rsrc || zsrc) ? dummy : indexed ? indexTextureFor(s) : textureFor(s);
             g.Uniform1i(locIndexed, indexed ? 1 : 0);
+            g.Uniform1i(locLinear, s.linearFilter ? 1 : 0);
             if (indexed)
             {
                 g.ActiveTexture(kTexture0 + 5);
                 g.BindTexture(kTexture2D, paletteFor(s));
                 g.Uniform1i(locIdxPalette, 5);
-                g.Uniform1i(locLinear, s.linearFilter ? 1 : 0);
                 g.Uniform4i(locWrap, (c.clamp & 3u) == 0u ? 0 : 1, ((c.clamp >> 2) & 3u) == 0u ? 0 : 1, 0, 0);
             }
             g.ActiveTexture(kTexture0);
@@ -2455,10 +2476,9 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
     g.BindVertexArray(d.presentVao);
     g.ActiveTexture(kTexture0);
     g.Uniform1i(d.locPresentSrc, 0);
-    // The displayed buffer's first two PS2 rows and columns hold no picture in our renderer: row 0 is the game's black
-    // line, and row 1 / column 0 receive stale memory where an upstream full-screen pass leaves them unpainted at the
-    // internal scale (the PS2 shows scene there). They showed as a coloured line along the top and left edge; they
-    // now repeat the first painted row/column (a TV's overscan hides this area on the console).
+    // Row 0 of the displayed buffer is the game's black line (the 416 -> 448 stretch starts at y 0.5 and a line
+    // primitive clears row 0), which a TV's overscan hides on the console: the first two PS2 rows and columns repeat
+    // the next one so no dark line shows along the top and left edge.
     g.Uniform1i(d.locPresentEdge, static_cast<GLint>(std::lround(2.0f * d.scale)));
     const bool mmod = ((request.pmode >> 5) & 1u) != 0u, slbg = ((request.pmode >> 7) & 1u) != 0u;
     const uint32_t alp = static_cast<uint32_t>((request.pmode >> 8) & 0xFFu);
