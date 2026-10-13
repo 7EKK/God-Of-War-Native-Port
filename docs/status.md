@@ -869,3 +869,10 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   a test-tool limit); ATHN01D (ship deck, save altar) 37.6-40.4 fps alone, VU1 worker saturated (open, needs a VU1
   profile); ATHN03A / PAND04G low fps measured with another runner (recheck alone); movie rechecks (SEMO08,
   P06MP01, SATINTRO, SEMO01-04) not run.
+- agent/menuclock on standby, fix READY to merge (port/menuclock/STATE.md): title, main and pause menus and gameplay
+  already run at 1.000 (the 3.7 % of 10-12 is gone); only Load Game ran at 1.08: recompiled loops were charged a flat
+  32 cycles per iteration, so the card-command byte copies cost 0.9 ms of guest time per frame. Recompiler fix
+  027ce16 (loops charged their real size, max 32): Load Game 1.02, gate port/menuclock/gate/20261013_222345 ok. Merge
+  = regenerate (port/usa/recomp-clock.toml or port/output-usa-clock, 1689 files) + full rebuild ~40 min + overrides
+  patch + docs; after the Switch test port. The captain movie runs at exact speed (33.07 s in 33.07 s): its broken
+  sound is not a clock problem.
