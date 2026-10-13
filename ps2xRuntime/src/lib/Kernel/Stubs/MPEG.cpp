@@ -1765,7 +1765,12 @@ namespace ps2_stubs
                 if (nested.pc == 0u)
                 {
                     runtime->guestFree(cbDataAddr);
-                    return static_cast<int32_t>(getRegU32(&nested, 2));
+                    const int32_t result = static_cast<int32_t>(getRegU32(&nested, 2));
+                    // GOW_MPEG_DIAG: packets a stream callback refused (its ring is full; the demux stops there)
+                    static unsigned s_refusals = 0;
+                    if (s_cbDiag && result == 0 && s_refusals++ < 40u)
+                        std::fprintf(stderr, "[MPEG:refused] callback %08x type=%u len=%u\n", callback.func, event.streamType, event.len);
+                    return result;
                 }
                 std::fprintf(stderr, "[mpeg] stream callback %08x did not return (pc=%08x); queued instead\n",
                              callback.func, nested.pc);
