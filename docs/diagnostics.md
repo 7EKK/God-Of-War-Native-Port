@@ -23,6 +23,14 @@ All are opt-in environment variables (added by us; implementations noted).
 | `GOW_MPEG_DIAG=1` | movies: pictures handed to the game, stream-callback registrations and call counts, the game's movie audio state per picture (989snd stream globals 0x304CEC.., audio ring read/fill/full) and audio packets queued/taken/refused; `[MPEG:sync]` every 30 pictures (PTS, wall time, audio device position, decoder stub time) and the first audio packet PTS (A/V check, docs/fmv.md) | ps2xRuntime Kernel/Stubs/MPEG.cpp |
 | `GOW_MOVIE_OVERRIDE=<name>` | debug: the first movie the game loads is replaced by that one (e.g. `Semo05`; at most 6 characters for the intro) | runner gow_overrides.cpp (port/overrides-usa) |
 | `GOW_SND_DIAG=1` | LIBSD: every `sceSdBlockTrans` (core input stream) and every MMIX/MVOL/EVOL/AVOL/BVOL write; the stream start also prints the audio device position | ps2xIOP src/native/iop_native_overrides.cpp |
+| `GOW_AUDIO_STATS=1`, `GOW_IOP_DRIFT=1`, `GOW_SND_REGLOG=1` | sound output: requested/missing/dropped frames, highest resample rate and buffer level every ~5 s; IOP cycles granted by the EE vs advanced (with wall time) and the top IOP calls made outside `runCycles`; core volume/mix register writes. Details: docs/sound.md | ps2xIOP sound_engine.cpp, iop_emulator.cpp |
+| `GOW_GS_HW_PALDUMPMAX=<n>` | with `GOW_GS_HW_PALDUMP`: number of index-texture decodes of that block written as PGM (default 4); the palette is dumped even when it comes from the cache | ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp |
+| `GOW_GS_HW_RTLOG=1` | each render target created or grown (`[gs-hw-rt] new/grow fbp fbw`) | gs_hw_backend.cpp |
+| `GOW_GS_HW_XFERWATCH=<hex block>`, `GOW_GS_HW_XFERRANGE=<lo>-<hi>` | log the image transfers whose block range holds that block / whose destination lies in [lo, hi), with the first bytes of the next upload | gs_hw_backend.cpp |
+| `GOW_GS_HW_EDGELOG=1` | every 300 presents: the displayed buffer's first host rows and columns before composition (edge-line artefacts) | gs_hw_backend.cpp (present) |
+| `PS2X_GS_TRACE_TBP=<tbp0>` (`-2`, `-3`) | vertices drawn with that texture active; `-2` untextured triangle fans, `-3` textured fans, with the vertex colour | ps2xRuntime/src/lib/gs/gs_frontend.cpp |
+| `GOW_BONUS_MOVIE=<NN>` | plays BONUS movie NN through the Treasures-menu path (docs/fmv.md) | runner gow_overrides.cpp |
+| `GOW_PLAYER_TRACE=1`, `GOW_GOD_MODE=1` | once per second Kratos's position, game state and movie state (steering scripted runs); test runs only: Kratos's health refilled every poll | runner gow_overrides.cpp |
 
 Always-on logs we added: `[SIF module] load-failed/load-unhandled` (RPC.cpp), `fioOpen failed:`.
 
