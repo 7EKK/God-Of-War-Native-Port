@@ -847,3 +847,7 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
 - 10-13 ~15:30: vertical bars / notched text (user) fixed: merged agent/text (sprite UV clamp open on sides shared with
   the previous strip). Merged tree identical to the tested branch; gate port/text/gate/20261013_152149 (zones 0-4 60 fps,
   savetest ok). Running: agent/warp (level warp, Hydra fog, heap-guard root cause), agent/movies4 (every movie, broken audio).
+- 10-13 user decisions on the remaining list: SKIPPED Bluetooth rumble, Kratos tint, Cliffs camera clipping (likely
+  original), the intro movie's darker last row; LATER: top edge row 0. Ask the user before starting the Switch build.
+  Remaining: archers-movie audio (agent/movies4), combat freeze root cause (needs a meter fight log with the fixed
+  guard), full levels.py run (108 zones, ATHN01E), new game past the trap door, menu guest clock 3.7 % fast.
