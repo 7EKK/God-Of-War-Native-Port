@@ -10,6 +10,7 @@ namespace
     {
         VU1NativeFn fn;
         uint32_t pairs;
+        bool readsEntryFlags; // reads MAC/clip flags written before the block (vu1n_gen.py: bit 16 of pairs)
         std::vector<uint8_t> cyc; // issue cycle of each pair (block entry = 0), filled on first use
     };
     std::unordered_map<uint64_t, NativeEntry> &nativeRegistry()
@@ -68,7 +69,7 @@ namespace
 
 void vu1nRegisterBlock(uint64_t key, VU1NativeFn fn, uint32_t pairs)
 {
-    nativeRegistry()[key] = {fn, pairs, {}};
+    nativeRegistry()[key] = {fn, pairs & 0xFFFFu, (pairs & 0x10000u) != 0u, {}};
 }
 
 // Issue cycles of the pairs of a block as the exact engine would see them (operand/pipeline stalls included), assuming
@@ -235,9 +236,40 @@ uint32_t VU1NativeAccess::clipAt(VU1NativeCtx &n, uint32_t rel)
 
 uint32_t VU1NativeAccess::clipChain(VU1NativeCtx &n) { return n.vu->m_workingClip; }
 
+// Entries already visible when the new writer issues are visible to every later reader as well: retire them first, so the
+// queue only holds writers still in flight (at most a few) and never overflows.
+static void retireVisibleAt(VU1Interpreter &vu, uint64_t cycle)
+{
+    VU1NativeAccess::retireFlagsAt(vu, cycle);
+}
+
+void VU1NativeAccess::retireFlagsAt(VU1Interpreter &vu, uint64_t cycle)
+{
+    const uint64_t keep = vu.m_cycle;
+    vu.m_cycle = cycle;
+    vu.commitReadyFlags();
+    vu.m_cycle = keep;
+}
+
+// GOW_VU1N_FLAG_LATENCY=1: flags keep their latency across native block boundaries (exact-engine semantics; character
+// shadows appear) but blocks that read older flags fall back to the exact engine while any flag is in flight, which costs
+// ~40 % fps in gameplay. Default: the former model (every in-flight flag committed at native entry, a block's writers
+// committed at its exit), 60 fps, no character shadows (docs/vu1-native-flags.md).
+static bool flagLatencyModel()
+{
+    static const bool on = [] { const char *v = std::getenv("GOW_VU1N_FLAG_LATENCY"); return v && v[0] == '1'; }();
+    return on;
+}
+
 void VU1NativeAccess::pushMac(VU1NativeCtx &n, uint32_t rel, uint32_t mac)
 {
     VU1Interpreter &vu = *n.vu;
+    if (!flagLatencyModel())
+    {
+        vu.m_state.mac = mac;
+        return;
+    }
+    retireVisibleAt(vu, n.start + rel);
     if (VU1Interpreter::FlagPipelineEntry *e = vu.pushFlagEntry())
     {
         e->issueCycle = n.start + rel;
@@ -253,6 +285,12 @@ void VU1NativeAccess::pushClip(VU1NativeCtx &n, uint32_t rel, uint32_t clip)
 {
     VU1Interpreter &vu = *n.vu;
     vu.m_workingClip = clip;
+    if (!flagLatencyModel())
+    {
+        vu.m_state.clip = clip;
+        return;
+    }
+    retireVisibleAt(vu, n.start + rel);
     if (VU1Interpreter::FlagPipelineEntry *e = vu.pushFlagEntry())
     {
         e->issueCycle = n.start + rel;
@@ -321,6 +359,7 @@ bool VU1Interpreter::runNative(StepContext &context)
             const uint32_t count = nativeExtent(context.vuCode, context.codeSize, pc, words);
             ns.known[slot] = true;
             ns.fn[slot] = nullptr;
+            ns.entryFlags[slot] = false;
             ns.pairs[slot] = static_cast<uint16_t>(count);
             if (count != 0u)
             {
@@ -328,6 +367,7 @@ bool VU1Interpreter::runNative(StepContext &context)
                 if (it != nativeRegistry().end())
                 {
                     ns.fn[slot] = it->second.fn;
+                    ns.entryFlags[slot] = it->second.readsEntryFlags;
                     if (it->second.cyc.empty())
                         nativeTiming(context.vuCode, pc, count, it->second.cyc);
                     ns.cyc[slot] = it->second.cyc.data();
@@ -354,14 +394,19 @@ bool VU1Interpreter::runNative(StepContext &context)
             // committed early: a reader would stall until they are ready.
             commitReadyPipelines();
             commitReadyFlags();
-            if (m_fdiv.valid || m_efu[0].valid || m_efu[1].valid)
+            if (flagLatencyModel() && (m_fdiv.valid || m_efu[0].valid || m_efu[1].valid))
                 break;
-            // flags in flight stay queued: the blocks read them at their real visibility cycle (macAt / clipAt)
-            const uint32_t flagHead = m_flagHead, flagCount = m_flagCount;
-            m_flagCount = 0u;
-            commitEverythingNow();
-            m_flagHead = flagHead;
-            m_flagCount = flagCount;
+            if (flagLatencyModel())
+            {
+                // flags in flight stay queued: the blocks read them at their real visibility cycle (macAt / clipAt)
+                const uint32_t flagHead = m_flagHead, flagCount = m_flagCount;
+                m_flagCount = 0u;
+                commitEverythingNow();
+                m_flagHead = flagHead;
+                m_flagCount = flagCount;
+            }
+            else
+                commitEverythingNow();
             _mm_setcsr((savedCsr & ~0x6000u) | 0x6000u | 0x8000u | 0x0040u); // round toward zero, FTZ, DAZ
             armed = true;
         }
@@ -373,6 +418,15 @@ bool VU1Interpreter::runNative(StepContext &context)
                 ns.snap = m_state;
             ++ns.count;
             ns.trace.push_back(pc);
+        }
+        // a block that reads flags older than itself runs natively only when none is in flight: its timing table assumes
+        // idle pipelines, while the exact engine also stalls on the previous block's results, which decides whether such a
+        // flag is visible yet (the shadow-volume culling loops); the exact engine steps it instead
+        if (ns.entryFlags[slot] && flagLatencyModel())
+        {
+            commitReadyFlags();
+            if (m_flagCount != 0u)
+                break;
         }
         ctx.cyc = ns.cyc[slot];
         ctx.start = m_cycle;

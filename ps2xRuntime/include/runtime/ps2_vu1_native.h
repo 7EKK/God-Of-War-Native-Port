@@ -50,6 +50,7 @@ struct VU1NativeAccess
     static uint32_t clipChain(VU1NativeCtx &n);
     static void pushMac(VU1NativeCtx &n, uint32_t rel, uint32_t mac);
     static void pushClip(VU1NativeCtx &n, uint32_t rel, uint32_t clip);
+    static void retireFlagsAt(VU1Interpreter &vu, uint64_t cycle);
     static void callLower(VU1NativeCtx &n, uint32_t pc, uint32_t lower, uint32_t upper);
     static void callUpper(VU1NativeCtx &n, uint32_t pc, uint32_t upper);
     static void xgkick(VU1NativeCtx &n, uint32_t qwordAddress);
@@ -65,6 +66,7 @@ struct VU1Interpreter::NativeState
     uint16_t pairs[2048];
     const uint8_t *cyc[2048];
     bool known[2048];
+    bool entryFlags[2048]; // the block reads flags written before it (see runNative)
     bool enabled = std::getenv("GOW_VU1_NATIVE_OFF") == nullptr;
     unsigned verifyLeft = std::getenv("GOW_VU1N_VERIFY") ? static_cast<unsigned>(std::atoi(std::getenv("GOW_VU1N_VERIFY"))) : 0u;
     bool diag = std::getenv("GOW_VU1N_DIAG") != nullptr;
