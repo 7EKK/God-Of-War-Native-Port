@@ -159,24 +159,59 @@ adaptation, so a movie can be compared with its source track sample by sample.
   agent/movies2.
 
 ## Open
-- **A01MP02 in game** (the ship scene where Kratos grabs the captain, user screenshot port/usertest1/movie1_game.png,
-  logs play3.log / play5.log; the third movie load of a new game, after Semo01 and the A01MP05 preload): the user
-  hears totally broken sound, the picture is fine. Through the menu path it plays sample-exact. Not reproduced in game:
-  the scripted new game (`--new-game`) reaches A01MP05's trigger but not A01MP02's, and replacing the ship's preload by
-  A01MP02 (`GOW_MOVIE_OVERRIDE=Semo01,A01MP02`) crashes the level script (jump to 0 at 0x161C68). The 20
-  `[dma] chain tag with SPR flag ... path=2` lines at its start (identical in both user logs) are GIF `cnt` tags
-  whose unused address word holds leftovers; the 17 values are not in the movie files.
-  The user's loopback recording (port/usertest1/live_audio.wav, play6.log) aligned piecewise with the A01MP02 track
-  (rec = src + 17.6 s, corr 0.7): the movie track is there at its normal level (gain 0.3-0.67, Windows volume 0.67),
-  and under it a loud smooth sound (music-like, up to ~7000 RMS in the recording, ~10000 at full scale) keeps playing;
-  the sum hard-clips at full scale for much of the movie. A01MP02's mask (0x7EFF) pauses groups 1 and 3 and leaves
-  group 8; 989snd's stream pause works in game (A01MP05 run: the paused streams' voices get pitch 0). Next: a save made
-  just before that scene (or the warp to its zone), then `GOW_SND_VOICEDUMP=1 GOW_SND_CALLLOG=1` at its start: which
-  handle (group, type) and voices keep sounding, and whether a pause or volume request for them was lost.
-- **P04MP05 stops after ~180-210 pictures** (of 743, about 6 s; reproducible, also on the main build before these
-  changes): no picture is requested any more while the sound plays on. The demuxer stays aligned (`[MPEG:skip]` none),
-  no picture is held (`[MPEG:hold]` none), and the movie reads none of its data through 0x17AFE0 (it is on disc layer 1,
-  PART2.PAK): another read path to follow.
+- **A01MP02 broken sound, cause located (2026-10-13 user session port/usertest1/play8.log, raw mix
+  `user_movie_raw2.pcm` in the runner dir):** reached by playing the ship normally from a new game (via the warp it is
+  clean). The engine mix during the movie has exactly the track's energy per second but is the track with L/R swapped
+  and shifted by +123 samples (best local lag constant over the whole movie, corr 0.8-0.9, never 1.0): the PCM reached
+  the core input misaligned against the 0x200-byte L/R interleave, so every 256-sample block mixes the two channels
+  (a 187 Hz channel flip = the buzz). Output stage clean (rate <= 1.009, nothing dropped). 40 `[MPEG:refused]` audio
+  packets in that session (the EE audio ring full): suspect the refused-packet re-delivery or a partial accept moving
+  the byte position by a non-block amount. Next: log bytes accepted per packet vs re-sent, fix so the stream stays
+  block-aligned. ON STANDBY (user: Switch test port first).
+- **A01MP02 in game (the captain movie): our mix is exact; the breakage is not reproduced in the engine.**
+  - Reached on the real path with the level warp: `GOW_WARP=ATHN01D` lands next to the captain, and the level
+    script (`CoweringGuy` group in ATHN01D.WAD) loads `a01MP02` about 27 s later.
+  - With the user's order (new game, A01MP05 from its ship trigger, then the warp): the run shows the same 20
+    `[dma] chain tag with SPR flag` lines at the movie start as the user's logs, so the state matches.
+  - In both runs the engine's raw mix (`GOW_AUDIO_RAW`) during the movie equals the movie's own PSS track at gain
+    1.000, with a residual of 1-2 RMS. Nothing else plays under it; the music event `MusicGrpAthC4Start`
+    (`SND_M_ATH1C4_2`) does not sound during the movie.
+  - The output path (`drainOutput`, rate adaptation, recorded with `GOW_AUDIO_PCM`) adds no damage: fewer large
+    jumps than the mix, rate <= 1.018, nothing dropped.
+  - The track itself is mastered hot: peaks at its limiter ceiling (32015-32030) and ~140 jumps > 8000 per second.
+    PCSX2 mixes the core input the same way (`ApplyVolume(ReadInput(), InpVol)`, `>> 15`, BVOL 0x7FFE ~ 1.0), so the
+    PS2 plays it at this level too.
+  - The user's loopback recording matches the track only at correlation ~0.6 after fitting its 0.7-1.2 % faster
+    playback (rate adaptation). It holds more than our mix; a loopback recording also includes every other program
+    on that output.
+  - 989snd never writes sweep-mode volumes (0 of 71k voice volume writes in a new-game run), and the movie's MMIX is
+    0x0FCF (voices, input and core 0 all on): the unmixed volume sweeps and the ignored MMIX voice/external gates are
+    not involved.
+  - Next: capture the engine's own mix in the user's session (`GOW_AUDIO_RAW=<file>` and `GOW_AUDIO_STATS=1` in
+    play.cmd). It tells whether the breakage is in the engine (then visible in that file) or after it.
+- **P04MP05 stopped after 180-210 pictures: FIXED (game ring logic), it now plays 720 of 743.**
+  - The movie player's video ring (player struct `*0x304F20`: +0xE8 base, +0xEC size 0x40000, +0xF0 write pointer,
+    +0xF4/+0xF8 the block sent to the IPU) treats a write pointer at the ring's end as data. The demuxed video of
+    P04MP05 filled the ring exactly to its end. When the IPU block pointer then wrapped to the base,
+    `available = write - block end` was the whole ring.
+  - The no-data callback (0x18AAA8) then kept sending the old ring and never asked for more data. The reader stopped,
+    the IOP stopped reading (`GOW_CD_TRACE`: 190 reads, then none), and the main thread looped in VSync waits
+    (`GOW_THREAD_WATCH`) while the sound played on.
+  - The end and the base are the same position. gow_overrides.cpp (`gowNormaliseVideoRing`) moves the write
+    pointer to the base at the start of the no-data callback and of the writer (stream callback 0x18A788).
+  - Only code before a guest call is reliable in a wrapper: the writer can return early at an EE checkpoint and be
+    finished through the original's own slots, so a post-call fix missed the write.
+- **P04MP05 still does not end (stops at picture 720 of 743): end-of-file, open.**
+  - The player's reader (0x188848, struct at 0x302B20: +0x18 block, +0x1C blocks left, +0x28 state) reads 16 KB
+    blocks through 0x17AFE0 and is demuxed one block behind.
+  - The file is 1457 blocks plus a 4-byte tail (the program end code); its sequence end code lies in the last full
+    block (1456). In A01MP01, which ends, it lies two blocks before the tail.
+  - At the end the reads return 0x4000, then 4 bytes, then 0 at position 0x16C4004. The read loop in 0x18AC20 retries
+    a 0-byte result forever when blocking, and sets the end flag (+0x154) only for a negative one. So block 1456 is
+    never demuxed: the stub never sees the sequence end, and 5.3 KB stay in the video ring (below the no-data
+    callback's 8 KB threshold).
+  - Next: what the PS2's SMPD stream returns for the short tail read / the read past the end (negative, or a full
+    block), compared with our native SMPD service.
 - SEMO08 measured 4.4 s A/V drift (214.6 s of audio for 210.2 s of pictures) in a batch that shared the machine with
   other runs; to recheck alone.
 - In some in-game runs (port/movies4/newgame/20261013_171528) the GS stalled for seconds while A01MP05 waited

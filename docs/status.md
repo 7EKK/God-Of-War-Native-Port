@@ -862,3 +862,6 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   pictures (open, also on main); SEMO08 drift to recheck). A01MP02 (captain) still clips: a loud group-8 sound plays
   under it on the real path (mask 0x7EFF leaves group 8 on); next: voice dump at its real start. User: SKIP the
   scripted new game past the trap door (the user plays those parts).
+- 10-13 ~23:00: user ordered the Nintendo Switch test port now, everything else on standby (agent/menuclock, agent/levels
+  told to commit WIP and stop). A01MP02 cause located (docs/fmv.md Open): L/R swap + 123-sample misalignment of the
+  movie PCM on the real path. Merged agent/movies5 (P04MP05 720/743 pictures); its gate not yet re-run on main.

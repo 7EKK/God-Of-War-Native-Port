@@ -1233,6 +1233,39 @@ namespace
         sub_00175148_0x175148(rdram, ctx, runtime);
     }
 
+    // GOW-Port: the movie player's video ring (player struct *0x304F20: +0xE8 base, +0xEC size, +0xF0 write, +0xF4/+0xF8
+    // the block sent to the IPU) treats a write pointer at the ring's end as data: once the IPU block pointer wraps to
+    // the base, "available = write - block end" is the whole ring, so the no-data callback (0x18AAA8) keeps sending
+    // the old ring and never asks for more data, and the movie stops while its sound plays on (P04MP05 after 203
+    // pictures: the demuxed video filled the ring exactly to its end). The end and the base are the same position;
+    // the write pointer is moved to the base before the readers look at it: at the start of the no-data callback
+    // (where "available" is computed) and around the writer (stream callback 0x18A788). Only code before a guest call
+    // is reliable in a wrapper: a call can return early at an EE checkpoint and be finished later through the
+    // original's own slots.
+    void gowNormaliseVideoRing(uint8_t *rdram)
+    {
+        if (const uint32_t movie = readGuest32(rdram, 0x00304F20u); movie != 0u)
+        {
+            const uint32_t base = readGuest32(rdram, movie + 0xE8u), size = readGuest32(rdram, movie + 0xECu);
+            if (size != 0u && readGuest32(rdram, movie + 0xF0u) == base + size)
+                writeGuest32(rdram, movie + 0xF0u, base);
+        }
+    }
+
+    void gowMovieVideoRingWrite(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == 0x0018A788u) // not a resume inside the original
+            gowNormaliseVideoRing(rdram);
+        sub_0018A788_0x18a788(rdram, ctx, runtime);
+    }
+
+    void gowMovieNodata(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == 0x0018AAA8u)
+            gowNormaliseVideoRing(rdram);
+        sub_0018AAA8_0x18aaa8(rdram, ctx, runtime);
+    }
+
     void gowMovieStreamService(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         // GOW_MPEG_DIAG: once per second, the movie struct words (0x304D10 + 0x80..0x140) that changed, the movie
@@ -2005,6 +2038,39 @@ namespace
 
     void applyGowOverrides(PS2Runtime &runtime)
     {
+        // GOW-Port: GOW_THREAD_WATCH=<s> (debug): every <s> seconds a host thread prints the EE threads (status, wait,
+        // pc, ra) from the scheduler's snapshot, so a guest that blocks for good (no frames, no pad polls, where
+        // GOW_THREAD_DUMP never fires) still shows where each thread waits
+        if (const char *watch = std::getenv("GOW_THREAD_WATCH"))
+        {
+            const double period = std::max(1.0, std::atof(watch));
+            std::thread([&runtime, period] {
+                for (;;)
+                {
+                    std::this_thread::sleep_for(std::chrono::duration<double>(period));
+                    const EeKernelSnapshot snapshot = runtime.eeScheduler().snapshot();
+                    std::fprintf(stderr, "[gow-threads] watch running=%d cycle=%llu\n", snapshot.runningThreadId,
+                                 static_cast<unsigned long long>(snapshot.eeCycle));
+                    for (const EeThreadSnapshot &t : snapshot.threads)
+                        std::fprintf(stderr, "[gow-threads]   id=%d prio=%d status=%d wait=%d/%d pc=%08x ra=%08x\n", t.id,
+                                     t.currentPriority, int(t.status), int(t.waitReason), t.waitId, t.pc, t.ra);
+                    // the movie player struct (*0x304F20) words +0xE8..+0x15C, when a movie is loaded
+                    const uint8_t *ram = runtime.memory().getRDRAM();
+                    const auto word = [ram](uint32_t a) { uint32_t v; std::memcpy(&v, ram + (a & 0x01FFFFFFu), 4); return v; };
+                    if (const uint32_t movie = word(0x304F20u); movie != 0u)
+                    {
+                        std::string text;
+                        for (uint32_t off = 0xE8u; off < 0x160u; off += 4u)
+                        {
+                            char item[24];
+                            std::snprintf(item, sizeof(item), " +%x=%x", off, word(movie + off));
+                            text += item;
+                        }
+                        std::fprintf(stderr, "[gow-threads]   movie=%x%s\n", movie, text.c_str());
+                    }
+                }
+            }).detach();
+        }
         configureGowCdImage();
         gow_gs_replay::configure(runtime.memory(),runtime.gs());
         // El heap interno del runtime va bajo el ELF (memoria libre) para no pisar el heap propio del juego,
@@ -2047,6 +2113,8 @@ namespace
         else
         {
             runtime.replaceFunction(0x00188B80u, gowMovieStreamService);
+            runtime.replaceFunction(0x0018A788u, gowMovieVideoRingWrite);
+            runtime.replaceFunction(0x0018AAA8u, gowMovieNodata);
             if (std::getenv("GOW_MOVIE_OVERRIDE") || std::getenv("GOW_MPEG_DIAG"))
                 runtime.replaceFunction(0x00188CA0u, gowMovieOverrideLoad);
             if (std::getenv("GOW_BONUS_MOVIE") || movieOverrideList().size() > 1)
