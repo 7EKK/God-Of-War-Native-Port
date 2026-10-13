@@ -1394,6 +1394,15 @@ static __ri void _vuFMAND(VURegs* VU)
 		return;
 
 	VU->VI[_It_].US[0] = VU->VI[_Is_].US[0] & (VU->VI[REG_MAC_FLAG].UL & 0xFFFF);
+	// GOW-Port: GOW_VU1_FMANDPC=<hex pc>: debug, print the MAC flag FMAND reads at that VU1 pc (A/B with VU1Interpreter)
+	static const long fmandPc = std::getenv("GOW_VU1_FMANDPC") ? std::strtol(std::getenv("GOW_VU1_FMANDPC"), nullptr, 16) : -1;
+	static int fmandShown = 0;
+	if (VU == &VU1 && fmandPc >= 0 && (static_cast<long>(VU->VI[REG_TPC].UL) - 8 == fmandPc || static_cast<long>(VU->VI[REG_TPC].UL) == fmandPc) && fmandShown < 40)
+	{
+		++fmandShown;
+		std::fprintf(stderr, "[pcsx2-fmand] pc=%x mac=%04x mask=%04x -> %04x\n", VU->VI[REG_TPC].UL - 8,
+			VU->VI[REG_MAC_FLAG].UL & 0xFFFF, VU->VI[_Is_].US[0], VU->VI[_It_].US[0]);
+	}
 }
 
 static __fi void _vuFMEQ(VURegs* VU)

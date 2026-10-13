@@ -1962,6 +1962,37 @@ struct GSHwBackend::Impl
                          verts[0].z, c.zbuf.zmask ? 1 : 0, ztst, verts.size(), c.tex0.tbp0);
         };
         if (tracing) depthStats("before");
+        // GOW_GS_HW_VOLTRACE=<n>: the first n COLCLAMP=0 draws (shadow volumes): vertex depth sent (after the Z-inversion
+        // flip), the depth buffer under the volume's bounding box, the depth test and the blend path
+        static const int volTrace = std::getenv("GOW_GS_HW_VOLTRACE") ? std::atoi(std::getenv("GOW_GS_HW_VOLTRACE")) : 0;
+        static int volTraced = 0;
+        int volBox[4] = {0, -1, 0, -1};
+        if ((s.colclamp & 1u) == 0u && zInv && volTraced < volTrace && rt.depth)
+        {
+            ++volTraced;
+            float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f, z0 = 2.0f, z1 = -1.0f;
+            for (const HwVertex &v : dverts)
+                x0 = std::min(x0, v.x), x1 = std::max(x1, v.x), y0 = std::min(y0, v.y), y1 = std::max(y1, v.y), z0 = std::min(z0, v.z), z1 = std::max(z1, v.z);
+            const int bx0 = std::max(0, static_cast<int>(x0 * scale)), bx1 = std::min(static_cast<int>(rt.glW) - 1, static_cast<int>(x1 * scale));
+            const int by0 = std::max(0, static_cast<int>(y0 * scale)), by1 = std::min(static_cast<int>(rt.glH) - 1, static_cast<int>(y1 * scale));
+            volBox[0] = bx0, volBox[1] = bx1, volBox[2] = by0, volBox[3] = by1;
+            size_t trisDown = 0, trisUp = 0;
+            for (size_t i = 2; i < dverts.size(); i += 3)
+                (dverts[i].g >= 128.0f ? trisDown : trisUp) += 1;
+            std::fprintf(stderr, "[gs-hw-vol]   triangles G>=128 %zu, G<128 %zu\n", trisDown, trisUp);
+            float d0 = 2.0f, d1 = -1.0f;
+            if (bx1 >= bx0 && by1 >= by0)
+            {
+                std::vector<float> dz(static_cast<size_t>(bx1 - bx0 + 1) * (by1 - by0 + 1));
+                g.BindFramebuffer(kFramebuffer, rt.fbo);
+                g.ReadPixels(bx0, by0, bx1 - bx0 + 1, by1 - by0 + 1, kDepthComponent, kFloat, dz.data());
+                for (float v : dz)
+                    d0 = std::min(d0, v), d1 = std::max(d1, v);
+            }
+            std::fprintf(stderr, "[gs-hw-vol] batch %d verts=%zu zInv=%d ztst=%u vertex z %.6f-%.6f (x %.0f-%.0f y %.0f-%.0f) depth under it %.6f-%.6f softBlend=%d wrapCount=%d zbp=%x attached=%x\n",
+                         frameBatch, dverts.size(), zInv ? 1 : 0, ztst, z0, z1, x0, x1, y0, y1, d0, d1, softBlend ? 1 : 0, wrapCount ? 1 : 0,
+                         c.zbuf.zbp, rt.zbp);
+        }
         g.ColorMask(mr, mg, mb, ma);
         g.DepthMask(zwrite ? kTrue : kFalse);
         if (softBlend && !zAliasWrite && (s.colclamp & 1u) == 0u)
@@ -1978,6 +2009,17 @@ struct GSHwBackend::Impl
         }
         else
             g.DrawArrays(kTriangles, 0, static_cast<GLsizei>(verts.size()));
+        if (volBox[1] >= volBox[0] && volBox[3] >= volBox[2])
+        {
+            const int w = volBox[1] - volBox[0] + 1, h = volBox[3] - volBox[2] + 1;
+            std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4u);
+            g.PixelStorei(kPackAlignment, 1);
+            g.ReadPixels(volBox[0], volBox[2], w, h, kRgba, kUnsignedByte, px.data());
+            size_t below = 0, above = 0, equal = 0;
+            for (size_t i = 1; i < px.size(); i += 4)
+                (px[i] < 127 ? below : px[i] > 127 ? above : equal) += 1;
+            std::fprintf(stderr, "[gs-hw-vol]   after: G<127 %zu, G>127 %zu, G=127 %zu\n", below, above, equal);
+        }
         static const bool noFailPass = std::getenv("GOW_GS_HW_NOFAIL") != nullptr;
         if (ate && afail != 0u && !noFailPass)
         {
@@ -2017,6 +2059,14 @@ struct GSHwBackend::Impl
                 std::fprintf(f, "P6 %u %u 255 ", rt.glW, rt.glH);
                 for (size_t i = 0; i + 3 < px.size(); i += 4)
                     std::fwrite(&px[i], 1, 3, f);
+                std::fclose(f);
+            }
+            std::snprintf(name, sizeof(name), "gs_hw_rt%u_p%d_b%03d_a.pgm", rt.fbp, presentCount, frameBatch);
+            if (FILE *f = std::fopen(name, "wb")) // alpha (the shadow mask reaches the darken pass through it)
+            {
+                std::fprintf(f, "P5 %u %u 255 ", rt.glW, rt.glH);
+                for (size_t i = 3; i < px.size(); i += 4)
+                    std::fwrite(&px[i], 1, 1, f);
                 std::fclose(f);
             }
         }

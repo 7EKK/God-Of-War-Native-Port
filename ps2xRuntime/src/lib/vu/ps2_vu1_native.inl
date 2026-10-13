@@ -201,6 +201,69 @@ void VU1NativeAccess::xgkick(VU1NativeCtx &n, uint32_t qwordAddress)
     vu.progressXgkick();
 }
 
+uint32_t VU1NativeAccess::macAt(VU1NativeCtx &n, uint32_t rel)
+{
+    const VU1Interpreter &vu = *n.vu;
+    const uint64_t at = n.start + rel;
+    uint32_t mac = vu.m_state.mac;
+    for (uint32_t k = 0; k < vu.m_flagCount; ++k)
+    {
+        const auto &e = vu.m_flagPipeline[(vu.m_flagHead + k) % VU1Interpreter::kMaxFlagEntries];
+        if (e.readyCycle > at)
+            break;
+        if (e.writesMac)
+            mac = e.mac;
+    }
+    return mac;
+}
+
+uint32_t VU1NativeAccess::clipAt(VU1NativeCtx &n, uint32_t rel)
+{
+    const VU1Interpreter &vu = *n.vu;
+    const uint64_t at = n.start + rel;
+    uint32_t clip = vu.m_state.clip;
+    for (uint32_t k = 0; k < vu.m_flagCount; ++k)
+    {
+        const auto &e = vu.m_flagPipeline[(vu.m_flagHead + k) % VU1Interpreter::kMaxFlagEntries];
+        if (e.readyCycle > at)
+            break;
+        if (e.writesClip)
+            clip = e.clip;
+    }
+    return clip;
+}
+
+uint32_t VU1NativeAccess::clipChain(VU1NativeCtx &n) { return n.vu->m_workingClip; }
+
+void VU1NativeAccess::pushMac(VU1NativeCtx &n, uint32_t rel, uint32_t mac)
+{
+    VU1Interpreter &vu = *n.vu;
+    if (VU1Interpreter::FlagPipelineEntry *e = vu.pushFlagEntry())
+    {
+        e->issueCycle = n.start + rel;
+        e->readyCycle = e->issueCycle + VU1Interpreter::kFmacLatency;
+        e->mac = mac;
+        e->writesMac = true;
+    }
+    else
+        vu.m_state.mac = mac; // pipeline full (not expected): commit at once like the former model
+}
+
+void VU1NativeAccess::pushClip(VU1NativeCtx &n, uint32_t rel, uint32_t clip)
+{
+    VU1Interpreter &vu = *n.vu;
+    vu.m_workingClip = clip;
+    if (VU1Interpreter::FlagPipelineEntry *e = vu.pushFlagEntry())
+    {
+        e->issueCycle = n.start + rel;
+        e->readyCycle = e->issueCycle + VU1Interpreter::kFmacLatency;
+        e->clip = clip;
+        e->writesClip = true;
+    }
+    else
+        vu.m_state.clip = clip;
+}
+
 void VU1Interpreter::commitEverythingNow()
 {
     const uint64_t keep = m_cycle;
@@ -283,7 +346,22 @@ bool VU1Interpreter::runNative(StepContext &context)
         }
         if (!armed)
         {
+            // Only results the exact engine would also see now may become visible. Flag writes (MAC, CLIP) still in
+            // flight stay queued and the block reads them at their visibility cycle (macAt / clipAt); committing them at
+            // block entry let the block's FMAND/FCAND read them too early (the shadow-volume culling then flagged the same
+            // triangles in both halves and no character shadow appeared). An FDIV/EFU result in flight (Q/P read without
+            // a stall) makes the exact engine step the pairs until it retires. Register and store results may be
+            // committed early: a reader would stall until they are ready.
+            commitReadyPipelines();
+            commitReadyFlags();
+            if (m_fdiv.valid || m_efu[0].valid || m_efu[1].valid)
+                break;
+            // flags in flight stay queued: the blocks read them at their real visibility cycle (macAt / clipAt)
+            const uint32_t flagHead = m_flagHead, flagCount = m_flagCount;
+            m_flagCount = 0u;
             commitEverythingNow();
+            m_flagHead = flagHead;
+            m_flagCount = flagCount;
             _mm_setcsr((savedCsr & ~0x6000u) | 0x6000u | 0x8000u | 0x0040u); // round toward zero, FTZ, DAZ
             armed = true;
         }
@@ -297,9 +375,11 @@ bool VU1Interpreter::runNative(StepContext &context)
             ns.trace.push_back(pc);
         }
         ctx.cyc = ns.cyc[slot];
+        ctx.start = m_cycle;
         const uint32_t result = fn(ctx);
         m_cycle += ns.cyc[slot][ns.pairs[slot] - 1u] + 1u;
         m_state.cycles = m_cycle;
+        commitReadyFlags(); // the block's writers that are visible by now; the rest stay queued
         ns.nativePairs += ns.pairs[slot];
         m_state.pc = result & 0x3FFFu;
         if (result & kVu1nEnded)

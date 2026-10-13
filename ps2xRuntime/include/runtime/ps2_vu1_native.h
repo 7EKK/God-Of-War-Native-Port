@@ -27,6 +27,7 @@ struct VU1NativeCtx
     VU1Interpreter *vu = nullptr;
     void *context = nullptr; // VU1Interpreter::StepContext *
     const uint8_t *cyc = nullptr; // issue cycle of every pair of the running block, from the exact engine's stall model
+    uint64_t start = 0;           // exact-engine cycle at which the running block's pair 0 issues
 };
 
 // Return value of a native block: next pc in the low 16 bits; kEnded when the program finished; kBail when the exact
@@ -41,6 +42,14 @@ void vu1nRegisterBlock(uint64_t key, VU1NativeFn fn, uint32_t pairs);
 // Callouts into the exact engine for the rare instructions (defined in ps2_vu1_core.cpp).
 struct VU1NativeAccess
 {
+    // Flags across block boundaries, through the exact engine's flag pipeline (cycle = start + rel): the MAC / clip value
+    // a reader issued at rel sees, the clip chain value CLIP shifts (newest, in flight included), and queueing a writer
+    // issued at rel (visible kFmacLatency later).
+    static uint32_t macAt(VU1NativeCtx &n, uint32_t rel);
+    static uint32_t clipAt(VU1NativeCtx &n, uint32_t rel);
+    static uint32_t clipChain(VU1NativeCtx &n);
+    static void pushMac(VU1NativeCtx &n, uint32_t rel, uint32_t mac);
+    static void pushClip(VU1NativeCtx &n, uint32_t rel, uint32_t clip);
     static void callLower(VU1NativeCtx &n, uint32_t pc, uint32_t lower, uint32_t upper);
     static void callUpper(VU1NativeCtx &n, uint32_t pc, uint32_t upper);
     static void xgkick(VU1NativeCtx &n, uint32_t qwordAddress);
