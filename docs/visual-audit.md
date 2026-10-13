@@ -29,3 +29,5 @@ The following matched PCSX2 or looked plausible:
 - **Olympus (slot 1):** torches, the throne hall, the reflective floor, apart from the known shadow rectangle.
 - **Ship (slot 0):** rain streaks, the ripple rings on the deck, the HUD (health and magic bars, orb counter, hit counter).
 - **All zones:** the right and bottom edges are uniform.
+
+- Vertical bars / notched text over the whole screen (user, 2026-10-13): FIXED (agent/text). The per-sprite UV clamp from agent/visual3 clamped every 32-pixel strip of full-screen passes, the logo and fonts to its own texels; it now stays open on sides shared with the previous strip. Title menu A/B: port/text/menu_old vs port/text/menu_fix.

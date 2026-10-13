@@ -844,3 +844,6 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
 - 10-13 ~13:30: merged agent/edge2 (vertices shifted by half a host pixel: no stale edge rows/columns, the bright
   bar along the top/left/top-right is gone). Gate port/merged25/20261013_131639: zones 0-4 60 fps, speed 1.00, savetest
   ok; first 6 rows/columns of every capture follow the scene.
+- 10-13 ~15:30: vertical bars / notched text (user) fixed: merged agent/text (sprite UV clamp open on sides shared with
+  the previous strip). Merged tree identical to the tested branch; gate port/text/gate/20261013_152149 (zones 0-4 60 fps,
+  savetest ok). Running: agent/warp (level warp, Hydra fog, heap-guard root cause), agent/movies4 (every movie, broken audio).
