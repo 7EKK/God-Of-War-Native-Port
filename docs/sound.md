@@ -52,3 +52,11 @@ short silences (port/audio_native1 vs audio_native2); zone ok at 60 fps; save te
 ## Verified (2026-10-12, crackle fix)
 Desert run (port/aud9): 0 dropped frames, 0 underruns, 0 saturated samples (was 2.5/s), 0 sample jumps > 12000 (was
 1.6/s); per-10 s RMS matches the former recording where both cover the same part (2791/3160/3621 vs 2808/3163/3597).
+
+## Output device
+The sound engine plays on the system default output (raylib audio) unless a device is named: `GOW_AUDIO_DEVICE=<part of
+its name>` or the first line of `%LOCALAPPDATA%\GodOfWarNativeudio_device.txt` (per user, so every instance and
+worktree build follows it; e.g. `Oculus` for "Cuffie (Oculus Virtual Audio Device)"). The stream is then played on
+that device through miniaudio directly (ps2xRuntime/src/lib/ps2_audio_device.cpp, raylib's miniaudio build: its
+configuration macros must match raudio.c). No match: the log lists the devices and the default output is used.
+`GOW_AUDIO=0` (zones.py --silent) still mutes.
