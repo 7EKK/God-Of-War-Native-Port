@@ -501,6 +501,57 @@ struct GSHwBackend::Impl
     std::unordered_map<const uint16_t *, uint32_t> tableOffset;
     std::unordered_map<uint32_t, uint32_t> inverseOffset; // psm -> offset of the inverse page table
     std::vector<HwVertex> pending;
+    // the previous sprite of the pending batch (strip seams: see the sprite path in draw)
+    struct SpriteEdges
+    {
+        float xs[2], ys[2], us[2], vs[2]; // corners: texel coordinates us/vs at screen edges xs/ys
+    };
+    struct LastSprite
+    {
+        SpriteEdges edges{};
+        size_t end = 0;           // pending.size() right after it
+        uint64_t batch = ~0ull;   // batchSerial when it was added
+    } lastSprite;
+    uint64_t batchSerial = 0; // counts flushes of the pending batch
+
+    // Opens the clamp on the side two consecutive sprites share when the texture continues across it: same extent and
+    // texel range along the seam, touching screen edges, equal texel coordinate at the seam.
+    static void openSharedSide(const SpriteEdges &prev, const SpriteEdges &cur, HwVertex *prevVertices, float &cu0, float &cu1,
+                               float &cv0, float &cv1)
+    {
+        const auto same = [](const float a[2], const float b[2], float tol)
+        {
+            return std::fabs(std::min(a[0], a[1]) - std::min(b[0], b[1])) <= tol &&
+                   std::fabs(std::max(a[0], a[1]) - std::max(b[0], b[1])) <= tol;
+        };
+        constexpr float kXyTol = 1.0f / 64.0f, kUvTol = 1.0f / 32.0f;
+        // along one axis: p/c = screen edges, pt/ct = texel coordinates at them; returns the edge index of each sprite
+        const auto seam = [&](const float p[2], const float pt[2], const float c[2], const float ct[2], int &ip, int &ic)
+        {
+            for (ip = 0; ip < 2; ++ip)
+                for (ic = 0; ic < 2; ++ic)
+                    if (std::fabs(p[ip] - c[ic]) <= kXyTol && std::fabs(pt[ip] - ct[ic]) <= kUvTol &&
+                        // the two sprites lie on opposite sides of the seam
+                        (p[1 - ip] - p[ip]) * (c[1 - ic] - c[ic]) < 0.0f)
+                        return true;
+            return false;
+        };
+        int ip = 0, ic = 0;
+        if (same(prev.ys, cur.ys, kXyTol) && same(prev.vs, cur.vs, kUvTol) && seam(prev.xs, prev.us, cur.xs, cur.us, ip, ic))
+        {
+            const bool prevHigh = prev.us[ip] > prev.us[1 - ip], curHigh = cur.us[ic] > cur.us[1 - ic];
+            for (int i = 0; i < 6; ++i)
+                (prevHigh ? prevVertices[i].cu1 : prevVertices[i].cu0) = prevHigh ? 1e30f : -1e30f;
+            (curHigh ? cu1 : cu0) = curHigh ? 1e30f : -1e30f;
+        }
+        else if (same(prev.xs, cur.xs, kXyTol) && same(prev.us, cur.us, kUvTol) && seam(prev.ys, prev.vs, cur.ys, cur.vs, ip, ic))
+        {
+            const bool prevHigh = prev.vs[ip] > prev.vs[1 - ip], curHigh = cur.vs[ic] > cur.vs[1 - ic];
+            for (int i = 0; i < 6; ++i)
+                (prevHigh ? prevVertices[i].cv1 : prevVertices[i].cv0) = prevHigh ? 1e30f : -1e30f;
+            (curHigh ? cv1 : cv0) = curHigh ? 1e30f : -1e30f;
+        }
+    }
     GSDrawState pendingState{};
     bool havePending = false;
     double firstRawZ = 0.0;
@@ -1608,6 +1659,13 @@ struct GSHwBackend::Impl
             float cu0, cu1, cv0, cv1;
             sampled(a.x - s.context.xyoffset.ofx / 16.0f, c.x - s.context.xyoffset.ofx / 16.0f, u0, u1, cu0, cu1);
             sampled(a.y - s.context.xyoffset.ofy / 16.0f, c.y - s.context.xyoffset.ofy / 16.0f, v0, v1, cv0, cv1);
+            // A picture drawn as strips (full-screen passes, logos, fonts) continues across each strip seam: there the clamp
+            // would repeat the last sampled texel for the host pixels between the two strips' GS sample points (a step at
+            // every seam). The side a sprite shares with the previous sprite of the batch, with the texture continuing
+            // across it, is left open on both sprites; outer edges stay clamped.
+            SpriteEdges cur{{xs[0], xs[1]}, {ys[0], ys[1]}, {us[0], us[1]}, {vs[0], vs[1]}};
+            if (lastSprite.batch == batchSerial && lastSprite.end == pending.size() && lastSprite.end >= 6)
+                openSharedSide(lastSprite.edges, cur, &pending[lastSprite.end - 6], cu0, cu1, cv0, cv1);
             const int order[6][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 0}, {1, 1}, {0, 1}};
             for (const auto &o : order)
             {
@@ -1623,6 +1681,7 @@ struct GSHwBackend::Impl
                 pending.back().cu1 = cu1;
                 pending.back().cv1 = cv1;
             }
+            lastSprite = {cur, pending.size(), batchSerial};
             (void)corner;
         }
         ++stats.draws;
@@ -1630,6 +1689,7 @@ struct GSHwBackend::Impl
 
     void flushPending()
     {
+        ++batchSerial; // the next sprite starts a new batch: no seam with the previous one
         flushShuffle();
         if (!havePending || pending.empty())
         {
