@@ -428,7 +428,9 @@ def emit_lower(l, pc, upper, bkp, mac_expr, clip_expr, clip_var):
     return [f"VU1NativeAccess::callLower(n, {pc}u, 0x{l:08x}u, 0x{upper:08x}u);"]
 
 
-def gen_block(pc0, pairs):
+def gen_block(pc0, pairs, latency=True):
+    """latency: flags keep their latency across blocks (GOW_VU1N_FLAG_LATENCY); else the former model (a block commits its
+    newest flag writer at its exit and reads the committed flags)."""
     """C++ body for a block, or None if the block uses something the native backend does not support."""
     n = len(pairs)
     infos = [lower_info(l) if not (u >> 31) else lower_info(0) for (l, u) in pairs]
@@ -446,9 +448,14 @@ def gen_block(pc0, pairs):
     last_is_branch_block = n >= 2 and is_branch(*pairs[n - 2])
     if n >= 1 and is_branch(*pairs[n - 1]) and not last_is_branch_block:
         return None                     # branch without delay slot
-    # Flag model of the exact engine: an FMAC / CLIP / FCSET issued at pair j becomes visible to flag readers from pair j+4
-    # (kFmacLatency; no stalls assumed); older flags are the block-entry value. A writer that nothing reads still commits
-    # at the block end (s.mac / s.clip), so the last one is always kept.
+    # Flag model of the exact engine: an FMAC / CLIP / FCSET issued at pair j becomes visible to flag readers 4 cycles later
+    # (kFmacLatency, on the exact engine's stall-model cycles n.cyc, computed at block entry from the pipeline state the
+    # previous block left). Flags older than the block come from the exact engine's
+    # flag pipeline as visible at the reader's issue cycle (VU1NativeAccess::macAt / clipAt): writers of the previous block
+    # (or of exact-stepped pairs) that are still in flight stay invisible until their latency has passed. At a block exit the
+    # writers that can still become visible are queued in that pipeline (pushMac / pushClip) instead of being committed:
+    # committing the newest one at once let a loop read the flags of its last pair too early (the shadow-volume culling loop
+    # at 0x3C38 tests with FMEQ the sign of the MSUB issued exactly 4 pairs earlier, across the loop branch).
     FLAT = 4
     mac_w = [i for i in range(n) if uinfo[i][2]]
     clip_w = [i for i in range(n) if classify(pairs[i][1])[0] == 'clip' or (not (pairs[i][1] >> 31) and (pairs[i][0] >> 25) == 0x11)]
@@ -468,23 +475,39 @@ def gen_block(pc0, pairs):
         return expr
 
     def mac_src(i):
-        return visible(i, mac_w, "m", "s.mac")
+        return visible(i, mac_w, "m", f"VU1NativeAccess::macAt(n, n.cyc[{i}])" if latency else "s.mac")
 
     def clip_src(i):
-        return visible(i, clip_w, "c", "s.clip")
+        return visible(i, clip_w, "c", f"VU1NativeAccess::clipAt(n, n.cyc[{i}])" if latency else "s.clip")
 
     def clip_prev(i):
         c = [j for j in clip_w if j < i]
-        return f"c{c[-1]}" if c else "s.clip"
+        return f"c{c[-1]}" if c else ("VU1NativeAccess::clipChain(n)" if latency else "s.clip")
 
     def flush(i):
+        if not latency:
+            out = []
+            cm = [j for j in mac_w if j <= i]
+            cc = [j for j in clip_w if j <= i]
+            if cm:
+                out.append(f"s.mac = m{cm[-1]};")
+            if cc:
+                out.append(f"s.clip = c{cc[-1]};")
+            return out
+        """Block exit after pair i: queue every writer that can still be the visible one at or after the exit (the last one,
+        and older ones whose successor is not visible yet when the block ends)."""
         out = []
-        cm = [j for j in mac_w if j <= i]
-        cc = [j for j in clip_w if j <= i]
-        if cm:
-            out.append(f"s.mac = m{cm[-1]};")
-        if cc:
-            out.append(f"s.clip = c{cc[-1]};")
+        end = f"n.cyc[{i}] + 1u"
+        for writers, prefix, push in ((mac_w, "m", "pushMac"), (clip_w, "c", "pushClip")):
+            w = [j for j in writers if j <= i]
+            for k, j in enumerate(w):
+                call = f"VU1NativeAccess::{push}(n, n.cyc[{j}], {prefix}{j});"
+                if k == len(w) - 1:
+                    out.append(call)
+                elif i - w[k + 1] < FLAT - 1:
+                    # visible after the exit only if its successor is not yet: issue-cycle gaps are at least the pair
+                    # distance (stalls only widen them), so writers followed by one 3+ pairs before the end never are
+                    out.append(f"if (n.cyc[{w[k + 1]}] + {FLAT}u > {end}) {call}")
         return out
 
     lines = []
@@ -631,14 +654,14 @@ def main():
             if key in blocks:
                 continue
             body = gen_block(pc, pairs)
-            blocks[key] = (pc, len(pairs), body)
+            blocks[key] = (pc, len(pairs), body, gen_block(pc, pairs, latency=False) if body is not None else None)
             if body is None:
                 unsupported += 1
     os.makedirs(out, exist_ok=True)
     texts = [[] for _ in range(parts)]
     regs = [[] for _ in range(parts)]
     count = 0
-    for key, (pc, npairs, body) in sorted(blocks.items()):
+    for key, (pc, npairs, body, body_old) in sorted(blocks.items()):
         if body is None:
             continue
         name = f"b{pc:04x}_{key & 0xFFFFFFFF:08x}"
@@ -647,8 +670,13 @@ def main():
         t = [f"static uint32_t {name}(VU1NativeCtx &n)", "{", "    VU1State &s = *n.s;"]
         t += ["    " + ln for ln in body]
         t += ["}", ""]
+        t += [f"static uint32_t {name}_f(VU1NativeCtx &n)", "{", "    VU1State &s = *n.s;"]  # former flag model
+        t += ["    " + ln for ln in body_old]
+        t += ["}", ""]
         texts[part].append("\n".join(t))
-        regs[part].append(f"    vu1nRegisterBlock(0x{key:016x}ull, {name}, {npairs}u);")
+        # bit 16: the block reads flags written before it; only such blocks need exact entry timing (see runNative)
+        reads_entry = any("macAt(" in ln or "clipAt(" in ln for ln in body)
+        regs[part].append(f"    vu1nRegisterBlock(0x{key:016x}ull, {name}, {name}_f, {npairs | (0x10000 if reads_entry else 0)}u);")
     header = ('// Generated by tools/vu1/vu1n_gen.py from the game\'s VU1 microcode. Do not publish.\n'
               '#include "runtime/ps2_vu1_native.h"\n#include <cmath>\n\n'
               '#if defined(_MSC_VER)\n#pragma float_control(precise, on, push)\n#pragma fp_contract(off)\n#endif\n\n')

@@ -818,3 +818,15 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   VBlank period there); the output absorbs that with up to 5 % faster interpolated playback instead of cutting
   sample blocks. Desert: 0 drops, 0 saturated samples, 0 jumps. docs/sound.md. Merged agent/movies2 (all 14 BONUS
   movies at real speed with sound; movie path without hardware registers); combined gate pending.
+- 2026-10-12 late / 10-13: Cliffs freeze in combat fixed (ext 60669d6: the shadow-volume COLCLAMP=0 counting is one
+  fixed-function reverse-subtract/add draw instead of per-triangle draws); edge line along the top and left fixed in
+  the present pass (ext acdb310, clamp to source row/column 2 at 2x; the upstream pass leaving row/column 0 unpainted
+  is still open); agent/newgame2 merged (ghost overlay after a01mp05: a target overwritten by a depth write is no
+  longer a texture source); scripted tests ignore a connected gamepad (stick drift loaded wrong slots). Gate
+  port/merged20: Cliffs, Olympus, slot 4 60 fps, speed 1.00. Chest glow colour confirmed normal by the user.
+- 10-13: character shadows, root cause found (agent/shadows2, merged into gow-usa-kl): the native VU1 blocks made
+  MAC/clip flags visible too early at block boundaries, so the culling loop gave both shadow-volume halves the same
+  ADC bits and every count netted to zero. The exact fix (flag latency and pipeline state across blocks) is merged but
+  opt-in (`GOW_VU1N_FLAG_LATENCY=1`): it draws the shadows (gate port/shadows2/gate_latency, zones 0-4 60 fps, savetest
+  ok) but costs 2x VU1 time (heavy Olympus spot ~39 fps vs 56). Default unchanged. Fork agent/shadows3 profiles and
+  makes it cheap enough to be the default. docs/vu1-native-flags.md.
