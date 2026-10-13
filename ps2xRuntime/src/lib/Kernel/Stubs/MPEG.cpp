@@ -1314,6 +1314,14 @@ namespace ps2_stubs
 
                 if (start > 0u)
                 {
+                    // GOW_MPEG_DIAG: bytes skipped to find a start code (a well-formed stream never needs it; a
+                    // resync can land on a start code inside audio data)
+                    static const bool s_skipDiag = std::getenv("GOW_MPEG_DIAG") != nullptr;
+                    static unsigned s_skips = 0;
+                    if (s_skipDiag && s_skips++ < 40u)
+                        std::fprintf(stderr, "[MPEG:skip] %zu bytes before a start code at demuxed=%llu (next id %02x)\n", start,
+                                     static_cast<unsigned long long>(playback.demuxedBytes),
+                                     start + 3u < buffer.size() ? buffer[start + 3u] : 0u);
                     erasePssPrefix(playback, start);
                 }
 
@@ -2663,6 +2671,14 @@ namespace ps2_stubs
                 if (currentTickQ32 < presentationTargetQ32)
                 {
                     const uint64_t eligibleTick = (presentationTargetQ32 + kPictureClockOne - 1u) >> 32u;
+                    // GOW_MPEG_DIAG: a picture held for more than 2 s (its presentation tick is far ahead)
+                    static const bool s_holdDiag = std::getenv("GOW_MPEG_DIAG") != nullptr;
+                    static unsigned s_holds = 0;
+                    if (s_holdDiag && eligibleTick > (currentTickQ32 >> 32u) + 120u && s_holds++ < 20u)
+                        std::fprintf(stderr, "[MPEG:hold] picture %u pts=%lld held until tick %llu (now %llu) firstPts=%lld queued=%zu\n",
+                                     playback.picturesServed, static_cast<long long>(nextFrame.pts90k),
+                                     static_cast<unsigned long long>(eligibleTick), static_cast<unsigned long long>(currentTick),
+                                     static_cast<long long>(playback.firstPresentedPts90k), playback.decodedFrames.size());
                     lock.unlock();
                     runtime->eeScheduler().waitVSync(
                         eligibleTick - 1u,
