@@ -705,7 +705,7 @@
 <rect class="ok gap" x="406.7" y="347.1" width="11.1" height="12.7" stroke-width="1.0"/>
 <rect class="ok gap" x="417.8" y="347.1" width="11.1" height="12.7" stroke-width="1.0"/>
 </g>
-<g><title>libvib: 2 functions, ok - DualShock 2 actuators -&gt; host gamepad rumble (XInput on Windows, raylib elsewhere); verified by log, not yet on a real pad</title>
+<g><title>libvib: 2 functions, ok - DualShock 2 actuators -&gt; host gamepad rumble (Windows: XInput pads, DualShock 4 / DualSense over USB through HID, Bluetooth opt-in; raylib elsewhere); the game's rumble commands verified by log in a user playthrough</title>
 <rect class="ok gap" x="406.7" y="359.8" width="11.1" height="10.2" stroke-width="1.0"/>
 <rect class="ok gap" x="417.8" y="359.8" width="11.1" height="10.2" stroke-width="1.0"/>
 </g>

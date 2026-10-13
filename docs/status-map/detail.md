@@ -13,7 +13,7 @@ Generated from `data.toml` by `tools/status_map.py`; do not edit by hand.
 | libcdvd | 10 | ✅ ok | CD reads served from the extracted game files (disc-usa/); the ISO only with GOW_ISO |
 | libdbc | 11 | ✅ ok | dbcman RPC answered by native pad services |
 | libpad2 | 13 | ✅ ok | Native pad read on the EE (keyboard / gamepad) |
-| libvib | 2 | ✅ ok | DualShock 2 actuators -> host gamepad rumble (XInput on Windows, raylib elsewhere); verified by log, not yet on a real pad |
+| libvib | 2 | ✅ ok | DualShock 2 actuators -> host gamepad rumble (Windows: XInput pads, DualShock 4 / DualSense over USB through HID, Bluetooth opt-in; raylib elsewhere); the game's rumble commands verified by log in a user playthrough |
 | libmc2 | 90 | ✅ ok | Native memory-card service; load and save verified (savetest) |
 | libscf | 14 | ✅ ok |  |
 | libgcc | 32 | ✅ ok |  |

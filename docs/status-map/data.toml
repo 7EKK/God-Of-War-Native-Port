@@ -58,7 +58,7 @@ note = "Native pad read on the EE (keyboard / gamepad)"
 name = "libvib"
 functions = 2
 state = "ok"
-note = "DualShock 2 actuators -> host gamepad rumble (XInput on Windows, raylib elsewhere); verified by log, not yet on a real pad"
+note = "DualShock 2 actuators -> host gamepad rumble (Windows: XInput pads, DualShock 4 / DualSense over USB through HID, Bluetooth opt-in; raylib elsewhere); the game's rumble commands verified by log in a user playthrough"
 
 [[library]]
 name = "libmc2"

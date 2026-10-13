@@ -13,5 +13,5 @@ set PS2X_GS_WORKER=1
 set GOW_GS_FINISH_ASINCRONO=1
 set "GOW_MC0=%ROOT%disc-usa\play.mcd"
 cd /d "%EXE_DIR%"
-ps2EntryRunner.exe "%ROOT%disc-usa\SCUS_973.99"
+"%EXE_DIR%\ps2EntryRunner.exe" "%ROOT%disc-usa\SCUS_973.99"
 endlocal
