@@ -9,8 +9,8 @@ namespace
     struct NativeEntry
     {
         VU1NativeFn fn;
-        VU1NativeFn fnFormer;
         uint32_t pairs;
+        const VU1TailDesc *tail;
         bool readsEntryFlags; // reads MAC/clip flags written before the block (vu1n_gen.py: bit 16 of pairs)
         std::vector<uint8_t> cyc; // issue cycle of each pair (block entry = 0), filled on first use
     };
@@ -68,9 +68,9 @@ namespace
     }
 }
 
-void vu1nRegisterBlock(uint64_t key, VU1NativeFn fn, VU1NativeFn fnFormer, uint32_t pairs)
+void vu1nRegisterBlock(uint64_t key, VU1NativeFn fn, uint32_t pairs, const VU1TailDesc *tail)
 {
-    nativeRegistry()[key] = {fn, fnFormer, pairs & 0xFFFFu, (pairs & 0x10000u) != 0u, {}};
+    nativeRegistry()[key] = {fn, pairs & 0xFFFFu, tail, (pairs & 0x10000u) != 0u, {}};
 }
 
 // Issue cycles of the pairs of a block as the exact engine would see them (operand/pipeline stalls included), assuming
@@ -119,13 +119,8 @@ void VU1NativeAccess::callLower(VU1NativeCtx &n, uint32_t pc, uint32_t lower, ui
     auto &c = *static_cast<VU1Interpreter::StepContext *>(n.context);
     vu.m_state.pc = pc;
     vu.execLower(lower, c.vuData, c.dataSize, *c.gs, c.memory, upper);
-    if (vu1nFlagLatency())
-    {
-        VU1NativeAccess::commitValuesKeepTiming(vu);
-        VU1NativeAccess::importFlags(vu); // the callout's flag writes join the native blocks' ones
-    }
-    else
-        vu.commitEverythingNow();
+    VU1NativeAccess::commitValuesKeepTiming(vu);
+    VU1NativeAccess::importFlags(vu); // the callout's flag writes join the native blocks' ones
 }
 
 void VU1NativeAccess::callUpper(VU1NativeCtx &n, uint32_t pc, uint32_t upper)
@@ -133,13 +128,8 @@ void VU1NativeAccess::callUpper(VU1NativeCtx &n, uint32_t pc, uint32_t upper)
     VU1Interpreter &vu = *n.vu;
     vu.m_state.pc = pc;
     vu.execUpper(upper);
-    if (vu1nFlagLatency())
-    {
-        VU1NativeAccess::commitValuesKeepTiming(vu);
-        VU1NativeAccess::importFlags(vu); // the callout's flag writes join the native blocks' ones
-    }
-    else
-        vu.commitEverythingNow();
+    VU1NativeAccess::commitValuesKeepTiming(vu);
+    VU1NativeAccess::importFlags(vu); // the callout's flag writes join the native blocks' ones
 }
 
 void VU1NativeAccess::xgkick(VU1NativeCtx &n, uint32_t qwordAddress)
@@ -222,10 +212,9 @@ void VU1NativeAccess::importFlags(VU1Interpreter &vu)
     VU1Interpreter::NativeState &ns = *vu.m_native;
     if (!ns.flagsInRings)
     {
-        ns.macRing = {};
-        ns.clipRing = {};
-        ns.macRing.base = vu.m_state.mac;
-        ns.clipRing.base = vu.m_state.clip;
+        ns.macRing.reset(vu.m_state.mac);
+        ns.clipRing.reset(vu.m_state.clip);
+        ns.clipRing.clip = true;
         ns.flagsInRings = true;
     }
     while (vu.m_flagCount != 0u)
@@ -257,16 +246,29 @@ void VU1NativeAccess::exportFlags(VU1Interpreter &vu)
     ns.flagsInRings = false;
     vu.m_state.mac = ringAt(ns.macRing, vu.m_cycle);
     vu.m_state.clip = ringAt(ns.clipRing, vu.m_cycle);
-    // pending writers of both rings, oldest first
+    // pending writers of both rings (tail records included), oldest first
     struct P { uint64_t issue; uint32_t value; bool clip; };
-    P pending[8];
+    P pending[32];
     uint32_t count = 0;
     for (const auto *r : {&ns.macRing, &ns.clipRing})
-        for (uint32_t k = r->count; k >= 1u; --k)
+        for (uint32_t k = 4u; k >= 1u; --k)
         {
             const uint32_t i = (r->next + 4u - k) & 3u;
             if (r->issue[i] + VU1Interpreter::kFmacLatency > vu.m_cycle)
-                pending[count++] = {r->issue[i], r->value[i], r == &ns.clipRing};
+            {
+                pending[count++] = {r->issue[i], r->valueOf(i), r == &ns.clipRing};
+                if (const VU1FlagTail *t = r->tail[i])
+                {
+                    const uint32_t n = r->clip ? t->desc->clipCount : t->desc->macCount;
+                    for (uint32_t j = 0; j < n; ++j)
+                    {
+                        const uint8_t pair = r->clip ? t->desc->clipPair[j] : t->desc->macPair[j];
+                        const uint64_t issue = t->start + t->cyc[pair];
+                        if (issue + VU1Interpreter::kFmacLatency > vu.m_cycle)
+                            pending[count++] = {issue, r->clip ? t->c[j] : vu1n::macValRt(t->q[j], t->desc->macMask[j]), r->clip};
+                    }
+                }
+            }
         }
     std::sort(pending, pending + count, [](const P &a, const P &b) { return a.issue < b.issue; });
     for (uint32_t k = 0; k < count; ++k)
@@ -308,20 +310,17 @@ void VU1NativeAccess::commitValuesKeepTiming(VU1Interpreter &vu)
 }
 
 // First use of a block: decoded pairs, the lanes it reads before writing them (with the idle-schedule cycle of that
-// first read) and the writes that may outlive it.
+// first read) and the last write of every lane it writes.
 void VU1NativeAccess::prepareBlockTiming(VU1Interpreter &vu, VU1Interpreter::NativeState::BlockTiming &bt, const uint8_t *code, uint32_t pc, uint32_t count,
                                         const uint8_t *idle)
 {
     using NS = VU1Interpreter::NativeState;
     bt.idle = idle;
     bt.dec.clear();
-    bt.tail.clear();
     bt.scalarPairs.clear();
     bool read[NS::kLanes] = {}, written[NS::kLanes] = {};
-    int last[NS::kLanes];
-    std::fill(std::begin(last), std::end(last), -1);
-    uint8_t lastLat[NS::kLanes] = {};
     bool scalarWritten[3] = {};
+    uint32_t &maxLat = vu.m_native->maxLat;
     const auto onRead = [&](uint32_t lane, uint8_t at) {
         if (read[lane] || written[lane])
             return;
@@ -332,8 +331,9 @@ void VU1NativeAccess::prepareBlockTiming(VU1Interpreter &vu, VU1Interpreter::Nat
     const auto onWrite = [&](uint32_t lane, uint32_t pair, uint32_t lat) {
         written[lane] = true;
         bt.writeMask[lane >> 6] |= 1ull << (lane & 63u);
-        last[lane] = static_cast<int>(pair);
-        lastLat[lane] = static_cast<uint8_t>(lat);
+        bt.lastPair[lane] = static_cast<uint8_t>(pair);
+        bt.lastLat[lane] = static_cast<uint8_t>(lat);
+        maxLat = std::max(maxLat, lat);
     };
     const auto onScalarRead = [&](uint32_t k, uint8_t at) {
         if (scalarWritten[k] || (bt.scalarRead & (1u << k)))
@@ -393,14 +393,6 @@ void VU1NativeAccess::prepareBlockTiming(VU1Interpreter &vu, VU1Interpreter::Nat
                 scalarWritten[2] = true;
         }
     }
-    // a write outlives the block only if its latency exceeds the distance to the block end (stalls only widen it)
-    const uint32_t end = static_cast<uint32_t>(idle[count - 1u]) + 1u;
-    for (uint32_t lane = 0; lane < NS::kLanes; ++lane)
-        if (last[lane] >= 0 && static_cast<uint32_t>(idle[last[lane]]) + lastLat[lane] > end)
-        {
-            bt.tail.push_back({static_cast<uint8_t>(lane), static_cast<uint8_t>(last[lane]), lastLat[lane]});
-            bt.tailMask[lane >> 6] |= 1ull << (lane & 63u);
-        }
 }
 
 static inline uint64_t &vu1nLaneWord(VU1Interpreter &vu, uint32_t lane)
@@ -417,56 +409,114 @@ uint64_t &VU1NativeAccess::laneWord(VU1Interpreter &vu, uint32_t lane)
     return vu.m_accReady[lane - 144u];
 }
 
-// Native entry: the exact engine's results still in flight become the in-flight lanes.
-void VU1NativeAccess::importInflight(VU1Interpreter &vu)
+// Ready cycles of lanes from the blocks in `hist`, newest first: calls ready(lane, cycle) for every lane of `want` whose
+// newest writer is one of them and can still be in flight at `now` (cycle 0: surely ready), and removes those lanes from
+// `want`. Lanes left in `want` are ready by `now` unless arraysReadyBy > now: then they hold the exact engine's values.
+// Blocks that ended maxLat or more cycles before `now` (and all older ones) hold nothing in flight any more.
+template <typename F>
+void VU1NativeAccess::walkHistory(VU1Interpreter::NativeState &ns, uint64_t now, uint64_t want[3], F &&ready)
 {
-    VU1Interpreter::NativeState &ns = *vu.m_native;
-    ns.inflight[0] = ns.inflight[1] = ns.inflight[2] = 0u;
-    ns.touched[0] = ns.touched[1] = ns.touched[2] = 0u;
-    for (uint32_t lane = 0; lane < VU1Interpreter::NativeState::kLanes; ++lane)
+    using NS = VU1Interpreter::NativeState;
+    const uint32_t n = std::min(ns.histCount, NS::kHist);
+    uint32_t k = 0;
+    for (; k < n; ++k)
     {
-        const uint64_t ready = vu1nLaneWord(vu, lane);
-        if (ready > vu.m_cycle)
+        const NS::Hist &h = ns.hist[(ns.histNext + NS::kHist - 1u - k) % NS::kHist];
+        if (h.end + ns.maxLat <= now)
+            break;
+        for (uint32_t w = 0; w < 3u; ++w)
         {
-            ns.laneReady[lane] = ready;
-            ns.inflight[lane >> 6] |= 1ull << (lane & 63u);
+            const uint64_t lanes = want[w] & h.bt->writeMask[w];
+            want[w] &= ~lanes;
+            for (uint64_t bits = lanes; bits != 0u; bits &= bits - 1u)
+            {
+                const uint32_t lane = w * 64u + static_cast<uint32_t>(std::countr_zero(bits));
+                ready(lane, h.start + h.cyc[h.bt->lastPair[lane]] + h.bt->lastLat[lane]);
+            }
+        }
+    }
+    if (ns.arraysReadyBy <= now)
+        return;
+    // Shortly after native entry: lanes written by the older blocks are ready, the others keep the exact engine's values.
+    // All blocks since entry are still in the ring here (they span less than the exact engine's latencies, far below kHist).
+    for (; k < n; ++k)
+    {
+        const NS::Hist &h = ns.hist[(ns.histNext + NS::kHist - 1u - k) % NS::kHist];
+        for (uint32_t w = 0; w < 3u; ++w)
+        {
+            const uint64_t lanes = want[w] & h.bt->writeMask[w];
+            want[w] &= ~lanes;
+            for (uint64_t bits = lanes; bits != 0u; bits &= bits - 1u)
+                ready(w * 64u + static_cast<uint32_t>(std::countr_zero(bits)), 0u);
         }
     }
 }
 
-// Before the exact engine looks at its readiness arrays: lanes the native blocks wrote get their real ready cycle.
+// Before the exact engine looks at its readiness arrays: lanes the native blocks wrote that may still be in flight get
+// their real ready cycle (the others are ready by now, as every stale value is); the history starts over.
 void VU1NativeAccess::syncInflight(VU1Interpreter &vu)
 {
     VU1Interpreter::NativeState &ns = *vu.m_native;
-    for (uint32_t w = 0; w < 3u; ++w)
-        for (uint64_t bits = ns.touched[w]; bits != 0u; bits &= bits - 1u)
-        {
-            const uint32_t lane = w * 64u + static_cast<uint32_t>(std::countr_zero(bits));
-            vu1nLaneWord(vu, lane) = (ns.inflight[w] >> (lane & 63u)) & 1u ? ns.laneReady[lane] : 0u;
-        }
-    ns.touched[0] = ns.touched[1] = ns.touched[2] = 0u;
+    uint64_t want[3] = {~0ull, ~0ull, (1ull << (VU1Interpreter::NativeState::kLanes - 128u)) - 1u};
+    uint64_t readyBy = ns.arraysReadyBy;
+    walkHistory(ns, vu.m_cycle, want, [&](uint32_t lane, uint64_t ready) {
+        vu1nLaneWord(vu, lane) = ready;
+        readyBy = std::max(readyBy, ready);
+    });
+    ns.arraysReadyBy = readyBy;
+    ns.histCount = 0u;
 }
 
 // Issue cycles (relative to vu.m_cycle) of the block's pairs: the idle table unless a lane it reads is still in flight
 // past that read; then the exact engine's stall model, run once per distinct (lane, slack) set and cached.
-const uint8_t *VU1NativeAccess::blockTiming(VU1Interpreter &vu, VU1Interpreter::NativeState::BlockTiming &bt)
+const uint8_t *VU1NativeAccess::blockTiming(VU1Interpreter &vu, VU1Interpreter::NativeState::Slot &sl, uint32_t &cycId)
 {
-    VU1Interpreter::NativeState &ns = *vu.m_native;
+    using NS = VU1Interpreter::NativeState;
+    NS &ns = *vu.m_native;
+    NS::BlockTiming &bt = *sl.bt;
     const uint64_t start = vu.m_cycle;
+    const NS::Hist *pred = ns.histCount ? &ns.hist[(ns.histNext + NS::kHist - 1u) % NS::kHist] : nullptr;
+    const bool memoOk = pred && sl.memoable && pred->end == start && pred->end - pred->start >= ns.maxLat &&
+                        ns.arraysReadyBy <= start;
+    if (memoOk && sl.memoPred == pred->bt && sl.memoPredId == pred->cycId && sl.memoCyc)
+    {
+        cycId = sl.memoId;
+        return sl.memoCyc;
+    }
+    const NS::BlockTiming *predBt = memoOk ? pred->bt : nullptr;
+    const uint32_t predId = memoOk ? pred->cycId : 0u;
+    const auto remember = [&](const uint8_t *cyc, uint32_t id) {
+        if (predBt)
+            sl.memoPred = predBt, sl.memoPredId = predId, sl.memoCyc = cyc, sl.memoId = id;
+        cycId = id;
+        return cyc;
+    };
+    uint64_t hot[3] = {};
+    uint8_t slack[NS::kLanes];
+    const auto note = [&](uint32_t lane, uint64_t ready) {
+        const uint64_t readAt = start + bt.readAt[lane];
+        if (ready > readAt)
+        {
+            hot[lane >> 6] |= 1ull << (lane & 63u);
+            slack[lane] = static_cast<uint8_t>(std::min<uint64_t>(ready - readAt, 255u));
+        }
+    };
+    uint64_t want[3] = {bt.readMask[0], bt.readMask[1], bt.readMask[2]};
+    walkHistory(ns, start, want, note);
+    if (ns.arraysReadyBy > start) // not written by native blocks since the exact engine ran: its readiness arrays
+        for (uint32_t w = 0; w < 3u; ++w)
+            for (uint64_t bits = want[w]; bits != 0u; bits &= bits - 1u)
+            {
+                const uint32_t lane = w * 64u + static_cast<uint32_t>(std::countr_zero(bits));
+                note(lane, vu1nLaneWord(vu, lane));
+            }
     ns.sig.clear();
     for (uint32_t w = 0; w < 3u; ++w)
-    {
-        // lanes ready by now are harmless (no slack); they are cleared here, when the block reads them, or when written
-        for (uint64_t bits = ns.inflight[w] & bt.readMask[w]; bits != 0u; bits &= bits - 1u)
+        for (uint64_t bits = hot[w]; bits != 0u; bits &= bits - 1u)
         {
             const uint32_t lane = w * 64u + static_cast<uint32_t>(std::countr_zero(bits));
-            const uint64_t readAt = start + bt.readAt[lane];
-            if (ns.laneReady[lane] <= start)
-                ns.inflight[w] &= ~(1ull << (lane & 63u));
-            else if (ns.laneReady[lane] > readAt)
-                ns.sig.push_back(static_cast<uint16_t>((lane << 8) | std::min<uint64_t>(ns.laneReady[lane] - readAt, 255u)));
+            ns.sig.push_back(static_cast<uint16_t>((lane << 8) | slack[lane]));
         }
-    }
     if (bt.scalarRead)
     {
         uint64_t ready[3] = {vu.m_fdiv.valid ? vu.m_fdiv.readyCycle : 0u, vu.m_efuResourceReady, 0u};
@@ -478,11 +528,12 @@ const uint8_t *VU1NativeAccess::blockTiming(VU1Interpreter &vu, VU1Interpreter::
                 ns.sig.push_back(static_cast<uint16_t>(((200u + k) << 8) | std::min<uint64_t>(ready[k] - start - bt.scalarAt[k], 255u)));
     }
     if (ns.sig.empty())
-        return bt.idle;
+        return remember(bt.idle, 0u);
     for (const auto &c : bt.cache)
         if (c.sig == ns.sig)
-            return c.cyc.data();
-    // simulate on the exact engine's pipeline state (synced), then restore it
+            return remember(c.cyc.data(), c.id);
+    // simulate on the exact engine's pipeline state (synced; this also drops the history, whose timing tables may be
+    // cache slots replaced below), then restore it
     syncInflight(vu);
     const uint64_t keepCycle = vu.m_cycle;
     const auto vfReady = vu.m_vfReady;
@@ -523,56 +574,118 @@ const uint8_t *VU1NativeAccess::blockTiming(VU1Interpreter &vu, VU1Interpreter::
     vu.m_efu = efu;
     vu.m_efuResourceReady = efuResource;
     vu.m_xgkick.active = xgkick;
-    VU1Interpreter::NativeState::BlockTiming::Cached &slot = bt.cache.size() < 16u ? bt.cache.emplace_back() : bt.cache[bt.next++ % 16u];
+    NS::BlockTiming::Cached &slot = bt.cache.size() < 16u ? bt.cache.emplace_back() : bt.cache[bt.next++ % 16u];
     slot.sig = ns.sig;
     slot.cyc = std::move(cyc);
-    return slot.cyc.data();
+    slot.id = ns.nextCycId++;
+    for (NS::Slot &other : ns.slots) // may point into the cache slot replaced here
+        if (other.bt == &bt)
+            other.memoCyc = nullptr;
+    return remember(slot.cyc.data(), slot.id);
 }
 
-// After a native block: its results that outlive it become in-flight lanes at their real ready cycles (the values are
-// computed already); FDIV/EFU stay busy until their ready cycle.
-void VU1NativeAccess::finishBlockTiming(VU1Interpreter &vu, const VU1Interpreter::NativeState::BlockTiming &bt, const uint8_t *cyc, uint64_t start)
+// After a native block: it joins the history (its results that outlive it are found there when needed); FDIV/EFU stay
+// busy until their ready cycle.
+// An FDIV / EFU operation a native block started at `issue`: busy until its ready cycle.
+void VU1NativeAccess::scalarStart(VU1Interpreter &vu, uint64_t issue, uint32_t latency, bool fdiv)
 {
-    VU1Interpreter::NativeState &ns = *vu.m_native;
-    const uint64_t end = start + cyc[bt.dec.size() - 1u] + 1u;
-    for (uint32_t w = 0; w < 3u; ++w)
+    if (fdiv)
     {
-        ns.inflight[w] &= ~bt.writeMask[w];
-        ns.touched[w] |= bt.writeMask[w];
+        vu.m_fdiv.valid = true;
+        vu.m_fdiv.readyCycle = issue + latency;
+        vu.m_fdiv.value = vu.m_state.q;
+        vu.m_fdiv.statusDi = vu.m_state.status & 0x30u;
+        vu.m_nextCommitCycle = std::min(vu.m_nextCommitCycle, vu.m_fdiv.readyCycle);
+        return;
     }
-    for (uint32_t w = 0; w < 3u; ++w)
-        ns.inflight[w] |= bt.tailMask[w];
-    for (const auto &t : bt.tail)
-        ns.laneReady[t.lane] = start + cyc[t.pair] + t.lat;
+    // EFU instructions run through callLower, which queued their result at the block's start cycle: move the newest
+    // entry to the pair's real issue cycle
+    VU1Interpreter::ScalarPipelineEntry *newest = nullptr;
+    for (VU1Interpreter::ScalarPipelineEntry &e : vu.m_efu)
+        if (e.valid && (!newest || e.readyCycle >= newest->readyCycle))
+            newest = &e;
+    if (newest)
+    {
+        newest->readyCycle = issue + latency;
+        vu.m_nextCommitCycle = std::min(vu.m_nextCommitCycle, newest->readyCycle);
+    }
+    vu.m_efuResourceReady = issue + (latency > 0u ? latency - 1u : 0u);
+}
+
+// After a native block: it joins the history (its results that outlive it are found there when needed); FDIV/EFU stay
+// busy until their ready cycle.
+VU1N_INLINE void VU1NativeAccess::finishBlockTiming(VU1Interpreter &vu, const VU1Interpreter::NativeState::Slot &sl, const uint8_t *cyc,
+                                                     uint32_t cycId, uint64_t start)
+{
+    using NS = VU1Interpreter::NativeState;
+    NS &ns = *vu.m_native;
+    const uint64_t end = start + cyc[sl.pairs - 1u] + 1u;
+    NS::Hist &h = ns.hist[ns.histNext];
+    h.bt = sl.bt;
+    h.cyc = cyc;
+    h.start = start;
+    h.end = end;
+    h.cycId = cycId;
+    ns.histNext = (ns.histNext + 1u) % NS::kHist;
+    ++ns.histCount;
+    vu.m_cycle = end;
+    if (sl.scalarCount == 0u)
+        return;
+    if (sl.scalarCount != NS::kScalarMany)
+    {
+        for (uint32_t k = 0; k < sl.scalarCount; ++k)
+            scalarStart(vu, start + cyc[sl.scalar[k].pair], sl.scalar[k].latency, sl.scalar[k].fdiv);
+        return;
+    }
+    const NS::BlockTiming &bt = *sl.bt;
     for (const uint8_t i : bt.scalarPairs)
     {
         const VU1Interpreter::DecodedInstructionPair &d = bt.dec[i];
-        const uint64_t issue = start + cyc[i];
-        if (d.lowerUsage.pipeline == VU1Interpreter::PipelineFdiv)
+        scalarStart(vu, start + cyc[i], d.lowerUsage.latency, d.lowerUsage.pipeline == VU1Interpreter::PipelineFdiv);
+    }
+}
+
+// The dispatch slot of pc, set up on first use (native block lookup, timing tables).
+VU1Interpreter::NativeState::Slot &VU1NativeAccess::slotFor(VU1Interpreter &vu, const uint8_t *code, uint32_t codeSize, uint32_t pc)
+{
+    VU1Interpreter::NativeState &ns = *vu.m_native;
+    VU1Interpreter::NativeState::Slot &sl = ns.slots[pc >> 3];
+    if (!sl.known)
+    {
+        uint32_t words[128];
+        const uint32_t count = nativeExtent(code, codeSize, pc, words);
+        sl = {};
+        sl.known = true;
+        sl.pairs = static_cast<uint16_t>(count);
+        if (count != 0u)
         {
-            vu.m_fdiv.valid = true;
-            vu.m_fdiv.readyCycle = issue + d.lowerUsage.latency;
-            vu.m_fdiv.value = vu.m_state.q;
-            vu.m_fdiv.statusDi = vu.m_state.status & 0x30u;
-            vu.m_nextCommitCycle = std::min(vu.m_nextCommitCycle, vu.m_fdiv.readyCycle);
-        }
-        else
-        {
-            // EFU instructions run through callLower, which queued their result at the block's start cycle: move the
-            // newest entry to the pair's real issue cycle
-            VU1Interpreter::ScalarPipelineEntry *newest = nullptr;
-            for (VU1Interpreter::ScalarPipelineEntry &e : vu.m_efu)
-                if (e.valid && (!newest || e.readyCycle >= newest->readyCycle))
-                    newest = &e;
-            if (newest)
+            const auto it = nativeRegistry().find(vu1n::blockKey(pc, words, count * 2u));
+            if (it != nativeRegistry().end())
             {
-                newest->readyCycle = issue + d.lowerUsage.latency;
-                vu.m_nextCommitCycle = std::min(vu.m_nextCommitCycle, newest->readyCycle);
+                if (it->second.cyc.empty())
+                    vu.nativeTiming(code, pc, count, it->second.cyc);
+                VU1Interpreter::NativeState::BlockTiming &bt = ns.timings[it->first];
+                if (bt.dec.empty())
+                    prepareBlockTiming(vu, bt, code, pc, count, it->second.cyc.data());
+                bt.readsEntryFlags = it->second.readsEntryFlags;
+                sl.fn = it->second.fn;
+                sl.idle = it->second.cyc.data();
+                sl.bt = &bt;
+                sl.readsEntryFlags = bt.readsEntryFlags;
+                sl.memoable = bt.scalarRead == 0u;
+                sl.tail = it->second.tail;
+                if (bt.scalarPairs.size() > std::size(sl.scalar))
+                    sl.scalarCount = VU1Interpreter::NativeState::kScalarMany;
+                else
+                    for (const uint8_t i : bt.scalarPairs)
+                        sl.scalar[sl.scalarCount++] = {i, static_cast<uint8_t>(bt.dec[i].lowerUsage.latency),
+                                                       bt.dec[i].lowerUsage.pipeline == VU1Interpreter::PipelineFdiv};
             }
-            vu.m_efuResourceReady = issue + (d.lowerUsage.latency > 0u ? d.lowerUsage.latency - 1u : 0u);
+            else if (ns.diag)
+                ++ns.missPcs[pc];
         }
     }
-    vu.m_cycle = end;
+    return sl;
 }
 
 void VU1Interpreter::commitEverythingNow()
@@ -602,7 +715,8 @@ bool VU1Interpreter::runNative(StepContext &context)
     if (generation != ns.generation)
     {
         ns.generation = generation;
-        std::memset(ns.known, 0, sizeof(ns.known));
+        for (NativeState::Slot &sl : ns.slots)
+            sl.known = false;
     }
 
     const unsigned savedCsr = _mm_getcsr();
@@ -613,6 +727,8 @@ bool VU1Interpreter::runNative(StepContext &context)
     ctx.mask = context.dataSize - 1u;
     ctx.vu = this;
     ctx.context = &context;
+    ctx.macRing = &ns.macRing;
+    ctx.clipRing = &ns.clipRing;
 
     bool handled = false;
     for (;;)
@@ -625,35 +741,10 @@ bool VU1Interpreter::runNative(StepContext &context)
         const uint32_t pc = m_state.pc & 0x3FF8u;
         if (pc + 8u > context.codeSize)
             break;
-        const uint32_t slot = pc >> 3;
-        if (!ns.known[slot])
-        {
-            uint32_t words[128];
-            const uint32_t count = nativeExtent(context.vuCode, context.codeSize, pc, words);
-            ns.known[slot] = true;
-            ns.fn[slot] = nullptr;
-            ns.bt[slot] = nullptr;
-            ns.pairs[slot] = static_cast<uint16_t>(count);
-            if (count != 0u)
-            {
-                const auto it = nativeRegistry().find(vu1n::blockKey(pc, words, count * 2u));
-                if (it != nativeRegistry().end())
-                {
-                    ns.fn[slot] = vu1nFlagLatency() ? it->second.fn : it->second.fnFormer;
-                    if (it->second.cyc.empty())
-                        nativeTiming(context.vuCode, pc, count, it->second.cyc);
-                    ns.cyc[slot] = it->second.cyc.data();
-                    NativeState::BlockTiming &bt = ns.timings[it->first];
-                    if (bt.dec.empty())
-                        VU1NativeAccess::prepareBlockTiming(*this, bt, context.vuCode, pc, count, it->second.cyc.data());
-                    ns.bt[slot] = &bt;
-                    bt.readsEntryFlags = it->second.readsEntryFlags;
-                }
-                else if (ns.diag)
-                    ++ns.missPcs[pc];
-            }
-        }
-        VU1NativeFn fn = ns.fn[slot];
+        NativeState::Slot &sl = ns.slots[pc >> 3];
+        if (!sl.known)
+            VU1NativeAccess::slotFor(*this, context.vuCode, context.codeSize, pc);
+        VU1NativeFn fn = sl.fn;
         if (!fn)
         {
             ++ns.missBlocks;
@@ -667,14 +758,22 @@ bool VU1Interpreter::runNative(StepContext &context)
             // blocks stall on them and see their flags at the same cycles as the exact engine.
             commitReadyPipelines();
             commitReadyFlags();
-            if (vu1nFlagLatency())
+            VU1NativeAccess::commitValuesKeepTiming(*this);
+            VU1NativeAccess::importFlags(*this);
+            ns.histCount = 0u; // the exact engine's readiness arrays hold the state in flight
+            if (m_cycle != ns.exitCycle) // the exact engine ran since the last native exit
             {
-                VU1NativeAccess::commitValuesKeepTiming(*this);
-                VU1NativeAccess::importInflight(*this);
-                VU1NativeAccess::importFlags(*this);
+                uint64_t readyBy = 0u;
+                for (const auto &r : m_vfReady)
+                    for (const uint64_t c : r)
+                        readyBy = std::max(readyBy, c);
+                for (const uint64_t c : m_viReady)
+                    readyBy = std::max(readyBy, c);
+                for (const uint64_t c : m_accReady)
+                    readyBy = std::max(readyBy, c);
+                ns.arraysReadyBy = readyBy;
             }
-            else
-                commitEverythingNow();
+            ++ns.nativeRuns;
             _mm_setcsr((savedCsr & ~0x6000u) | 0x6000u | 0x8000u | 0x0040u); // round toward zero, FTZ, DAZ
             armed = true;
         }
@@ -691,19 +790,24 @@ bool VU1Interpreter::runNative(StepContext &context)
         // Values never depend on timing, only flag reads do. A block that reads flags written before it gets its exact
         // issue cycles from the pipeline state at entry (the stalls decide which of those flags it sees); the others use
         // their idle-pipeline table and only hand their results and flags in flight on.
-        const uint8_t *cyc = vu1nFlagLatency() && ns.bt[slot]->readsEntryFlags ? VU1NativeAccess::blockTiming(*this, *ns.bt[slot])
-                                                                               : ns.bt[slot]->idle;
+        uint32_t cycId = 0u;
+        const uint8_t *cyc = sl.readsEntryFlags ? VU1NativeAccess::blockTiming(*this, sl, cycId) : sl.idle;
         ctx.cyc = cyc;
         ctx.start = start;
+        if (sl.tail)
+        {
+            VU1FlagTail &t = ns.hist[ns.histNext].tail;
+            t.desc = sl.tail;
+            t.cyc = cyc;
+            t.start = start;
+            ctx.tail = &t;
+        }
         const uint32_t result = fn(ctx);
-        if (vu1nFlagLatency())
-            VU1NativeAccess::finishBlockTiming(*this, *ns.bt[slot], cyc, start);
-        else
-            m_cycle = start + cyc[ns.pairs[slot] - 1u] + 1u;
+        VU1NativeAccess::finishBlockTiming(*this, sl, cyc, cycId, start);
         m_state.cycles = m_cycle;
-        if (vu1nFlagLatency() && m_cycle >= m_nextCommitCycle)
+        if (m_cycle >= m_nextCommitCycle)
             commitReadyPipelines(); // FDIV/EFU entries kept for timing retire when ready (values are written already)
-        ns.nativePairs += ns.pairs[slot];
+        ns.nativePairs += sl.pairs;
         m_state.pc = result & 0x3FFFu;
         if (result & kVu1nEnded)
         {
@@ -716,9 +820,9 @@ bool VU1Interpreter::runNative(StepContext &context)
     }
     if (armed)
     {
-        if (vu1nFlagLatency())
-            VU1NativeAccess::syncInflight(*this); // the exact engine continues: its readiness arrays become current
+        VU1NativeAccess::syncInflight(*this); // the exact engine continues: its readiness arrays become current
         VU1NativeAccess::exportFlags(*this);
+        ns.exitCycle = m_cycle;
     }
     _mm_setcsr(savedCsr);
     if (ns.diag)
@@ -727,8 +831,9 @@ bool VU1Interpreter::runNative(StepContext &context)
         if (std::chrono::steady_clock::now() - last > std::chrono::seconds(5))
         {
             last = std::chrono::steady_clock::now();
-            std::fprintf(stderr, "[vu1n] nativePairs=%llu missBlocks=%llu distinctMissPcs=%zu\n", ns.nativePairs, ns.missBlocks, ns.missPcs.size());
-            ns.nativePairs = ns.missBlocks = 0;
+            std::fprintf(stderr, "[vu1n] nativePairs=%llu missBlocks=%llu nativeEntries=%llu distinctMissPcs=%zu\n", ns.nativePairs,
+                         ns.missBlocks, ns.nativeRuns, ns.missPcs.size());
+            ns.nativePairs = ns.missBlocks = ns.nativeRuns = 0;
             std::vector<std::pair<unsigned, uint32_t>> top;
             for (const auto &kv : ns.missHits)
                 top.emplace_back(kv.second, kv.first);
@@ -741,7 +846,8 @@ bool VU1Interpreter::runNative(StepContext &context)
     return handled;
 }
 
-// GOW_VU1N_RECORD=<file> [GOW_VU1N_RECORD_N=4000, GOW_VU1N_RECORD_STRIDE=7]: every STRIDE-th VU1 program run, the input
+// GOW_VU1N_RECORD=<file> [GOW_VU1N_RECORD_N=4000, GOW_VU1N_RECORD_STRIDE=7, GOW_VU1N_RECORD_SKIP=0 (runs skipped first, to
+// record a later part of a zone run; ~76k runs per second in gameplay)]: every STRIDE-th VU1 program run, the input
 // (VU1State, micro memory, data memory) and a bit-exact hash of the native result (state, data memory, GIF packets) are
 // appended to <file>. GOW_VU1N_REPLAY=<file>: on the first VU1 run, every record is executed by this build's native
 // blocks and its hash compared with the recorded one -> "[vu1n-replay] N records, M differ". Proves that a change of the
@@ -865,8 +971,10 @@ void VU1NativeAccess::recordReplay(VU1Interpreter &vu, void *contextPtr, uint32_
     }
     static const unsigned limit = std::getenv("GOW_VU1N_RECORD_N") ? static_cast<unsigned>(std::atoi(std::getenv("GOW_VU1N_RECORD_N"))) : 4000u;
     static const unsigned stride = std::getenv("GOW_VU1N_RECORD_STRIDE") ? static_cast<unsigned>(std::atoi(std::getenv("GOW_VU1N_RECORD_STRIDE"))) : 7u;
-    static unsigned seen = 0, written = 0;
-    if (written >= limit || (seen++ % stride) != 0u)
+    static const unsigned long long skip = std::getenv("GOW_VU1N_RECORD_SKIP") ? std::strtoull(std::getenv("GOW_VU1N_RECORD_SKIP"), nullptr, 10) : 0ull;
+    static unsigned long long seen = 0;
+    static unsigned written = 0;
+    if (written >= limit || seen++ < skip || ((seen - skip) % stride) != 0u)
         return;
     static FILE *f = std::fopen(recPath, "wb");
     if (!f)
