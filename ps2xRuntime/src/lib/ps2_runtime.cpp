@@ -89,7 +89,7 @@ namespace
         if (g_spu2StreamActive || source == nullptr || !IsAudioDeviceReady() || (muted && !recording))
             return;
         g_spu2AudioSource.store(source, std::memory_order_release);
-        if (ps2AudioOpenNamedDevice(spu2AudioCallback, 48000u))
+        if (!muted && ps2AudioOpenNamedDevice(spu2AudioCallback, 48000u)) // a muted recording stays on the silent stream
         {
             g_spu2NamedDevice = g_spu2StreamActive = true;
             return;
