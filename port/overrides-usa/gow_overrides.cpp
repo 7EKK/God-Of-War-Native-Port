@@ -799,6 +799,14 @@ namespace
     {
         const uint32_t ra = GPR_U32(ctx, 31);
         sub_0014C278_0x14c278(rdram, ctx, runtime);
+        // A recompiled function hands control back early at an EE checkpoint (ctx->pc = where to resume) and is then
+        // resumed through the original's own slots, so v0 is only the new block once the call has returned to ra.
+        // The allocator (0x13DA10 pools, strcmp) never waits: finish it here instead of reading a stale v0, which left
+        // reallocated blocks marked free (false "second delete" reports, and the guard dropping live children).
+        for (int steps = 0; ctx->pc != ra && ctx->pc != 0u && steps < 100000 && !runtime->isStopRequested(); ++steps)
+            runtime->lookupFunction(ctx->pc)(rdram, ctx, runtime);
+        if (ctx->pc != ra)
+            return;
         if (const uint32_t block = GPR_U32(ctx, 2))
         {
             heap_guard::blocks[block] = {};

@@ -202,3 +202,23 @@ every case: 11 frees, 11 reports. The game kept running (port/shipcrash/selftest
   C++ wrapper that calls the original and then does more work runs that work before the original has finished, and
   a guest function called on a copied context must be dispatched again until it returns (gow_overrides.cpp
   gowRunGuest).
+
+#### Resolved: the ATHN01EE double delete was the heap guard (2026-10-13, agent/warp2)
+The "second delete ... at=0x1461ac" reports in the ATHN01EE warp run were not a game bug but a heap-guard error.
+`gowOperatorNew` read the new block from v0 right after calling 0x14C278. A recompiled function hands control
+back early at an EE checkpoint (ctx->pc = resume point; the call is finished later through the original's own
+slots), so after an early return v0 was not the new block yet. The reallocated block stayed marked free, and its
+next, legitimate delete was reported and ignored (a leak). The same stale state also made the guard drop live
+timeline children. Fix (port/warp2/gow_overrides.cpp): the wrapper finishes the allocator before recording the
+block. 0x14C278 -> 0x13DA10 -> 0x13DC78 -> strcmp 0x2897C4 never waits, so re-dispatching it to ra is safe.
+
+A/B on the same build, `GOW_WARP=ATHN01EE`, 60 s:
+- old guard: "second delete ignored" for 0x780AD0 and 0x7805B0 (port/warp2/r0_oldguard);
+- fixed guard: 0 reports, 60 fps, speed 1.00 (port/warp2/r1).
+
+The user's own crashes (ship, Cliffs) happened before the guard existed, so their cause is still open. With the
+fixed guard, the guard's reports in a fight that shows the enemy meter are now trustworthy and name the delete site.
+
+Rule for overrides (docs/game-internals.md note on early returns): never use a guest call's results (v0, memory it
+writes) right after calling it from a wrapper; either finish the call first (only for functions that never wait) or
+do the work before the call.
