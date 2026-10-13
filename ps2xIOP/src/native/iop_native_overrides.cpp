@@ -251,6 +251,26 @@ namespace ps2x::iop::detail
             const uint32_t physical = IopMemory::physicalAddress(iopBuffer);
             if (physical + size > IopMemory::RamSize)
                 return ret(c, static_cast<uint32_t>(-100));
+            // GOW_SND_VOICEDUMP=1 (debug): 989snd's sound handles when a stream starts (module base 0x25E00, list head
+            // at +0x1EE34, next at +0x24; +0x00 bits 24-28 type, +0x16 flags, +0x17 group) - which sounds a movie's
+            // group pause (989snd export #67) leaves playing
+            static const bool voiceDump = std::getenv("GOW_SND_VOICEDUMP") != nullptr;
+            if (voiceDump)
+                for (uint32_t handle = c.memory.read32(0x25E00u + 0x1EE34u), n = 0; handle != 0u && n < 256u; handle = c.memory.read32(handle + 0x24u), ++n)
+                {
+                    const uint32_t word0 = c.memory.read32(handle), flagsGroup = c.memory.read32(handle + 0x14u);
+                    // streams (type 4): the voices of their channels (+4 list, next +0xC8, voice +0x7C) and +0x38,
+                    // as 989snd's stream pause (0x12398) silences them; voice n = core n / 24, voice n % 24
+                    std::string voices;
+                    if (((word0 >> 24) & 0x1Fu) == 4u)
+                    {
+                        for (uint32_t channel = c.memory.read32(handle + 4u), k = 0; channel != 0u && k < 8u; channel = c.memory.read32(channel + 0xC8u), ++k)
+                            voices += " " + std::to_string(c.memory.read32(channel + 0x7Cu));
+                        voices += " extra=" + std::to_string(static_cast<int32_t>(c.memory.read32(handle + 0x38u)));
+                    }
+                    std::fprintf(stderr, "[snd-handles] handle=%x type=%u group=%u flags=%02x word0=%08x%s\n", handle, (word0 >> 24) & 0x1Fu,
+                                 (flagsGroup >> 24) & 0xFFu, (flagsGroup >> 16) & 0xFFu, word0, voices.c_str());
+                }
             sound.startStream(channel, c.memory.ram().data() + physical, size, (mode & 0x10u) != 0u);
             g_libsd.blockActive[channel] = true;
             g_libsd.blockBuffer[channel] = iopBuffer;

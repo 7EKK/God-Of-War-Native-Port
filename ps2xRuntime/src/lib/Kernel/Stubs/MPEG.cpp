@@ -1107,9 +1107,13 @@ namespace ps2_stubs
             return result;
         }
 
+        // The video is over at its sequence end code (libmpeg's sceMpegIsEnd reports the end there) or at the PSS
+        // program end, whichever comes first; the demuxer still hands the audio packets after it to the game.
+        bool videoEnded(const MpegPlaybackState &playback) { return playback.streamEnded || playback.sawSequenceEnd; }
+
         void flushDecoderIfEnded(MpegPlaybackState &playback)
         {
-            if (playback.streamEnded && playback.decoder)
+            if (videoEnded(playback) && playback.decoder)
             {
                 playback.decoder->flush(playback.decodedFrames);
             }
@@ -1189,6 +1193,9 @@ namespace ps2_stubs
                 playback.decodedFrames.clear();
             }
 
+            // a sequence header after a sequence end starts a new sequence: the video goes on
+            if (playback.sawSequenceEnd && findMpegSequenceHeader(data, size) != kStartCodeNotFound)
+                playback.sawSequenceEnd = false;
             if (containsMpegSequenceEnd(data, size))
             {
                 playback.sawSequenceEnd = true;
@@ -1307,6 +1314,14 @@ namespace ps2_stubs
 
                 if (start > 0u)
                 {
+                    // GOW_MPEG_DIAG: bytes skipped to find a start code (a well-formed stream never needs it; a
+                    // resync can land on a start code inside audio data)
+                    static const bool s_skipDiag = std::getenv("GOW_MPEG_DIAG") != nullptr;
+                    static unsigned s_skips = 0;
+                    if (s_skipDiag && s_skips++ < 40u)
+                        std::fprintf(stderr, "[MPEG:skip] %zu bytes before a start code at demuxed=%llu (next id %02x)\n", start,
+                                     static_cast<unsigned long long>(playback.demuxedBytes),
+                                     start + 3u < buffer.size() ? buffer[start + 3u] : 0u);
                     erasePssPrefix(playback, start);
                 }
 
@@ -2597,7 +2612,7 @@ namespace ps2_stubs
             MpegPlaybackState &playback = getPlaybackState(mpegAddr);
             if (playback.decodedFrames.empty() &&
                 !g_mpeg_stub_state.currentCdStreamEofSeen &&
-                !playback.streamEnded &&
+                !videoEnded(playback) &&
                 !playback.decoderFailed)
             {
                 // GOW-Port: como libmpeg, sin datos se llama primero a sceMpegCbNodata en el hilo que pide la
@@ -2656,6 +2671,14 @@ namespace ps2_stubs
                 if (currentTickQ32 < presentationTargetQ32)
                 {
                     const uint64_t eligibleTick = (presentationTargetQ32 + kPictureClockOne - 1u) >> 32u;
+                    // GOW_MPEG_DIAG: a picture held for more than 2 s (its presentation tick is far ahead)
+                    static const bool s_holdDiag = std::getenv("GOW_MPEG_DIAG") != nullptr;
+                    static unsigned s_holds = 0;
+                    if (s_holdDiag && eligibleTick > (currentTickQ32 >> 32u) + 120u && s_holds++ < 20u)
+                        std::fprintf(stderr, "[MPEG:hold] picture %u pts=%lld held until tick %llu (now %llu) firstPts=%lld queued=%zu\n",
+                                     playback.picturesServed, static_cast<long long>(nextFrame.pts90k),
+                                     static_cast<unsigned long long>(eligibleTick), static_cast<unsigned long long>(currentTick),
+                                     static_cast<long long>(playback.firstPresentedPts90k), playback.decodedFrames.size());
                     lock.unlock();
                     runtime->eeScheduler().waitVSync(
                         eligibleTick - 1u,
@@ -2698,7 +2721,19 @@ namespace ps2_stubs
                 width = playback.width;
                 height = playback.height;
                 frameCount = playback.picturesServed;
-                streamFinished = playback.streamEnded && playback.decodedFrames.empty();
+                streamFinished = videoEnded(playback) && playback.decodedFrames.empty();
+                // GOW_MPEG_DIAG: why no picture is handed out (once per second while it lasts)
+                static const bool s_waitDiag = std::getenv("GOW_MPEG_DIAG") != nullptr;
+                static auto s_lastWaitDiag = std::chrono::steady_clock::time_point{};
+                if (s_waitDiag && std::chrono::steady_clock::now() - s_lastWaitDiag > std::chrono::seconds(1))
+                {
+                    s_lastWaitDiag = std::chrono::steady_clock::now();
+                    std::fprintf(stderr, "[MPEG:wait] mpeg=0x%x served=%u ended=%d failed=%d sawInput=%d seqEnd=%d demuxed=%llu pss=%zu cdEof=%d eofPending=%d\n",
+                                 mpegAddr, playback.picturesServed, playback.streamEnded ? 1 : 0, playback.decoderFailed ? 1 : 0,
+                                 playback.sawInput ? 1 : 0, playback.sawSequenceEnd ? 1 : 0,
+                                 static_cast<unsigned long long>(playback.demuxedBytes), playback.pssBuffer.size(),
+                                 g_mpeg_stub_state.currentCdStreamEofSeen ? 1 : 0, g_mpeg_stub_state.cdStreamEofPending ? 1 : 0);
+                }
             }
         }
 
