@@ -20,6 +20,60 @@
 
 class PS2Memory;
 
+namespace vu1n
+{
+    inline uint32_t macValRt(__m128 r, uint32_t m);
+}
+
+// The flag writers of a native block that only matter to a read less than kFmacLatency cycles after its exit: all MAC /
+// clip writers but the newest whose successor lies in the block's last three pairs (vu1n_gen.py). The descriptor is
+// static (pairs, DEST masks in SSE order); the block stores the values (MAC: the unclamped FMAC result) in its record.
+struct VU1TailDesc
+{
+    uint8_t macCount, clipCount;
+    uint8_t macPair[3], macMask[3], clipPair[3];
+};
+struct VU1FlagTail
+{
+    const VU1TailDesc *desc;
+    const uint8_t *cyc; // issue cycles of the block's pairs (relative to start)
+    uint64_t start;
+    __m128 q[3];
+    uint32_t c[3];
+};
+
+// MAC / clip flags while native blocks run: the last four writers (issue cycle, value) in slots 0-3 and, in slot 4, the
+// writer pushed out last (visible before them). The VU issues at most one FMAC / CLIP per cycle, so four writers cover
+// the whole latency window (kFmacLatency). A MAC writer pushed by a native block keeps its FMAC result (raw, DEST mask in
+// SSE order): the flags are computed only when something reads them; mask 0 = value holds the flags. A native block
+// pushes only its newest writer, with its tail record: the older writers there are visible before it.
+struct VU1FlagRing
+{
+    __m128 raw[5] = {};
+    uint64_t issue[4] = {};
+    uint32_t value[5] = {};
+    uint32_t mask[5] = {};
+    const VU1FlagTail *tail[5] = {};
+    uint32_t next = 0; // slot of the next push (the oldest writer)
+    bool clip = false;
+    void reset(uint32_t value0)
+    {
+        for (uint32_t k = 0; k < 5u; ++k)
+            value[k] = value0, mask[k] = 0u, tail[k] = nullptr;
+        for (uint32_t k = 0; k < 4u; ++k)
+            issue[k] = 0u;
+        next = 0u;
+    }
+    uint32_t valueOf(uint32_t k) const { return mask[k] ? vu1n::macValRt(raw[k], mask[k]) : value[k]; }
+    void evict()
+    {
+        raw[4] = raw[next];
+        value[4] = value[next];
+        mask[4] = mask[next];
+        tail[4] = tail[next];
+    }
+};
+
 struct VU1NativeCtx
 {
     VU1State *s = nullptr;
@@ -29,6 +83,8 @@ struct VU1NativeCtx
     void *context = nullptr; // VU1Interpreter::StepContext *
     const uint8_t *cyc = nullptr; // issue cycle of every pair of the running block, from the exact engine's stall model
     uint64_t start = 0;           // exact-engine cycle at which the running block's pair 0 issues
+    VU1FlagRing *macRing = nullptr, *clipRing = nullptr;
+    VU1FlagTail *tail = nullptr; // the running block's tail record (blocks with a VU1TailDesc)
 };
 
 // Return value of a native block: next pc in the low 16 bits; kEnded when the program finished; kBail when the exact
@@ -37,54 +93,73 @@ constexpr uint32_t kVu1nEnded = 0x80000000u;
 constexpr uint32_t kVu1nBail = 0x40000000u;
 using VU1NativeFn = uint32_t (*)(VU1NativeCtx &);
 
-// Registered by the generated tables: key = FNV-1a over (pc, block words), see vu1n::blockKey.
-// fnFormer: the same block with the former flag model (used unless GOW_VU1N_FLAG_LATENCY=1)
-void vu1nRegisterBlock(uint64_t key, VU1NativeFn fn, VU1NativeFn fnFormer, uint32_t pairs);
+// Registered by the generated tables: key = FNV-1a over (pc, block words), see vu1n::blockKey. pairs: block length in the
+// low 16 bits, bit 16 set when the block reads MAC/clip flags written before it (it then needs exact entry timing).
+void vu1nRegisterBlock(uint64_t key, VU1NativeFn fn, uint32_t pairs, const VU1TailDesc *tail);
 
 struct VU1Interpreter::NativeState
 {
     uint64_t generation = ~0ull;
-    VU1NativeFn fn[2048];
-    uint16_t pairs[2048];
-    const uint8_t *cyc[2048];
-    bool known[2048];
     // Exact issue cycles of a block from the pipeline state at its entry, so results and flags in flight from the previous
     // block (native or exact) stall and become visible exactly as in the exact engine. Pipeline lanes: VF reg*4+comp
-    // (0-127), VI 128+reg, ACC 144+comp. While native blocks run, the lanes still in flight are kept in `inflight` /
-    // `laneReady` (absolute ready cycles); the exact engine's readiness arrays are synced when it takes over.
+    // (0-127), VI 128+reg, ACC 144+comp. While native blocks run, no per-lane state is kept: the recent blocks are
+    // remembered (`hist`) and a lane's ready cycle is derived from its newest writer only when a block that needs exact
+    // timing enters or the exact engine takes over (its readiness arrays are synced then).
     static constexpr uint32_t kLanes = 148;
     struct BlockTiming
     {
-        struct Write { uint8_t lane, pair, lat; }; // last write of a lane whose result may outlive the block
         std::vector<DecodedInstructionPair> dec;
         uint64_t readMask[3] = {};   // lanes read before the block writes them
         uint64_t writeMask[3] = {};  // lanes the block writes
-        uint64_t tailMask[3] = {};   // lanes of `tail`
         uint8_t readAt[kLanes] = {}; // idle-schedule issue cycle of the first such read
+        uint8_t lastPair[kLanes] = {}, lastLat[kLanes] = {}; // last write of each written lane: pair and latency
         uint8_t scalarRead = 0;      // bit 0 FDIV, 1 EFU unit, 2 WAITP read before the block starts one
         uint8_t scalarAt[3] = {};
-        std::vector<Write> tail;
         std::vector<uint8_t> scalarPairs; // pairs that start an FDIV / EFU operation
         const uint8_t *idle = nullptr;
         bool readsEntryFlags = false; // reads flags written before it: exact entry timing (others use `idle`)
-        struct Cached { std::vector<uint16_t> sig; std::vector<uint8_t> cyc; };
+        struct Cached { std::vector<uint16_t> sig; std::vector<uint8_t> cyc; uint32_t id = 0; };
         std::vector<Cached> cache; // timings for in-flight entry states seen so far (loops repeat the same few)
         uint32_t next = 0;
     };
     std::unordered_map<uint64_t, BlockTiming> timings;
-    BlockTiming *bt[2048];
-    uint64_t laneReady[kLanes] = {};
-    uint64_t inflight[3] = {}, touched[3] = {};
-    std::vector<uint16_t> sig; // scratch: (lane << 8 | slack) of the in-flight lanes a block reads
-    // MAC / clip flags while native blocks run: the last writers (issue cycle, value) and the value visible before them.
-    // The VU issues at most one FMAC / CLIP per cycle, so four writers cover the whole latency window (kFmacLatency).
-    struct FlagRing
+    // Per pc slot, what the dispatch loop touches for every block (one cache line).
+    struct alignas(64) Slot
     {
-        uint64_t issue[4] = {};
-        uint32_t value[4] = {};
-        uint32_t count = 0, next = 0; // entries, slot of the next push (oldest when full)
-        uint32_t base = 0;
+        VU1NativeFn fn = nullptr; // null: no native block at this pc
+        const uint8_t *idle = nullptr;
+        BlockTiming *bt = nullptr;
+        // Entry timing by predecessor (blocks that read entry flags): when the block before ran for maxLat cycles or more
+        // and nothing from the exact engine is still in flight, that block and its timing table alone decide the entry
+        // state; the timing found for it is reused.
+        const BlockTiming *memoPred = nullptr;
+        const uint8_t *memoCyc = nullptr;
+        uint32_t memoPredId = 0, memoId = 0;
+        uint16_t pairs = 0;
+        bool known = false;
+        bool readsEntryFlags = false;
+        bool memoable = false;   // its entry timing does not depend on FDIV/EFU state
+        const VU1TailDesc *tail = nullptr;
+        uint8_t scalarCount = 0; // FDIV / EFU operations it starts (kScalarMany: more than fit in `scalar`)
+        struct Scalar { uint8_t pair, latency; bool fdiv; } scalar[2] = {};
     };
+    static constexpr uint8_t kScalarMany = 0xFF;
+    Slot slots[2048];
+    // Native blocks run since native entry (or the last sync), newest last; histCount counts them all (the ring keeps the
+    // last kHist). A write is ready less than maxLat cycles after its block ended, so only blocks that ended less than
+    // maxLat cycles ago can still hold a lane in flight.
+    // cycId: 0 = the block's idle table, else the id of the cache slot (slots are reused, ids are not)
+    struct Hist { const BlockTiming *bt; const uint8_t *cyc; uint64_t start, end; uint32_t cycId; VU1FlagTail tail; };
+    static constexpr uint32_t kHist = 64;
+    Hist hist[kHist];
+    uint32_t histNext = 0, histCount = 0;
+    uint32_t maxLat = 0;
+    uint32_t nextCycId = 1;
+    // Every lane of the exact engine's readiness arrays is ready by arraysReadyBy (the arrays are cleared at every program
+    // start; recomputed at native entry when the exact engine ran since the last native exit at exitCycle).
+    uint64_t arraysReadyBy = 0, exitCycle = ~0ull;
+    std::vector<uint16_t> sig; // scratch: (lane << 8 | slack) of the in-flight lanes a block reads
+    using FlagRing = VU1FlagRing;
     FlagRing macRing, clipRing;
     bool flagsInRings = false; // the rings hold the flag state (set at native entry, cleared when the exact engine continues)
     bool enabled = std::getenv("GOW_VU1_NATIVE_OFF") == nullptr;
@@ -100,27 +175,33 @@ struct VU1Interpreter::NativeState
 // Callouts into the exact engine for the rare instructions (defined in ps2_vu1_core.cpp).
 struct VU1NativeAccess
 {
-    // Flags across block boundaries, through the exact engine's flag pipeline (cycle = start + rel): the MAC / clip value
+    // Flags across block boundaries, through the flag rings (cycle = start + rel): the MAC / clip value
     // a reader issued at rel sees, the clip chain value CLIP shifts (newest, in flight included), and queueing a writer
     // issued at rel (visible kFmacLatency later).
     static uint32_t macAt(VU1NativeCtx &n, uint32_t rel);
     static uint32_t clipAt(VU1NativeCtx &n, uint32_t rel);
     static uint32_t clipChain(VU1NativeCtx &n);
-    static void pushMac(VU1NativeCtx &n, uint32_t rel, uint32_t mac);
     static void pushClip(VU1NativeCtx &n, uint32_t rel, uint32_t clip);
     static uint32_t ringAt(const VU1Interpreter::NativeState::FlagRing &r, uint64_t at);
     static void ringPush(VU1Interpreter::NativeState::FlagRing &r, uint64_t issue, uint32_t value);
+    static void pushMacRaw(VU1NativeCtx &n, uint32_t rel, __m128 raw, uint32_t mask, const VU1FlagTail *tail);
+    static void pushClipTail(VU1NativeCtx &n, uint32_t rel, uint32_t clip, const VU1FlagTail *tail);
+    // The newest writer of ring slot k's tail record visible at `at`, if any.
+    static bool tailVisible(const VU1FlagRing &r, uint32_t k, uint64_t at, uint32_t &value);
     static void importFlags(VU1Interpreter &vu);
     static void exportFlags(VU1Interpreter &vu);
     // Pipeline timing across native blocks (see VU1Interpreter::NativeState::BlockTiming)
     static void commitValuesKeepTiming(VU1Interpreter &vu);
     static void prepareBlockTiming(VU1Interpreter &vu, VU1Interpreter::NativeState::BlockTiming &bt, const uint8_t *code,
                                    uint32_t pc, uint32_t count, const uint8_t *idle);
-    static const uint8_t *blockTiming(VU1Interpreter &vu, VU1Interpreter::NativeState::BlockTiming &bt);
+    static const uint8_t *blockTiming(VU1Interpreter &vu, VU1Interpreter::NativeState::Slot &sl, uint32_t &cycId);
+    static void scalarStart(VU1Interpreter &vu, uint64_t issue, uint32_t latency, bool fdiv);
+    static VU1Interpreter::NativeState::Slot &slotFor(VU1Interpreter &vu, const uint8_t *code, uint32_t codeSize, uint32_t pc);
     static uint64_t &laneWord(VU1Interpreter &vu, uint32_t lane);
-    static void importInflight(VU1Interpreter &vu);
+    template <typename F>
+    static void walkHistory(VU1Interpreter::NativeState &ns, uint64_t now, uint64_t want[3], F &&ready);
     static void syncInflight(VU1Interpreter &vu);
-    static void finishBlockTiming(VU1Interpreter &vu, const VU1Interpreter::NativeState::BlockTiming &bt, const uint8_t *cyc,
+    static void finishBlockTiming(VU1Interpreter &vu, const VU1Interpreter::NativeState::Slot &sl, const uint8_t *cyc, uint32_t cycId,
                                   uint64_t start);
     static void callLower(VU1NativeCtx &n, uint32_t pc, uint32_t lower, uint32_t upper);
     static void callUpper(VU1NativeCtx &n, uint32_t pc, uint32_t upper);
@@ -146,48 +227,79 @@ struct VU1NativeAccess
 #endif
 
 // --- flags across native blocks (inline: the generated blocks call these at every exit / entry-flag read) -------------
-// GOW_VU1N_FLAG_LATENCY=1: flags keep their latency across native blocks and blocks that read older flags get their
-// exact issue cycles from the pipeline state at entry (character shadows; docs/vu1-native-flags.md). Costs VU1 time
-// (Olympus ~2.5x), so it is opt-in; default: a reader sees the newest writer of the previous blocks (former model).
-inline bool vu1nFlagLatency()
+// Flags keep their latency across native blocks, and blocks that read older flags get their exact issue cycles from the
+// pipeline state at entry (character shadows; docs/vu1-native-flags.md).
+// A writer issued at cycle c is visible to readers from c + kFmacLatency, exactly as in the exact engine's flag pipeline.
+inline bool VU1NativeAccess::tailVisible(const VU1FlagRing &r, uint32_t k, uint64_t at, uint32_t &out)
 {
-    static const bool on = [] { const char *v = std::getenv("GOW_VU1N_FLAG_LATENCY"); return v && v[0] == '1'; }();
-    return on;
+    const VU1FlagTail *t = r.tail[k];
+    if (!t)
+        return false;
+    const uint32_t count = r.clip ? t->desc->clipCount : t->desc->macCount;
+    for (uint32_t j = count; j-- > 0u;) // newest first
+    {
+        const uint8_t pair = r.clip ? t->desc->clipPair[j] : t->desc->macPair[j];
+        if (t->start + t->cyc[pair] + VU1Interpreter::kFmacLatency <= at)
+        {
+            out = r.clip ? t->c[j] : vu1n::macValRt(t->q[j], t->desc->macMask[j]);
+            return true;
+        }
+    }
+    return false;
 }
 
-// A writer issued at cycle c is visible to readers from c + kFmacLatency, exactly as in the exact engine's flag pipeline.
-inline uint32_t VU1NativeAccess::ringAt(const VU1Interpreter::NativeState::FlagRing &r, uint64_t at)
+VU1N_INLINE uint32_t VU1NativeAccess::ringAt(const VU1Interpreter::NativeState::FlagRing &r, uint64_t at)
 {
-    if (!vu1nFlagLatency())
-        return r.count ? r.value[(r.next + 3u) & 3u] : r.base;
-    for (uint32_t k = 1; k <= r.count; ++k)
+    for (uint32_t k = 1; k <= 4u; ++k)
     {
         const uint32_t i = (r.next + 4u - k) & 3u; // newest first
         if (r.issue[i] + VU1Interpreter::kFmacLatency <= at)
-            return r.value[i];
+            return r.valueOf(i);
+        uint32_t v;
+        if (r.tail[i] && tailVisible(r, i, at, v))
+            return v;
     }
-    return r.base;
+    return r.valueOf(4u);
 }
 
-inline void VU1NativeAccess::ringPush(VU1Interpreter::NativeState::FlagRing &r, uint64_t issue, uint32_t value)
+VU1N_INLINE void VU1NativeAccess::ringPush(VU1Interpreter::NativeState::FlagRing &r, uint64_t issue, uint32_t value)
 {
-    if (r.count == 4u)
-        r.base = r.value[r.next]; // the oldest leaves: newer writers hide it from every later reader once visible
-    else
-        ++r.count;
+    r.evict(); // the oldest leaves: newer writers hide it from every later reader once visible
     r.issue[r.next] = issue;
     r.value[r.next] = value;
+    r.mask[r.next] = 0u;
+    r.tail[r.next] = nullptr;
     r.next = (r.next + 1u) & 3u;
 }
 
-inline uint32_t VU1NativeAccess::macAt(VU1NativeCtx &n, uint32_t rel) { return ringAt(n.vu->m_native->macRing, n.start + rel); }
-inline uint32_t VU1NativeAccess::clipAt(VU1NativeCtx &n, uint32_t rel) { return ringAt(n.vu->m_native->clipRing, n.start + rel); }
-inline uint32_t VU1NativeAccess::clipChain(VU1NativeCtx &n) { return n.vu->m_workingClip; }
-inline void VU1NativeAccess::pushMac(VU1NativeCtx &n, uint32_t rel, uint32_t mac) { ringPush(n.vu->m_native->macRing, n.start + rel, mac); }
-inline void VU1NativeAccess::pushClip(VU1NativeCtx &n, uint32_t rel, uint32_t clip)
+VU1N_INLINE uint32_t VU1NativeAccess::macAt(VU1NativeCtx &n, uint32_t rel) { return ringAt(*n.macRing, n.start + rel); }
+VU1N_INLINE uint32_t VU1NativeAccess::clipAt(VU1NativeCtx &n, uint32_t rel) { return ringAt(*n.clipRing, n.start + rel); }
+VU1N_INLINE uint32_t VU1NativeAccess::clipChain(VU1NativeCtx &n) { return n.vu->m_workingClip; }
+VU1N_INLINE void VU1NativeAccess::pushMacRaw(VU1NativeCtx &n, uint32_t rel, __m128 raw, uint32_t mask, const VU1FlagTail *tail)
+{
+    VU1FlagRing &r = *n.macRing;
+    r.evict();
+    r.issue[r.next] = n.start + rel;
+    r.raw[r.next] = raw;
+    r.mask[r.next] = mask;
+    r.tail[r.next] = tail;
+    r.next = (r.next + 1u) & 3u;
+}
+VU1N_INLINE void VU1NativeAccess::pushClipTail(VU1NativeCtx &n, uint32_t rel, uint32_t clip, const VU1FlagTail *tail)
 {
     n.vu->m_workingClip = clip;
-    ringPush(n.vu->m_native->clipRing, n.start + rel, clip);
+    VU1FlagRing &r = *n.clipRing;
+    r.evict();
+    r.issue[r.next] = n.start + rel;
+    r.value[r.next] = clip;
+    r.mask[r.next] = 0u;
+    r.tail[r.next] = tail;
+    r.next = (r.next + 1u) & 3u;
+}
+VU1N_INLINE void VU1NativeAccess::pushClip(VU1NativeCtx &n, uint32_t rel, uint32_t clip)
+{
+    n.vu->m_workingClip = clip;
+    ringPush(*n.clipRing, n.start + rel, clip);
 }
 
 namespace vu1n
@@ -278,6 +390,17 @@ namespace vu1n
         if (_mm_movemask_epi8(hot) == 0)
             return r;
         return maddWide<Sub>(acc, a, b);
+    }
+    // macVal with the DEST mask (SSE order) at run time: flags of a MAC writer read after its block ended
+    inline uint32_t macValRt(__m128 r, uint32_t m)
+    {
+        const __m128i b = _mm_castps_si128(r);
+        const __m128i expMask = _mm_set1_epi32(0x7F800000);
+        const int z = _mm_movemask_ps(_mm_castsi128_ps(_mm_cmpeq_epi32(_mm_and_si128(b, _mm_set1_epi32(0x7FFFFFFF)), _mm_setzero_si128()))) & m;
+        const int sg = _mm_movemask_ps(r) & m;
+        const __m128i big = _mm_cmpeq_epi32(_mm_and_si128(b, _mm_set1_epi32(0x7FFFFFFF)), _mm_set1_epi32(0x7F7FFFFF));
+        const int o = _mm_movemask_ps(_mm_castsi128_ps(_mm_or_si128(_mm_cmpeq_epi32(_mm_and_si128(b, expMask), expMask), big))) & m;
+        return static_cast<uint32_t>(kRev4[z] | (kRev4[sg] << 4) | (kRev4[o] << 12));
     }
     template <int M>
     VU1N_INLINE uint32_t macVal(__m128 r)

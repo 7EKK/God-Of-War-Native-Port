@@ -122,6 +122,11 @@ void VU1Interpreter::resetScheduler()
     m_vfReady = {};
     m_viReady = {};
     m_accReady = {};
+    if (m_native) // GOW-Port: native backend bookkeeping of these arrays (ps2_vu1_native.inl)
+    {
+        m_native->arraysReadyBy = 0u;
+        m_native->exitCycle = m_cycle;
+    }
     m_vfLatestWrite = {};
     m_viLatestWrite = {};
     m_accLatestWrite = {};
