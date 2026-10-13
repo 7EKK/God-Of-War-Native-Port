@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <xinput.h>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -165,6 +166,8 @@ std::vector<SonyPad> openSonyPads()
                 // (raylib's GLFW input) may not read any more, so it is opt-in (GOW_PAD_BT_RUMBLE=1)
                 static const bool bluetoothRumble = std::getenv("GOW_PAD_BT_RUMBLE") != nullptr;
                 const bool bluetooth = caps.OutputReportByteLength >= 78;
+                std::fprintf(stderr, "[pad] rumble: %s over %s%s\n", ds4 ? "DualShock 4" : "DualSense", bluetooth ? "Bluetooth" : "USB",
+                             bluetooth && !bluetoothRumble ? " (off: set GOW_PAD_BT_RUMBLE=1)" : "");
                 if (!bluetooth || bluetoothRumble)
                 {
                     pads.push_back({handle, ds4 ? SonyKind::DualShock4 : SonyKind::DualSense, bluetooth, caps.OutputReportByteLength, 0});
