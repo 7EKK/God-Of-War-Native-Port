@@ -888,3 +888,8 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   frame limiter busy-waited on Horizon (vsync pacing). Citron now runs EE/VU1/GS/sound for minutes at ~11 guest fps
   but shows black: its shader recompiler rejects nouveau's shaders, so the picture needs the real Switch. Forks for
   PC minor fixes (user 10-16): menuclock2 bf5ad5d and vu1perf ecd6cb5 gated ok, movies6 (captain audio) running.
+- 10-16 ~12:00 VERIFIED merged main (ext gow-usa-kl 0ddab33 = menuclock2 + vu1perf + movies6, runner from
+  port/output-usa-clock + port/overrides-usa): gate port/merged28/gate/20261016_113533 zones 0-4 60 fps, speed 1.00;
+  savetest ok (129 pages, root intact). Fixes: Load Game menu clock 1.08 -> 1.02, VIF1/VU1 job -25 % (ATHN01D
+  +2 fps, still ~40), captain movie buzz (refused audio packets of the previous movie). Open: SEMO08 A/V drift.
+- 10-16: Switch NSP packaging ready (docs/switch.md "Installable NSP"); waiting for the user's prod.keys.
