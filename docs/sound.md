@@ -36,8 +36,9 @@ model: the SPU2 register-level model and the IOP's SPU DMA channels were removed
   title screen and menus) and overshoot inside it move the IOP clock ahead of the EE but produce no samples.
 - Output rate adaptation (`drainOutput`): the latency target is 100 ms (`kSpu2MaxLatencyFrames`). Above it the
   buffer is played up to 5 % faster with linear interpolation; at or below it the samples are copied unchanged. A
-  buffer more than 4 targets above (after a stall) is cut back once. On the menus the guest clock runs ~3.7 % ahead
-  of the wall clock (EE cycles per field above the VBlank period; open), so the menus play at ~1.038; gameplay ~1.001.
+  buffer more than 4 targets above (after a stall) is cut back once. Measured 2026-10-13 (port/menuclock): title screen,
+  main menu, pause menu and gameplay play at rate <= 1.002 with a steady buffer (IOP clock 1.000 +- 0.0004 of wall time;
+  the ~3.7 % of 2026-10-12 no longer occurs); the Load Game menu at <= 1.004 (IOP clock 1.002).
 - Former behaviour (until 2026-10-12): the output cut blocks of samples whenever the buffer exceeded the target.
   Combined with the clock above it dropped ~30 % of the samples on the menus: the audible crackle ("clipping").
   `GOW_AUDIO_STATS=1` prints requested/missing/dropped frames, the highest rate and the buffer level every ~5 s;
@@ -74,3 +75,7 @@ a muted recording (`GOW_AUDIO_PCM`) never uses the chosen device.
   movie's mask asks.
 - Recording without hearing it: `GOW_AUDIO=0` with `GOW_AUDIO_PCM` runs the output at volume 0; `GOW_AUDIO_RAW` writes
   the mix before the output's rate adaptation (the PCM file is after it, so it drifts up to 5 % against a source).
+- A movie track mixed against the wrong L/R interleave sounds like a buzz but has the track's energy, so level and
+  clipping checks miss it. `tools/movie_align.py <movie> <GOW_AUDIO_RAW file> [--ext PSW]` measures the byte offset of
+  the PCM against the core input's 512-byte L/R blocks (0 = correct; A01MP02 after A01MP05 measured 676 until
+  2026-10-16, docs/fmv.md).

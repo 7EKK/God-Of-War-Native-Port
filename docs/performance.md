@@ -271,3 +271,26 @@ Gains per lever above are estimates from the Gemini review (gemini-work/results/
   Zones 0-4 (port/b6_zones/20261012_143318 + port/b6_zones2/20261012_145143 for slots 2 and 4, whose first runs
   were killed from outside by another test's `taskkill /IM`): 60 fps everywhere, speed 1.00, no image warnings;
   savetest ok.
+
+## Menu clock: the Load Game menu ran 8 % fast (2026-10-13, ext branches agent/menuclock, agent/menuclock2)
+- Measured (port/menuclock, `GOW_DELTA_DIAG`, `GOW_VBLANK_DIAG`, `GOW_IOP_DRIFT`, `GOW_AUDIO_STATS`): title screen,
+  main menu, pause menu and gameplay run at game speed 1.000, VBlank 59.99-60.00 Hz, IOP clock 1.000 +- 0.0004 of wall
+  time, audio rate <= 1.002, in both the zones.py and the play.cmd environment (the ~3.7 % of 2026-10-12 is gone).
+  Only the **Load Game (memory card) menu** ran fast: game speed 1.08, per-frame histogram alternating 0.8 / 1.1
+  fields (`[gow-speed-hist] 8:30 11:30`).
+- Cause (`GOW_FRAMECLOCK_TRACE=1`): in every second frame the menu sends three memory-card commands (MC2 socket
+  0x8000131C, cmd 4, 3, 1) before the frame-clock read (0x17D778, called from the frame function 0x17A9E8 after the
+  menu's update). Each command cost exactly 520 T0 ticks (0.9 ms) of guest time: libmc2's send (0x27B568) byte-copies
+  the 0x2080-byte payload in an 8-instruction loop, and every taken backward branch of recompiled code charged a flat
+  32 EE cycles (8320 x 32 = 266k cycles). The read moved 0.16 field late in those frames; the game counts a frame
+  shorter than one field as one field and a longer one in full, so its step summed to 1.08 s per second.
+- Fix (recompiler, ps2xRecomp control_flow_emitter.cpp): a backward edge charges the loop's straight-line length
+  (target through the branch and its delay slot, ~1 cycle per instruction), at most the former 32. 1689 of 6418
+  generated files change (only the `eeCheckpointDue(N)` argument; port/usa/recomp-clock.toml = recomp-movies2.toml with
+  its own output dir). Nothing is charged more than before, so no frame can newly overrun its field.
+- Result: Load Game menu 1.019-1.020 (histogram 0.9 / 1.0 fields), everything else unchanged at 1.000. The remaining
+  ~2 % is the game's own design: the three card commands still cost ~0.04 field of real copy work in every second
+  frame, and any read jitter only adds game time (expected on a console / PCSX2 as well; not measured there).
+- Not the cause, tried and dropped: stepping guest time in IOP-batch steps while every EE thread waits (so an EE thread
+  waiting for the IOP resumes when the IOP is done instead of at the next pacing point): no change, the 520 ticks were
+  executed cycles, not waits.

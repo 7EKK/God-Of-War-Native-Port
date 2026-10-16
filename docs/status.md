@@ -876,3 +876,9 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   = regenerate (port/usa/recomp-clock.toml or port/output-usa-clock, 1689 files) + full rebuild ~40 min + overrides
   patch + docs; after the Switch test port. The captain movie runs at exact speed (33.07 s in 33.07 s): its broken
   sound is not a clock problem.
+- 10-16: menu clock fix rebased on main as ext branch agent/menuclock2 (bf5ad5d = gow-usa-kl 49ca62c + agent/menuclock
+  027ce16; runner = port/output-usa-clock, overrides with GOW_FRAMECLOCK_TRACE in port/overrides-usa; build
+  out/build-clock2). Gate port/menuclock2/gate/20261016_094306: zones 0-4 ok, 59.2-60 fps (slot 4 one window 57.6 while
+  other forks ran tests), speed 1.00; savetest ok (port/menuclock2/savetest); Load Game menu 1.019-1.021 (was 1.08,
+  port/menuclock2/loadgame). Not merged into gow-usa-kl yet; merging = merge the branch + copy port/output-usa-clock and
+  port/overrides-usa/gow_overrides.cpp into the main runner + full rebuild.
