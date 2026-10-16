@@ -920,3 +920,7 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   tools/switch_throttle (docs/switch.md "Switch-speed test on PC"): runs the PC build on 3 cores at ~0.15 speed per
   core. PC main runner 43-45 -> 16.5-17 guest fps throttled (= Citron 16.5). Next: profile the throttled run
   (muestrear) to see which thread limits it; console log still not pulled.
+- 10-17 ~01:40: /loop "optimize the Switch build to 60 fps docked" (until 07:00). PC build of the Switch branch
+  (ext/PS2Recomp-kl-switch/out/build-pc) + tools/thread_cpu.py: busiest thread 54-66 % of a PC core at 60 fps -> ~15 fps
+  on the Switch (docs/switch.md "Per-thread budget"). EE checkpoint fast path committed (agent/switch cba2dfc, EE 66 ->
+  39 %, gate ok). Next: GS frontend per-triangle state build/compare (state serial), then VU1 worker, GL thread.

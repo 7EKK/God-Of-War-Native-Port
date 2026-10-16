@@ -175,6 +175,27 @@ Use: `bash tools/switch_throttle/build.sh` once, then `SWITCH_THROTTLE=1 tools/p
 First result (2026-10-16, PC main runner, user's save, menu → load): 43-45 guest fps unthrottled, **16.5-17 throttled**,
 the same as Citron (16.5) and the user's "unplayable" on the console; the load did not reach gameplay in 240 s.
 
+### Per-thread budget (how to read a PC run for the Switch)
+The four busy threads (EE `GameThread`, VIF1/VU1 `GSWorker`, GS frontend `GSStage`, GL backend `GSThread`) form a
+pipeline and get one Switch core each at ~0.15 of a PC core, so the slowest one sets the frame rate:
+**Switch fps ~ PC fps x 0.15 / (busiest thread's share of one PC core)**. 60 fps on the Switch needs every thread
+below ~15 % of a PC core at 60 fps on PC.
+- Measure: a PC build of the Switch branch (`ext/PS2Recomp-kl-switch/out/build-pc`, Release + `/MAP`), run with the
+  Switch defaults `PS2X_GS_WORKER=1 GOW_GS_FINISH_ASINCRONO=1` (`EXE_DIR=... tools/perf_run.sh`), then
+  `python -I tools/thread_cpu.py <pid> 10` in gameplay (per-thread % of one core, by thread name) and
+  `tools/sample_prof.py --exe <exe> --dll-exports` for the hot functions per thread.
+- 2026-10-17, user's save, gameplay start (heavy) / walking: GameThread 66 / 56 %, GSWorker 60 / 36 %, GSStage
+  56 / 31 %, GSThread 54 / 31 % -> estimate 14-16 fps, matching Citron. The game draws ~20k triangles per frame
+  (almost all strips), each built and queued on its own; no synchronous GS round-trips in gameplay
+  (`GOW_GS_INVENTORY`: cpuRead, clears, snapshots 0).
+
+### Changes from it
+- EE checkpoint fast path (ext agent/switch cba2dfc): `EeScheduler::checkpointDueFast` handles the generated code's
+  checkpoints (tens of millions per second) with a few adds while no EE timer step, IOP batch, scheduled event or
+  slice end is due; the full checkpoint runs at exactly the same calls as before (timer/IOP cycles are handed over
+  there or at any EE timer register access). The per-checkpoint bookkeeping was ~28 % of the EE thread.
+  GameThread 66 -> 39 % / 56 -> 30 %. Gate port/swfast/gate/20261017_011443 zones 0-4 60 fps speed 1.00, savetest ok.
+
 ## Open issues (priority)
 1. Test on the real Switch: does the picture render (Citron cannot show it), speed, sound.
 2. Speed: unplayable on the console (user 2026-10-16, NSP v3). Profile the throttled PC run (above) to find the

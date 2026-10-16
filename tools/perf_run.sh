@@ -7,7 +7,7 @@
 # log -> port/<name>.log, profile -> port/<name>.prof, captures -> port/<name>/*.png
 set -e
 ROOT="C:/Users/lovas/Claude/God Of War"
-EXE_DIR="$ROOT/ext/PS2Recomp-kl/out/build-kl/ps2xRuntime/Release"
+EXE_DIR="${EXE_DIR:-$ROOT/ext/PS2Recomp-kl/out/build-kl/ps2xRuntime/Release}"  # EXE_DIR=... for another build
 name=$1; secs=$2; shift 2
 prof_at=""; prof_len=""
 case "$1" in [0-9]*) prof_at=$1; prof_len=$2; shift 2;; esac
