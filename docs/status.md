@@ -882,3 +882,9 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   other forks ran tests), speed 1.00; savetest ok (port/menuclock2/savetest); Load Game menu 1.019-1.021 (was 1.08,
   port/menuclock2/loadgame). Not merged into gow-usa-kl yet; merging = merge the branch + copy port/output-usa-clock and
   port/overrides-usa/gow_overrides.cpp into the main runner + full rebuild.
+- 10-16: Switch test port no longer stalls in Citron (ext agent/switch 785c365): three Switch-only causes, all in
+  docs/switch.md: the VIF1/VU1 worker overflowed libnx's 128 KiB thread stack (now 1 MiB via --wrap=pthread_create),
+  Mesa nouveau is not thread-safe across the two GL contexts (heap corruption; GSSharedPresent::DriverMutex), raylib's
+  frame limiter busy-waited on Horizon (vsync pacing). Citron now runs EE/VU1/GS/sound for minutes at ~11 guest fps
+  but shows black: its shader recompiler rejects nouveau's shaders, so the picture needs the real Switch. Forks for
+  PC minor fixes (user 10-16): menuclock2 bf5ad5d and vu1perf ecd6cb5 gated ok, movies6 (captain audio) running.
