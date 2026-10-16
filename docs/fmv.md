@@ -76,7 +76,8 @@ continues at once) to keep the runs short.
   from its own copy of the demuxed bytes, through a guest buffer (the game reuses its 16 KB read buffer). The callback
   keeps the first 0x28 bytes (+0x10C) and appends the rest to the 100 KB audio ring (+0xFC base, +0x100 size,
   +0x104 read, +0x108 fill); when the ring is full it returns 0 and sets +0x134. libmpeg stops demuxing there; the
-  stub keeps refused packets, in order, and hands them over first on the next demux call.
+  stub keeps refused packets, in order, and hands them over first on the next demux call; the queue is dropped when
+  the sceMpeg starts a new stream (see "A01MP02 (captain) buzz" below).
 - The movie thread (0x189020) sets up a 989snd PCM stream (0x1882E8: SNDRPC 0x3B, IOP ring 0x4000 bytes at 0x77640;
   0x188408: 0x3E start) and on every pass drains the EE ring into the IOP ring (0x189A88 -> 0x188380 -> 0x188688:
   989snd command 0x40 = `sceSdBlockTransStatus`, minus the IOP ring address = where the sound unit reads; then SIF
@@ -155,40 +156,32 @@ adaptation, so a movie can be compared with its source track sample by sample.
   the paused groups is silenced by 989snd (pitch 0, volume 0). Mix: movie RMS ~6400 + music ~7000, 0.2 % clipped.
 - Story movies through the menu path (port/movies4/all, story, story2): 45 of 53 ok (A01MP05 clips ~0.1 % against the
   title music, below the threshold); bad: P04MP05 (stops, below), SEMO08 (drift, below); not reached (behind P04MP05 in
-  their batch): P06MP01, SATINTRO, SEMO01-04 (SEMO01 is ok in the new-game runs). BONUS movies were verified by
+  their batch): P06MP01, SATINTRO, SEMO01-04, all ok since (port/movies6/rechecks). BONUS movies were verified by
   agent/movies2.
 
+## A01MP02 (captain) buzz: refused audio of the previous movie (fixed 2026-10-16, agent/movies6)
+- The user heard the captain movie as a loud buzz after playing the ship from a new game; a level warp straight to it was
+  clean. In 16:9 the game plays the `.PSW` files (A01MP02.PSW, A01MP05.PSW: same PCM bytes as the `.PSS`, different packet
+  boundaries). `tools/movie_align.py` finds the movie in a `GOW_AUDIO_RAW` recording and the byte offset of its PCM
+  against the 512-byte L / 512-byte R interleave: the user's recording (play8) and a menu run of A01MP05 then A01MP02
+  (`tools/movies.py --only A01MP05,A01MP02`, port/movies6/base) both measure offset 676 at correlation 1.0000 from the
+  first second on, so every core-input block mixed 174 samples of one channel with 82 of the other.
+- Cause: a stream callback that refuses an audio packet (the game's ring is full) keeps it in the stub's queue, to be
+  handed over first on the next demux (see "Movie audio"). God of War opens every movie on the same sceMpeg (0x304DC8),
+  never calls `sceMpegDelete`, and a movie ends at its video's sequence end, often with the last audio packets still
+  refused. A01MP05.PSW ends with its last 5 audio packets (17756 bytes, 348 mod 1024) refused; they went into
+  A01MP02's ring first (the callback even kept 40 of their bytes as A01MP02's stream header and put A01MP02's own header
+  into the PCM). 348 extra bytes = offset 676. With the `.PSS` packets the tail sums differ, so the bug depended on the
+  aspect ratio and on how the previous movie ended.
+- Fix (MPEG.cpp, runtime 664d93e): the refused-packet queue belongs to the stream being demuxed, like the rest of the game's read buffer
+  on the PS2; it is dropped whenever the sceMpeg starts a new stream (`sceMpegCreate` with a fresh state,
+  `sceMpegInit`, `sceMpegDelete`, a new CD stream, a fresh state in the demuxer). `GOW_MPEG_DIAG` logs
+  `[MPEG:pending] new stream ... N refused audio packets of the old one dropped`.
+- Check (port/movies6): A01MP05 then A01MP02 in one session logs `5 refused audio packets of the old one dropped` and
+  measures offset 0 at correlation 1.0000 over the whole movie (before: 676); P06MP01, SATINTRO, SEMO01-04 ok.
+  Gate port/movies6/gate/20261016_102015: zones 0-4 60 fps, speed 1.00-1.01; savetest ok (port/movies6/savetest).
+
 ## Open
-- **A01MP02 broken sound, cause located (2026-10-13 user session port/usertest1/play8.log, raw mix
-  `user_movie_raw2.pcm` in the runner dir):** reached by playing the ship normally from a new game (via the warp it is
-  clean). The engine mix during the movie has exactly the track's energy per second but is the track with L/R swapped
-  and shifted by +123 samples (best local lag constant over the whole movie, corr 0.8-0.9, never 1.0): the PCM reached
-  the core input misaligned against the 0x200-byte L/R interleave, so every 256-sample block mixes the two channels
-  (a 187 Hz channel flip = the buzz). Output stage clean (rate <= 1.009, nothing dropped). 40 `[MPEG:refused]` audio
-  packets in that session (the EE audio ring full): suspect the refused-packet re-delivery or a partial accept moving
-  the byte position by a non-block amount. Next: log bytes accepted per packet vs re-sent, fix so the stream stays
-  block-aligned. ON STANDBY (user: Switch test port first).
-- **A01MP02 in game (the captain movie): our mix is exact; the breakage is not reproduced in the engine.**
-  - Reached on the real path with the level warp: `GOW_WARP=ATHN01D` lands next to the captain, and the level
-    script (`CoweringGuy` group in ATHN01D.WAD) loads `a01MP02` about 27 s later.
-  - With the user's order (new game, A01MP05 from its ship trigger, then the warp): the run shows the same 20
-    `[dma] chain tag with SPR flag` lines at the movie start as the user's logs, so the state matches.
-  - In both runs the engine's raw mix (`GOW_AUDIO_RAW`) during the movie equals the movie's own PSS track at gain
-    1.000, with a residual of 1-2 RMS. Nothing else plays under it; the music event `MusicGrpAthC4Start`
-    (`SND_M_ATH1C4_2`) does not sound during the movie.
-  - The output path (`drainOutput`, rate adaptation, recorded with `GOW_AUDIO_PCM`) adds no damage: fewer large
-    jumps than the mix, rate <= 1.018, nothing dropped.
-  - The track itself is mastered hot: peaks at its limiter ceiling (32015-32030) and ~140 jumps > 8000 per second.
-    PCSX2 mixes the core input the same way (`ApplyVolume(ReadInput(), InpVol)`, `>> 15`, BVOL 0x7FFE ~ 1.0), so the
-    PS2 plays it at this level too.
-  - The user's loopback recording matches the track only at correlation ~0.6 after fitting its 0.7-1.2 % faster
-    playback (rate adaptation). It holds more than our mix; a loopback recording also includes every other program
-    on that output.
-  - 989snd never writes sweep-mode volumes (0 of 71k voice volume writes in a new-game run), and the movie's MMIX is
-    0x0FCF (voices, input and core 0 all on): the unmixed volume sweeps and the ignored MMIX voice/external gates are
-    not involved.
-  - Next: capture the engine's own mix in the user's session (`GOW_AUDIO_RAW=<file>` and `GOW_AUDIO_STATS=1` in
-    play.cmd). It tells whether the breakage is in the engine (then visible in that file) or after it.
 - **P04MP05 stopped after 180-210 pictures: FIXED (game ring logic), it now plays 720 of 743.**
   - The movie player's video ring (player struct `*0x304F20`: +0xE8 base, +0xEC size 0x40000, +0xF0 write pointer,
     +0xF4/+0xF8 the block sent to the IPU) treats a write pointer at the ring's end as data. The demuxed video of
@@ -212,8 +205,9 @@ adaptation, so a movie can be compared with its source track sample by sample.
     callback's 8 KB threshold).
   - Next: what the PS2's SMPD stream returns for the short tail read / the read past the end (negative, or a full
     block), compared with our native SMPD service.
-- SEMO08 measured 4.4 s A/V drift (214.6 s of audio for 210.2 s of pictures) in a batch that shared the machine with
-  other runs; to recheck alone.
+- SEMO08: 4.45 s A/V drift, also alone on an idle machine (2026-10-16, port/movies6/semo08): 214.7 s of audio for
+  210.2 s of pictures (6330 pictures, 29.35 per wall second). The track itself holds 211.5 s of PCM (SEMO08.PSS and
+  .PSW), so more sound is produced than the movie has; not investigated yet.
 - In some in-game runs (port/movies4/newgame/20261013_171528) the GS stalled for seconds while A01MP05 waited
   preloaded (host 11 fps): the sound starved (up to 3.8 s) and the backlog was then cut. Not reproduced in a run without
   other runners on the machine (port/movies4/gsstats); the same fight with movies skipped did not stall.
