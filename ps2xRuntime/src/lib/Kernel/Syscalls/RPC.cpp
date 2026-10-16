@@ -544,6 +544,19 @@ namespace ps2_syscalls
             request.endParameter = endParameter;
 
             iopResult = PS2IopTransport::handleRpc(runtime, rdram, ctx, request);
+            // GOW_FRAMECLOCK_TRACE=1 (debug): every RPC call with the VBlank count and T0 (docs/performance.md, menu clock)
+            static const bool frameClockTrace = std::getenv("GOW_FRAMECLOCK_TRACE") != nullptr;
+            if (frameClockTrace)
+            {
+                uint32_t command = 0u;
+                if (sendBuf != 0u && sendSize >= 8u)
+                    std::memcpy(&command, getMemPtr(rdram, sendBuf + 4u), sizeof(command));
+                std::fprintf(stderr, "[fclk] rpc sid=%x vs=%llu t0=%u cmd=%u mode=%u done=%d/%d end=%x sema=%u thread=%d ra=%x\n",
+                             sid, static_cast<unsigned long long>(runtime->memory().gs().vsyncTick.load(std::memory_order_acquire)),
+                             runtime->memory().eeTimerLoad(0x10000000u), command, mode,
+                             iopResult.signalNowaitCompletion ? 1 : 0, iopResult.signalCompletion ? 1 : 0, endFunction,
+                             completionSemaphore, runtime->eeScheduler().currentThreadId(), getRegU32(ctx, 31));
+            }
 
             if (iopResult.signalNowaitCompletion &&
                 (mode & kSifRpcModeNowait) != 0u)
