@@ -909,3 +909,10 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   memory, pooled DMA chain buffers) into gow-usa-kl and agent/switch. ATHN01D 50 -> 59-60 fps on PC; gate
   port/athn01d/gate/20261016_153034 zones 0-4 58.7-60, savetest ok (port/athn01d/STATE.md). Main PC runner not
   rebuilt yet. Next PC limits: VU1 dispatch loop ~18 %, GS stage ~70 % (vertexKick), EE spin a full core.
+- 10-16 ~17:00: merged agent/semo08 (ext d6de6e6: late MPEG pictures keep the PTS schedule; SEMO08 drift 4.45 ->
+  0.20 s) into gow-usa-kl and agent/switch; gate port/semo08/gate/20261016_163453 zones 0-4 60 fps speed 1.00,
+  savetest ok, port/semo08/recheck SEMO10 0.21 / A01MP02 0.03 / SEMO08 0.20 ok. Main PC runner not rebuilt yet
+  (athn01d + semo08 pending in out/build-kl).
+- 10-16 ~17:05: NSP v3 (ext agent/switch 51480d4 = speed work + athn01d + gsq_wait_ms counter; not the semo08 fix):
+  Citron 16.3-16.6 guest fps; new counter: GS frontend works 0.65 s/5 s and waits 6.1 s/5 s on the GL thread, so the
+  GL thread is the limit in Citron (emulated GPU: not representative). Waiting for the user's console log.
