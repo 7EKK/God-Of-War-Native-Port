@@ -79,7 +79,3 @@ a muted recording (`GOW_AUDIO_PCM`) never uses the chosen device.
   clipping checks miss it. `tools/movie_align.py <movie> <GOW_AUDIO_RAW file> [--ext PSW]` measures the byte offset of
   the PCM against the core input's 512-byte L/R blocks (0 = correct; A01MP02 after A01MP05 measured 676 until
   2026-10-16, docs/fmv.md).
-- A movie track mixed against the wrong L/R interleave sounds like a buzz but has the track's energy, so level and
-  clipping checks miss it. `tools/movie_align.py <movie> <GOW_AUDIO_RAW file> [--ext PSW]` measures the byte offset of
-  the PCM against the core input's 512-byte L/R blocks (0 = correct; A01MP02 after A01MP05 measured 676 until
-  2026-10-16, docs/fmv.md).
