@@ -177,7 +177,12 @@ namespace ps2recomp
         m_ss << fmt::format("{}ctx->pc = 0x{:X}u;\n", indent, target);
         if (target <= sourcePc && !isCallLikeEdge())
         {
-            m_ss << fmt::format("{}if (runtime->eeCheckpointDue()) {{\n", indent);
+            // GOW-Port: a backward edge charges the loop body's straight-line length (target through the branch and
+            // its delay slot, about one cycle per instruction), at most the former flat 32 cycles. A flat 32 charged
+            // short loops several times their cost: libmc2's 8-instruction byte copy of a 0x2080-byte card command
+            // took 0.9 ms of guest time instead of ~0.2, and the load menu's frame clock jittered (docs/performance.md).
+            const uint32_t loopInstructions = std::min<uint32_t>(32u, (sourcePc - target) / 4u + 2u);
+            m_ss << fmt::format("{}if (runtime->eeCheckpointDue({}u)) {{\n", indent, loopInstructions);
             m_ss << fmt::format("{}    return;\n", indent);
             m_ss << fmt::format("{}}}\n", indent);
         }
