@@ -648,6 +648,36 @@ namespace ps2_stubs
         constexpr uint32_t kMpegPictureWaitType = 1u;
         MpegStubState g_mpeg_stub_state;
 
+        // Audio packets a stream callback refused (dispatchStreamCallbacks), per sceMpeg, in order. They belong to the
+        // stream being demuxed: like the rest of the game's read buffer on the PS2, they are dropped when the sceMpeg starts
+        // a new stream. God of War opens every movie on the same sceMpeg (0x304DC8) and a movie ends at its video's
+        // sequence end, often with the last audio packets still refused; handed to the next movie first, they shifted its
+        // PCM against the 512-byte L/R interleave (A01MP02.PSW after A01MP05.PSW: 5 packets, 17756 bytes = L/R mixed).
+        struct PendingAudioPacket
+        {
+            MpegStreamCallbackEvent event;
+            std::vector<uint8_t> bytes;
+        };
+        std::map<uint32_t, std::deque<PendingAudioPacket>> g_pendingAudio; // demuxing thread only
+
+        void dropPendingAudio(uint32_t mpegAddr)
+        {
+            static const bool s_diag = std::getenv("GOW_MPEG_DIAG") != nullptr;
+            const auto it = g_pendingAudio.find(mpegAddr);
+            if (it == g_pendingAudio.end())
+                return;
+            if (s_diag && !it->second.empty())
+                std::fprintf(stderr, "[MPEG:pending] new stream on mpeg=0x%x: %zu refused audio packets of the old one dropped\n", mpegAddr,
+                             it->second.size());
+            g_pendingAudio.erase(it);
+        }
+
+        void dropAllPendingAudio()
+        {
+            while (!g_pendingAudio.empty())
+                dropPendingAudio(g_pendingAudio.begin()->first);
+        }
+
         // TODO this resolution should follow runtime resolution
         constexpr uint32_t kStubMovieWidth = 320u;
         constexpr uint32_t kStubMovieHeight = 240u;
@@ -1570,6 +1600,7 @@ namespace ps2_stubs
             if (playback.sawInput && playback.cdStreamGeneration != g_mpeg_stub_state.cdStreamGeneration)
             {
                 playback = makeFreshPlaybackState();
+                dropPendingAudio(mpegAddr);
             }
 
             if (playback.streamEnded)
@@ -1581,6 +1612,7 @@ namespace ps2_stubs
                 }
 
                 playback = makeFreshPlaybackState();
+                dropPendingAudio(mpegAddr);
             }
 
             if (!playback.sawInput)
@@ -1795,12 +1827,7 @@ namespace ps2_stubs
         // is no longer complete in guest memory when the callback runs. The callback returns 0 when the game's audio ring is full (God of War 0x18A8F8); libmpeg then stops demuxing at
         // that packet and the game hands the rest in again after it drained the ring. This stub demuxes whole chunks
         // at once, so refused packets wait here, in order, and go first on the next demux call.
-        struct PendingAudioPacket
-        {
-            MpegStreamCallbackEvent event;
-            std::vector<uint8_t> bytes;
-        };
-        std::map<uint32_t, std::deque<PendingAudioPacket>> g_pendingAudio; // per sceMpeg; demuxing thread only
+        // (the queue, g_pendingAudio, is declared with the stub state: a new stream drops it)
 
         uint32_t g_audioQueued = 0u, g_audioTaken = 0u, g_audioRefused = 0u; // GOW_MPEG_DIAG counters
 
@@ -2016,6 +2043,7 @@ namespace ps2_stubs
         {
             playback = makeFreshPlaybackStatePreservingConfig(playback);
         }
+        dropAllPendingAudio();
         PS2_IF_AGRESSIVE_LOGS({
             std::cerr << "[MPEG:CdStreamStart] generation=" << g_mpeg_stub_state.cdStreamGeneration
                       << " reopened=" << g_mpeg_stub_state.playbackByMpeg.size() << std::endl;
@@ -2232,7 +2260,10 @@ namespace ps2_stubs
                                           existing.picturesServed == 0u &&
                                           existing.cdStreamGeneration == g_mpeg_stub_state.cdStreamGeneration;
             if (!keepPendingInput)
+            {
                 existing = makeFreshPlaybackState();
+                dropPendingAudio(param_1);
+            }
             // libmpeg's sceMpegCreate initialises the sceMpeg, callback table included. God of War registers its
             // stream callbacks for the first demux before Create and again after it; keeping both delivered every
             // audio packet twice into its ring (repeated, byte-shifted PCM: the movie sound was noise).
@@ -2309,7 +2340,7 @@ namespace ps2_stubs
             g_mpeg_stub_state.callbacksByMpeg.erase(mpegAddr);
             g_mpeg_stub_state.playbackByMpeg.erase(mpegAddr);
         }
-        g_pendingAudio.erase(mpegAddr);
+        dropPendingAudio(mpegAddr);
         runtime->eeScheduler().completeExternalWait(kMpegPictureWaitType, mpegAddr, KE_WAIT_DELETE);
         setReturnU32(ctx, 0u);
     }
@@ -2859,6 +2890,7 @@ namespace ps2_stubs
         const bool cdStreamEofPending = g_mpeg_stub_state.cdStreamEofPending;
         const bool currentCdStreamEofSeen = g_mpeg_stub_state.currentCdStreamEofSeen;
         resetMpegStubStateUnlocked();
+        dropAllPendingAudio();
         g_mpeg_stub_state.initialized = true;
         g_mpeg_stub_state.cdStreamGeneration = cdStreamGeneration;
         g_mpeg_stub_state.cdStreamBytesProduced = cdStreamBytesProduced;
