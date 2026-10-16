@@ -843,6 +843,9 @@ namespace ps2_stubs
             return std::max(kPictureClockOne, (base * fields + 1u) / 2u);
         }
 
+        // a picture this late (30 VSyncs, 0.5 s: a stall, not decoding jitter) moves the PTS clock to now
+        constexpr uint64_t kPresentationResyncQ32 = 30ull << 32u;
+
         constexpr uint64_t kMpegPtsWrap = 1ull << 33u;
         constexpr uint64_t kMpegPtsHalfWrap = 1ull << 32u;
 
@@ -2692,8 +2695,22 @@ namespace ps2_stubs
                 const MpegDecodedFrame &nextFrame = playback.decodedFrames.front();
                 const uint64_t frameIntervalQ32 = decodedFrameIntervalQ32(playback, nextFrame);
                 uint64_t presentationTargetQ32 = presentationTickForFrame(playback, nextFrame, currentTickQ32);
+                // GOW_MPEG_PACE=1: every picture's PTS step and its presentation target against the VSync clock
+                static const bool s_paceDiag = std::getenv("GOW_MPEG_PACE") != nullptr;
+                if (s_paceDiag)
+                {
+                    static int64_t s_prevPts = -1;
+                    std::fprintf(stderr, "[MPEG:pace] pic=%u pts=%lld dpts=%lld now=%.2f target=%.2f queued=%zu\n", playback.picturesServed,
+                                 static_cast<long long>(nextFrame.pts90k), static_cast<long long>(nextFrame.pts90k - s_prevPts),
+                                 currentTickQ32 / 4294967296.0, presentationTargetQ32 / 4294967296.0, playback.decodedFrames.size());
+                    s_prevPts = nextFrame.pts90k;
+                }
 
-                if (currentTickQ32 > presentationTargetQ32 && currentTickQ32 - presentationTargetQ32 >= frameIntervalQ32)
+                // A late picture is shown at once. Only a long stall (a load) moves the PTS clock: a picture a few
+                // VSyncs late (the first picture of a GOP, whose data arrives just in time, 2-4 VSyncs late in SEMO08)
+                // keeps the schedule, so the next pictures catch up; moving the clock each time added the delays up
+                // (SEMO08: 125 GOPs, 4.7 s behind its sound, docs/fmv.md).
+                if (currentTickQ32 > presentationTargetQ32 && currentTickQ32 - presentationTargetQ32 >= kPresentationResyncQ32)
                 {
                     const uint64_t correction = currentTickQ32 - presentationTargetQ32;
                     presentationTargetQ32 = currentTickQ32;
@@ -2702,6 +2719,10 @@ namespace ps2_stubs
                         playback.ptsPresentationBaseTickQ32 += correction;
                     }
                     playback.nextPictureTickQ32 = currentTickQ32;
+                }
+                else if (currentTickQ32 > presentationTargetQ32)
+                {
+                    presentationTargetQ32 = currentTickQ32;
                 }
 
                 if (currentTickQ32 < presentationTargetQ32)

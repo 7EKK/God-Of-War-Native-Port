@@ -331,6 +331,21 @@ namespace ps2x::iop::detail
         if (!s.active)
             return;
         const uint32_t block = s.position & ~0x3FFu, index = (s.position & 0x3FFu) >> 1u; // sample 0..255 in the block
+        // GOW_SND_STALE=1: a 1 KB block played again unchanged one lap later = the driver did not refill the ring in time
+        // (an underrun: a whole stale lap is heard), with the time since the driver last polled the position
+        static const bool staleDiag = std::getenv("GOW_SND_STALE") != nullptr;
+        if (staleDiag && index == 0u)
+        {
+            uint32_t h = 2166136261u, nz = 0u;
+            for (uint32_t i = 0; i < 0x400u; ++i) { h = (h ^ s.base[block + i]) * 16777619u; nz |= s.base[block + i]; }
+            uint32_t &prev = m_blockHash[(block >> 10) & 63u];
+            static unsigned count = 0;
+            if (nz != 0u && prev == h)
+                std::fprintf(stderr, "[snd-stale] #%u block=%u cycle=%llu since_poll_ms=%.2f max_advance_ms=%.2f\n", ++count, block >> 10,
+                             static_cast<unsigned long long>(m_lastCycle), (m_lastCycle - m_lastPollCycle) / (CyclesPerSample * 48.0),
+                             m_maxAdvance / (CyclesPerSample * 48.0)), m_maxAdvance = 0;
+            prev = h;
+        }
         int16_t l, r;
         std::memcpy(&l, s.base + block + index * 2u, 2u);
         std::memcpy(&r, s.base + block + 0x200u + index * 2u, 2u);
@@ -622,6 +637,7 @@ namespace ps2x::iop::detail
         if (iopCycle <= m_lastCycle)
             return;
         const uint64_t samples = (iopCycle - m_lastCycle) / CyclesPerSample;
+        m_maxAdvance = std::max<uint64_t>(m_maxAdvance, iopCycle - m_lastCycle);
         for (uint64_t i = 0; i < samples; ++i)
             step();
         m_lastCycle += samples * CyclesPerSample;

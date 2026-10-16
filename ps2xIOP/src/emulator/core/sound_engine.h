@@ -54,7 +54,7 @@ namespace ps2x::iop::detail
         };
         void startStream(uint32_t core, const uint8_t *ring, uint32_t size, bool loop);
         void stopStream(uint32_t core);
-        [[nodiscard]] uint32_t streamPosition(uint32_t core) const { return m_stream[core & 1u].position; }
+        [[nodiscard]] uint32_t streamPosition(uint32_t core) const { m_lastPollCycle = m_lastCycle; return m_stream[core & 1u].position; }
         [[nodiscard]] bool takeStreamHalf(uint32_t core) noexcept; // a half was consumed since the last call
 
         // time: one stereo sample every CyclesPerSample IOP cycles
@@ -113,5 +113,10 @@ namespace ps2x::iop::detail
         mutable std::mutex m_outputMutex;
         double m_resamplePhase = 0.0; // drainOutput: fractional read position when playing back faster
         uint64_t m_lastCycle = 0;
+        // GOW_SND_STALE (streamSample): when the stream position was last polled, the largest advanceTo step, and a hash of
+        // each 1 KB block of the ring as last played
+        mutable uint64_t m_lastPollCycle = 0;
+        uint64_t m_maxAdvance = 0;
+        std::array<uint32_t, 64> m_blockHash{};
     };
 }
