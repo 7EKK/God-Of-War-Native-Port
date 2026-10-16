@@ -77,6 +77,20 @@ void GifArbiter::submit(GifPathId pathId, const uint8_t *data, uint32_t sizeByte
     m_queue.push_back(std::move(pkt));
 }
 
+void GifArbiter::submitAndDrain(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool path2DirectHl)
+{
+    if (!m_queue.empty() || !data || sizeBytes < 16 || !m_processFn || pathId < GifPathId::Path1 || pathId > GifPathId::Path3)
+    {
+        submit(pathId, data, sizeBytes, path2DirectHl);
+        drain();
+        return;
+    }
+    if (pathId == GifPathId::Path3)
+        trackPath3Packet(data, sizeBytes); // the PATH3 tag cursor follows every packet
+    m_processFn(pathId, data, sizeBytes);
+    drain(); // packets the callback submitted meanwhile
+}
+
 void GifArbiter::drain()
 {
     if (!m_processFn)

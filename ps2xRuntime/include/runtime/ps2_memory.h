@@ -364,6 +364,8 @@ public:
     void flushMaskedPath3Packets(bool drainImmediately = true);
 
     void submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool drainImmediately = true, bool path2DirectHl = false);
+    // PS2X_GS_WORKER_TRACE=<s>: one "[gsw-trace] <host us> <what> <value>" line (kick/job-start/job-done/gs-irq)
+    static void gsWorkerTrace(const char *what, size_t value);
     void processGIFPacket(uint32_t srcPhysAddr, uint32_t qwCount);
     void processGIFPacket(const uint8_t *data, uint32_t sizeBytes);
     void processVIF0Data(uint32_t srcPhysAddr, uint32_t sizeBytes);

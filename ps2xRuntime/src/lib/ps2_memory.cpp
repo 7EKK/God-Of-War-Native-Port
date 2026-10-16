@@ -15,7 +15,36 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <mutex>
 static const auto g_gowProcStart = std::chrono::steady_clock::now(); // GOW-Port: process start for diagnostics
+
+// GOW-Port: DMA transfer buffers are reused. A frame's VIF1 chain is ~3 MB: gathered into a fresh vector it reallocated
+// ~20 times and touched new pages each time (page faults on the EE thread), and the worker freed it again.
+namespace
+{
+    std::mutex g_dmaBufferMutex;
+    std::vector<std::vector<uint8_t>> g_dmaBuffers;
+
+    std::vector<uint8_t> takeDmaBuffer()
+    {
+        std::lock_guard<std::mutex> lock(g_dmaBufferMutex);
+        if (g_dmaBuffers.empty())
+            return {};
+        std::vector<uint8_t> buffer = std::move(g_dmaBuffers.back());
+        g_dmaBuffers.pop_back();
+        return buffer;
+    }
+
+    void returnDmaBuffer(std::vector<uint8_t> &&buffer)
+    {
+        if (buffer.capacity() == 0u)
+            return;
+        buffer.clear(); // keeps the capacity
+        std::lock_guard<std::mutex> lock(g_dmaBufferMutex);
+        if (g_dmaBuffers.size() < 4u)
+            g_dmaBuffers.push_back(std::move(buffer));
+    }
+}
 
 namespace
 {
@@ -1759,7 +1788,6 @@ bool PS2Memory::processScratchpadChain(uint32_t channelBase, uint32_t chcr)
     return true;
 }
 
-static void gsWorkerTrace(const char *what, size_t bytes);
 
 // GOW-Port: native DMA data path (docs/native-port.md, step 2). Bytes of guest memory (RAM or scratchpad) in order, with
 // the RAM wrap of the former transfer loops.
@@ -1790,7 +1818,7 @@ void PS2Memory::appendGuestBytes(uint32_t address, uint32_t bytes, std::vector<u
 
 void PS2Memory::sendDma(DmaPath path, uint32_t address, uint32_t qwc)
 {
-    std::vector<uint8_t> bytes;
+    std::vector<uint8_t> bytes = takeDmaBuffer();
     appendGuestBytes(address, qwc * 16u, bytes);
     deliverDma(path, std::move(bytes));
 }
@@ -1806,7 +1834,7 @@ void PS2Memory::sendDmaChain(DmaPath path, uint32_t tagAddress)
     const bool transferTags = path != DmaPath::Gif && config != m_ioRegisters.end() && (config->second & 0x40u) != 0u;
     uint32_t returnStack[2] = {};
     uint32_t depth = 0u;
-    std::vector<uint8_t> bytes;
+    std::vector<uint8_t> bytes = takeDmaBuffer();
     int tags = 0;
     for (; tags < kMaxTags; ++tags)
     {
@@ -1904,12 +1932,16 @@ void PS2Memory::sendDmaChain(DmaPath path, uint32_t tagAddress)
 void PS2Memory::deliverDma(DmaPath path, std::vector<uint8_t> &&bytes)
 {
     if (bytes.empty())
+    {
+        returnDmaBuffer(std::move(bytes));
         return;
+    }
     m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
     const uint32_t size = static_cast<uint32_t>(bytes.size());
     if (path == DmaPath::Vif0)
     {
         processVIF0Data(bytes.data(), size);
+        returnDmaBuffer(std::move(bytes));
         return;
     }
     if (m_gsWorkerEnabled)
@@ -1937,10 +1969,11 @@ void PS2Memory::deliverDma(DmaPath path, std::vector<uint8_t> &&bytes)
     }
     if (m_gifArbiter)
         m_gifArbiter->drain();
+    returnDmaBuffer(std::move(bytes));
 }
 
 // GOW-Port: PS2X_GS_WORKER_TRACE (see PS2Runtime::dispatchGuestBranch): worker kick/start/done times.
-static void gsWorkerTrace(const char *what, size_t bytes)
+void PS2Memory::gsWorkerTrace(const char *what, size_t bytes)
 {
     static const double traceFrom = [] { const char *v = std::getenv("PS2X_GS_WORKER_TRACE"); return v ? std::atof(v) : -1.0; }();
     if (traceFrom < 0.0)
@@ -2006,6 +2039,8 @@ void PS2Memory::gsWorkerLoop()
         }
         if (m_gsWorkerWake && (gs_regs.csr.load(std::memory_order_acquire) & 0x3u) != 0u)
             m_gsWorkerWake();
+        for (GsWorkerItem &item : job.items)
+            returnDmaBuffer(std::move(item.data));
     }
 }
 
@@ -2170,13 +2205,12 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t 
         flushMaskedPath3Packets(false);
     }
 
-    if (m_gifArbiter)
+    if (m_gifArbiter && drainImmediately)
+        m_gifArbiter->submitAndDrain(pathId, data, sizeBytes, path2DirectHl);
+    else if (m_gifArbiter)
         m_gifArbiter->submit(pathId, data, sizeBytes, path2DirectHl);
     else if (m_gifPacketCallback)
         m_gifPacketCallback(data, sizeBytes);
-
-    if (m_gifArbiter && drainImmediately)
-        m_gifArbiter->drain();
 }
 
 void PS2Memory::processGIFPacket(uint32_t srcPhysAddr, uint32_t qwCount)

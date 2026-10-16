@@ -715,7 +715,10 @@ bool PS2Runtime::syncCoreSubsystems()
                             [this]
                             {
                                 if (m_eeScheduler && (m_memory.gs().csr.load(std::memory_order_acquire) & 0x3u) != 0u)
+                                {
+                                    PS2Memory::gsWorkerTrace("gs-irq", m_memory.gs().csr.load(std::memory_order_relaxed) & 0x3u);
                                     m_eeScheduler->postEvent(EeEvent{EeEventType::ExternalWake, 0xFFFFFFFFu, ~0ull});
+                                }
                             });
     m_gifArbiter.setProcessPathPacketFn([this](GifPathId path, const uint8_t *data, uint32_t size)
                                     {

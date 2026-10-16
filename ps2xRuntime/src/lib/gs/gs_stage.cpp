@@ -2,7 +2,6 @@
 
 #include <condition_variable>
 #include <cstdio>
-#include <deque>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -25,7 +24,7 @@ namespace
         std::condition_variable work;   // stage waits for packets
         std::condition_variable space;  // producer waits for room
         std::condition_variable idle;   // waitIdle
-        std::deque<Packet> queue;
+        std::vector<Packet> queue; // a vector keeps its capacity across swaps (MSVC deque allocates per Packet)
         std::vector<std::vector<uint8_t>> spare; // recycled buffers (avoid an allocation per packet)
         size_t queuedBytes = 0;
         bool busy = false;
@@ -45,7 +44,7 @@ namespace
     void loop()
     {
         Stage &s = stage();
-        std::deque<Packet> batch;
+        std::vector<Packet> batch;
         for (;;)
         {
             {

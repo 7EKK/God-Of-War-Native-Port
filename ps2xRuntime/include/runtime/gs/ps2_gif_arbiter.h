@@ -36,6 +36,9 @@ public:
     void reset() { m_queue.clear(); m_path3Input = {}; }
 
     void submit(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool path2DirectHl = false);
+    // submit + drain. With nothing queued the packet is the whole batch: it goes to the callback in place, without the
+    // queue's copy (every XGKICK takes this path).
+    void submitAndDrain(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool path2DirectHl = false);
 
     void drain();
     bool empty() const { return m_queue.empty(); }
