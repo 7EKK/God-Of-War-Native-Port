@@ -28,3 +28,4 @@ port/switch/nsp/out/
 port/switch/nsp/exefs/
 bruh keys/
 *.keys
+tools/switch_throttle/*.exe

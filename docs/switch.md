@@ -159,9 +159,26 @@ The PAKs are 4 GB each: the SD card must be exFAT (FAT32 has a 4 GB file limit).
   1785 MHz (Nintendo's boost clock; `GOW_CPU_MHZ`, re-applied every 2 s, restored at exit); bilinear presentation
   and the speed lines (`GOW_PERF_DIAG`, `GOW_DELTA_DIAG`, `GOW_GS_HW_STATS`) are on by default on the Switch.
 
+## Switch-speed test on PC (tools/switch_throttle)
+Citron has no CPU-speed limit (its JIT runs at host speed), so neither it nor the PC build shows how slow the
+console is. `tools/switch_throttle/switch_throttle.exe` runs a program at roughly the CPU power a Switch game gets:
+- 3 cores (affinity to logical CPUs 0, 2, 4: one per physical core, the SMT siblings stay free); a game gets 3 of
+  the 4 Cortex-A57 cores.
+- every thread suspended and resumed in a 4 ms period, running `--ratio` of it (default 0.15 = 600 us of 4000),
+  so all threads slow down by the same factor. 0.15 = Cortex-A57 at 1785 MHz vs one Ryzen 9 5900X core, from
+  public single-core benchmarks (Tegra X1 ~250 vs 5900X ~1650 in Geekbench 5): an estimate, not a measurement.
+- the GPU is not limited (the Switch's Maxwell GPU is far weaker than the PC's), and the PC build runs x86 SSE
+  code where the Switch runs sse2neon, so the console can only be slower still.
+Use: `bash tools/switch_throttle/build.sh` once, then `SWITCH_THROTTLE=1 tools/perf_run.sh <name> <s>`
+(`SWITCH_THROTTLE_ARGS="--ratio 0.2 --cores 3"` to change it), or `switch_throttle.exe [options] -- <command>` /
+`--pid N` for any process (Citron too, though its JIT adds its own cost on top).
+First result (2026-10-16, PC main runner, user's save, menu → load): 43-45 guest fps unthrottled, **16.5-17 throttled**,
+the same as Citron (16.5) and the user's "unplayable" on the console; the load did not reach gameplay in 240 s.
+
 ## Open issues (priority)
 1. Test on the real Switch: does the picture render (Citron cannot show it), speed, sound.
-2. Speed: re-measure on the console with the changes above (the log carries the speed lines now).
+2. Speed: unplayable on the console (user 2026-10-16, NSP v3). Profile the throttled PC run (above) to find the
+   threads that limit it, and read the console log (tools/switch_pull_log.ps1) for the real numbers.
 3. The bicubic presentation shader crashes Citron (fine on PC); the Switch defaults to `GOW_SCALER=bilinear`.
 4. VU1 compiled code builds without SIMD on ARM (`VU1C_SIMD` is x86-only in ps2_vu1_compiled.inl); a NEON path would
    help speed.

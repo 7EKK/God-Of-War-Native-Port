@@ -916,3 +916,7 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
 - 10-16 ~17:05: NSP v3 (ext agent/switch 51480d4 = speed work + athn01d + gsq_wait_ms counter; not the semo08 fix):
   Citron 16.3-16.6 guest fps; new counter: GS frontend works 0.65 s/5 s and waits 6.1 s/5 s on the GL thread, so the
   GL thread is the limit in Citron (emulated GPU: not representative). Waiting for the user's console log.
+- 10-16 ~23:30: user tested NSP v3 on the console: unplayable. Citron cannot be speed-limited, so new
+  tools/switch_throttle (docs/switch.md "Switch-speed test on PC"): runs the PC build on 3 cores at ~0.15 speed per
+  core. PC main runner 43-45 -> 16.5-17 guest fps throttled (= Citron 16.5). Next: profile the throttled run
+  (muestrear) to see which thread limits it; console log still not pulled.

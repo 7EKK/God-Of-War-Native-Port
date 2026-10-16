@@ -1,7 +1,9 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Perf run of the USA build: loads the user's save (first slot) with the scripted pad, measures with
 # GOW_PERF_DIAG and optionally samples the process with muestrear (needs a /Zi build).
 # usage: tools/perf_run.sh <name> <seconds> [profile_at_s profile_len_s] [ENV=VALUE ...]
+# SWITCH_THROTTLE=1 runs it at Switch CPU power (tools/switch_throttle, docs/switch.md "Switch-speed test on PC");
+# SWITCH_THROTTLE_ARGS overrides its options (default --ratio 0.15 --cores 3).
 # log -> port/<name>.log, profile -> port/<name>.prof, captures -> port/<name>/*.png
 set -e
 ROOT="C:/Users/lovas/Claude/God Of War"
@@ -11,12 +13,14 @@ prof_at=""; prof_len=""
 case "$1" in [0-9]*) prof_at=$1; prof_len=$2; shift 2;; esac
 
 cd "$EXE_DIR"
+wrap=()
+[ -n "${SWITCH_THROTTLE:-}" ] && wrap=("$ROOT/tools/switch_throttle/switch_throttle.exe" ${SWITCH_THROTTLE_ARGS:---ratio 0.15 --cores 3} --)
 rm -f gow_pad_test_*.ppm
 cp "$ROOT/ref/saves/Mcd002.ps2" "$ROOT/disc-usa/Mcd001.ps2"  # fresh copy of the user's card each run
 env GOW_PERF_DIAG=1 GOW_PERF_FRAME_PC=0x001837B8 GOW_FAST_BOOT=1 GOW_PAD_TEST=1 GOW_SKIP_FMV=1 \
     GOW_ISO="$ROOT/iso-usa/God of War (USA).iso" GOW_MC0="$ROOT/disc-usa/Mcd001.ps2" \
     GOW_PAD_GUION="${GOW_PAD_GUION:-5:start,16:abajo,24:x,105:x,125:x,145:x,175:x,205:x}" "$@" \
-    ./ps2EntryRunner.exe "$ROOT/disc-usa/SCUS_973.99" > "$ROOT/port/$name.log" 2>&1 &
+    "${wrap[@]}" ./ps2EntryRunner.exe "$ROOT/disc-usa/SCUS_973.99" > "$ROOT/port/$name.log" 2>&1 &
 sleep 3
 pid=$(tasklist //FI "IMAGENAME eq ps2EntryRunner.exe" //FO CSV //NH | head -1 | cut -d, -f2 | tr -d '"')
 if [ -n "$prof_at" ]; then
