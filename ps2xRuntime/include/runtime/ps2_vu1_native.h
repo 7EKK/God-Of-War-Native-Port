@@ -100,6 +100,10 @@ void vu1nRegisterBlock(uint64_t key, VU1NativeFn fn, uint32_t pairs, const VU1Ta
 struct VU1Interpreter::NativeState
 {
     uint64_t generation = ~0ull;
+    // The micro memory the slots were set up from: when the code generation changes, only slots whose extent (block
+    // pairs plus the pair after it, which ends the extent scan) overlaps a changed pair are set up again.
+    uint8_t code[16384];
+    bool codeValid = false;
     // Exact issue cycles of a block from the pipeline state at its entry, so results and flags in flight from the previous
     // block (native or exact) stall and become visible exactly as in the exact engine. Pipeline lanes: VF reg*4+comp
     // (0-127), VI 128+reg, ACC 144+comp. While native blocks run, no per-lane state is kept: the recent blocks are
@@ -123,26 +127,29 @@ struct VU1Interpreter::NativeState
         uint32_t next = 0;
     };
     std::unordered_map<uint64_t, BlockTiming> timings;
-    // Per pc slot, what the dispatch loop touches for every block (one cache line).
+    // Per pc slot. The first cache line holds what the dispatch loop touches for every block; the entry-timing memo
+    // (only blocks that read entry flags use it) is in the second.
     struct alignas(64) Slot
     {
         VU1NativeFn fn = nullptr; // null: no native block at this pc
         const uint8_t *idle = nullptr;
         BlockTiming *bt = nullptr;
-        // Entry timing by predecessor (blocks that read entry flags): when the block before ran for maxLat cycles or more
-        // and nothing from the exact engine is still in flight, that block and its timing table alone decide the entry
-        // state; the timing found for it is reused.
-        const BlockTiming *memoPred = nullptr;
-        const uint8_t *memoCyc = nullptr;
-        uint32_t memoPredId = 0, memoId = 0;
+        const VU1TailDesc *tail = nullptr;
         uint16_t pairs = 0;
+        uint16_t idleEnd = 0; // idle[pairs - 1] + 1: the block's length in cycles with an idle pipeline
         bool known = false;
         bool readsEntryFlags = false;
         bool memoable = false;   // its entry timing does not depend on FDIV/EFU state
-        const VU1TailDesc *tail = nullptr;
         uint8_t scalarCount = 0; // FDIV / EFU operations it starts (kScalarMany: more than fit in `scalar`)
         struct Scalar { uint8_t pair, latency; bool fdiv; } scalar[2] = {};
+        // Entry timing by predecessor (blocks that read entry flags): when the block before ran for maxLat cycles or more
+        // and nothing from the exact engine is still in flight, that block and its timing table alone decide the entry
+        // state; the timing found for it is reused.
+        alignas(64) const BlockTiming *memoPred = nullptr;
+        const uint8_t *memoCyc = nullptr;
+        uint32_t memoPredId = 0, memoId = 0;
     };
+    static_assert(sizeof(Slot) == 128);
     static constexpr uint8_t kScalarMany = 0xFF;
     Slot slots[2048];
     // Native blocks run since native entry (or the last sync), newest last; histCount counts them all (the ring keeps the
@@ -165,7 +172,7 @@ struct VU1Interpreter::NativeState
     bool enabled = std::getenv("GOW_VU1_NATIVE_OFF") == nullptr;
     unsigned verifyLeft = std::getenv("GOW_VU1N_VERIFY") ? static_cast<unsigned>(std::atoi(std::getenv("GOW_VU1N_VERIFY"))) : 0u;
     bool diag = std::getenv("GOW_VU1N_DIAG") != nullptr;
-    unsigned long long nativePairs = 0, missBlocks = 0, nativeRuns = 0;
+    unsigned long long nativePairs = 0, nativeBlocks = 0, missBlocks = 0, nativeRuns = 0, codeChanges = 0, slotSetups = 0;
     std::unordered_map<uint32_t, unsigned> missPcs, missHits;
     unsigned limit = ~0u, count = 0; // verify bisection: native blocks allowed in this run
     VU1State snap;                   // state on entry of block number `limit` (verify bisection)
@@ -197,6 +204,7 @@ struct VU1NativeAccess
     static const uint8_t *blockTiming(VU1Interpreter &vu, VU1Interpreter::NativeState::Slot &sl, uint32_t &cycId);
     static void scalarStart(VU1Interpreter &vu, uint64_t issue, uint32_t latency, bool fdiv);
     static VU1Interpreter::NativeState::Slot &slotFor(VU1Interpreter &vu, const uint8_t *code, uint32_t codeSize, uint32_t pc);
+    static void codeChanged(VU1Interpreter::NativeState &ns, const uint8_t *code); // micro memory (16 KB) rewritten
     static uint64_t &laneWord(VU1Interpreter &vu, uint32_t lane);
     template <typename F>
     static void walkHistory(VU1Interpreter::NativeState &ns, uint64_t now, uint64_t want[3], F &&ready);

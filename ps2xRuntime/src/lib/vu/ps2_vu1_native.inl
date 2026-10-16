@@ -619,7 +619,8 @@ VU1N_INLINE void VU1NativeAccess::finishBlockTiming(VU1Interpreter &vu, const VU
 {
     using NS = VU1Interpreter::NativeState;
     NS &ns = *vu.m_native;
-    const uint64_t end = start + cyc[sl.pairs - 1u] + 1u;
+    // the idle table's length is in the slot: most blocks never touch their table's cache line here
+    const uint64_t end = start + (cyc == sl.idle ? sl.idleEnd : cyc[sl.pairs - 1u] + 1u);
     NS::Hist &h = ns.hist[ns.histNext];
     h.bt = sl.bt;
     h.cyc = cyc;
@@ -645,6 +646,45 @@ VU1N_INLINE void VU1NativeAccess::finishBlockTiming(VU1Interpreter &vu, const VU
     }
 }
 
+// The micro memory has a new generation (VIF MPG, EE writes): slots whose extent scan read a changed pair are set up again
+// on their next use; the others keep their block (the game swaps one microprogram while the rest stays resident).
+void VU1NativeAccess::codeChanged(VU1Interpreter::NativeState &ns, const uint8_t *code)
+{
+    using NS = VU1Interpreter::NativeState;
+    constexpr uint32_t kPairs = sizeof(ns.code) / 8u;
+    static_assert(kPairs == std::size(ns.slots));
+    ++ns.codeChanges;
+    if (!ns.codeValid)
+    {
+        for (NS::Slot &sl : ns.slots)
+            sl.known = false;
+        std::memcpy(ns.code, code, sizeof(ns.code));
+        ns.codeValid = true;
+        return;
+    }
+    // changedBefore[i]: changed pairs among 0..i-1 (prefix count), so a slot's range test is one subtraction
+    thread_local uint16_t changedBefore[kPairs + 1];
+    uint32_t changed = 0;
+    for (uint32_t i = 0; i < kPairs; ++i)
+    {
+        changedBefore[i] = static_cast<uint16_t>(changed);
+        changed += std::memcmp(ns.code + i * 8u, code + i * 8u, 8u) != 0;
+    }
+    changedBefore[kPairs] = static_cast<uint16_t>(changed);
+    if (changed == 0u)
+        return;
+    for (uint32_t i = 0; i < kPairs; ++i)
+    {
+        NS::Slot &sl = ns.slots[i];
+        if (!sl.known)
+            continue;
+        const uint32_t end = std::min<uint32_t>(kPairs, i + sl.pairs + 1u); // the pair after the block ends the scan
+        if (changedBefore[end] != changedBefore[i])
+            sl.known = false;
+    }
+    std::memcpy(ns.code, code, sizeof(ns.code));
+}
+
 // The dispatch slot of pc, set up on first use (native block lookup, timing tables).
 VU1Interpreter::NativeState::Slot &VU1NativeAccess::slotFor(VU1Interpreter &vu, const uint8_t *code, uint32_t codeSize, uint32_t pc)
 {
@@ -653,6 +693,7 @@ VU1Interpreter::NativeState::Slot &VU1NativeAccess::slotFor(VU1Interpreter &vu, 
     if (!sl.known)
     {
         uint32_t words[128];
+        ++ns.slotSetups;
         const uint32_t count = nativeExtent(code, codeSize, pc, words);
         sl = {};
         sl.known = true;
@@ -670,6 +711,7 @@ VU1Interpreter::NativeState::Slot &VU1NativeAccess::slotFor(VU1Interpreter &vu, 
                 bt.readsEntryFlags = it->second.readsEntryFlags;
                 sl.fn = it->second.fn;
                 sl.idle = it->second.cyc.data();
+                sl.idleEnd = static_cast<uint16_t>(sl.idle[count - 1u] + 1u);
                 sl.bt = &bt;
                 sl.readsEntryFlags = bt.readsEntryFlags;
                 sl.memoable = bt.scalarRead == 0u;
@@ -715,8 +757,7 @@ bool VU1Interpreter::runNative(StepContext &context)
     if (generation != ns.generation)
     {
         ns.generation = generation;
-        for (NativeState::Slot &sl : ns.slots)
-            sl.known = false;
+        VU1NativeAccess::codeChanged(ns, context.vuCode);
     }
 
     const unsigned savedCsr = _mm_getcsr();
@@ -804,10 +845,10 @@ bool VU1Interpreter::runNative(StepContext &context)
         }
         const uint32_t result = fn(ctx);
         VU1NativeAccess::finishBlockTiming(*this, sl, cyc, cycId, start);
-        m_state.cycles = m_cycle;
         if (m_cycle >= m_nextCommitCycle)
             commitReadyPipelines(); // FDIV/EFU entries kept for timing retire when ready (values are written already)
         ns.nativePairs += sl.pairs;
+        ++ns.nativeBlocks;
         m_state.pc = result & 0x3FFFu;
         if (result & kVu1nEnded)
         {
@@ -818,6 +859,7 @@ bool VU1Interpreter::runNative(StepContext &context)
         if (result & kVu1nBail)
             break;
     }
+    m_state.cycles = m_cycle; // only read outside the blocks (diagnostics)
     if (armed)
     {
         VU1NativeAccess::syncInflight(*this); // the exact engine continues: its readiness arrays become current
@@ -831,9 +873,9 @@ bool VU1Interpreter::runNative(StepContext &context)
         if (std::chrono::steady_clock::now() - last > std::chrono::seconds(5))
         {
             last = std::chrono::steady_clock::now();
-            std::fprintf(stderr, "[vu1n] nativePairs=%llu missBlocks=%llu nativeEntries=%llu distinctMissPcs=%zu\n", ns.nativePairs,
-                         ns.missBlocks, ns.nativeRuns, ns.missPcs.size());
-            ns.nativePairs = ns.missBlocks = ns.nativeRuns = 0;
+            std::fprintf(stderr, "[vu1n] nativePairs=%llu nativeBlocks=%llu missBlocks=%llu nativeEntries=%llu distinctMissPcs=%zu codeChanges=%llu slotSetups=%llu\n",
+                         ns.nativePairs, ns.nativeBlocks, ns.missBlocks, ns.nativeRuns, ns.missPcs.size(), ns.codeChanges, ns.slotSetups);
+            ns.nativePairs = ns.nativeBlocks = ns.missBlocks = ns.nativeRuns = ns.codeChanges = ns.slotSetups = 0;
             std::vector<std::pair<unsigned, uint32_t>> top;
             for (const auto &kv : ns.missHits)
                 top.emplace_back(kv.second, kv.first);
