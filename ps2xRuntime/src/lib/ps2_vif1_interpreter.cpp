@@ -33,6 +33,117 @@ enum VIFCmd : uint8_t
     VIF_DIRECTHL = 0x51,
 };
 
+// GOW-Port: VIF1 UNPACK without a write mask and with CL >= WL (every write cycle reads source data): the format,
+// the STMOD mode and the vector layout are fixed per command, so one specialised loop per (VN, VL, MODE) replaces the
+// per-vector, per-field decisions of the general loop below. Same results as that loop, including its quirks: V3 keeps
+// the W already in VU memory (and adds ROW to it in the offset modes), V2 writes XYXY, V4-5 never adds ROW.
+namespace
+{
+    using UnpackFastFn = void (*)(uint8_t *vuData, const uint8_t *src, uint32_t count, uint32_t vuAddr, uint32_t cl,
+                                  uint32_t wl, bool zeroExtend, uint32_t row[4]);
+
+    template <unsigned VL>
+    inline uint32_t unpackComponent(const uint8_t *src, unsigned c, bool zeroExtend)
+    {
+        if constexpr (VL == 0u)
+        {
+            uint32_t v;
+            std::memcpy(&v, src + c * 4u, 4u);
+            return v;
+        }
+        else if constexpr (VL == 1u)
+        {
+            uint16_t raw;
+            std::memcpy(&raw, src + c * 2u, 2u);
+            return zeroExtend ? raw : static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(raw)));
+        }
+        else
+        {
+            const uint8_t raw = src[c];
+            return zeroExtend ? raw : static_cast<uint32_t>(static_cast<int32_t>(static_cast<int8_t>(raw)));
+        }
+    }
+
+    template <unsigned VN, unsigned VL, unsigned MODE>
+    void unpackFast(uint8_t *vuData, const uint8_t *src, uint32_t count, uint32_t vuAddr, uint32_t cl, uint32_t wl,
+                    bool zeroExtend, uint32_t row[4])
+    {
+        constexpr bool v45 = (VL == 3u);
+        constexpr uint32_t bytesPerVector = v45 ? 2u : (VN + 1u) * (VL == 0u ? 4u : VL == 1u ? 2u : 1u);
+        uint32_t block = 0u, cyclePos = 0u;
+        for (uint32_t i = 0; i < count; ++i, src += bytesPerVector)
+        {
+            uint8_t *dest = vuData + ((vuAddr + block * cl + cyclePos) & 0x3FFu) * 16u;
+            if (++cyclePos == wl)
+            {
+                cyclePos = 0u;
+                ++block;
+            }
+            uint32_t v[4];
+            if constexpr (v45)
+            {
+                uint16_t packed;
+                std::memcpy(&packed, src, 2u);
+                v[0] = (packed & 0x001Fu) << 3u;
+                v[1] = (packed & 0x03E0u) >> 2u;
+                v[2] = (packed & 0x7C00u) >> 7u;
+                v[3] = (packed & 0x8000u) >> 8u;
+            }
+            else if constexpr (VN == 0u)
+            {
+                v[0] = v[1] = v[2] = v[3] = unpackComponent<VL>(src, 0u, zeroExtend);
+            }
+            else
+            {
+                v[0] = unpackComponent<VL>(src, 0u, zeroExtend);
+                v[1] = unpackComponent<VL>(src, 1u, zeroExtend);
+                if constexpr (VN == 1u)
+                {
+                    v[2] = v[0];
+                    v[3] = v[1];
+                }
+                else
+                {
+                    v[2] = unpackComponent<VL>(src, 2u, zeroExtend);
+                    if constexpr (VN == 3u)
+                        v[3] = unpackComponent<VL>(src, 3u, zeroExtend);
+                    else
+                        std::memcpy(&v[3], dest + 12u, 4u);
+                }
+            }
+            if constexpr (!v45 && MODE != 0u)
+            {
+                for (unsigned f = 0; f < 4u; ++f)
+                {
+                    if constexpr (MODE == 1u)
+                        v[f] += row[f];
+                    else if constexpr (MODE == 2u)
+                        row[f] = v[f] += row[f];
+                    else
+                        row[f] = v[f];
+                }
+            }
+            std::memcpy(dest, v, 16u);
+        }
+    }
+
+    template <unsigned VN, unsigned VL>
+    constexpr UnpackFastFn kUnpackModes[4] = {unpackFast<VN, VL, 0u>, unpackFast<VN, VL, 1u>, unpackFast<VN, VL, 2u>,
+                                              unpackFast<VN, VL, 3u>};
+
+    // nullptr: a format the general loop handles (V1/V2/V3 with VL 3)
+    UnpackFastFn unpackFastFn(unsigned vn, unsigned vl, unsigned mode)
+    {
+        static constexpr const UnpackFastFn *table[16] = {
+            kUnpackModes<0, 0>, kUnpackModes<0, 1>, kUnpackModes<0, 2>, nullptr,
+            kUnpackModes<1, 0>, kUnpackModes<1, 1>, kUnpackModes<1, 2>, nullptr,
+            kUnpackModes<2, 0>, kUnpackModes<2, 1>, kUnpackModes<2, 2>, nullptr,
+            kUnpackModes<3, 0>, kUnpackModes<3, 1>, kUnpackModes<3, 2>, kUnpackModes<3, 3>};
+        const UnpackFastFn *modes = table[(vn & 3u) * 4u + (vl & 3u)];
+        return modes ? modes[mode & 3u] : nullptr;
+    }
+}
+
 void PS2Memory::processVIF0Data(uint32_t srcPhys, uint32_t sizeBytes)
 {
     if (sizeBytes == 0u || srcPhys >= PS2_RAM_SIZE)
@@ -478,10 +589,15 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 uint32_t copyBytes = mpgBytes;
                 if (destAddr + copyBytes > PS2_VU1_CODE_SIZE)
                     copyBytes = PS2_VU1_CODE_SIZE - destAddr;
+                // GOW-Port: the game re-sends microprograms that are already there; only a real change of the code
+                // invalidates what was derived from it (native block slots, decoded pairs).
                 if (pos + copyBytes <= sizeBytes)
                 {
-                    std::memcpy(m_vu1Code + destAddr, data + pos, copyBytes);
-                    markVU1CodeModified();
+                    if (std::memcmp(m_vu1Code + destAddr, data + pos, copyBytes) != 0)
+                    {
+                        std::memcpy(m_vu1Code + destAddr, data + pos, copyBytes);
+                        markVU1CodeModified();
+                    }
                 }
                 else
                     std::fprintf(stderr, "[vif1] MPG cut: dest=%x bytes=%u have=%u\n", destAddr, copyBytes, sizeBytes - pos);
@@ -629,7 +745,10 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                         }
                 }
             }
-            if (m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
+            const UnpackFastFn fast = (!maskEnable && cl >= wl) ? unpackFastFn(vn, vl, vif1_regs.mode) : nullptr;
+            if (fast && m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
+                fast(m_vu1Data, data + pos, writeVectorCount, vuAddr, cl, wl, zeroExtend, vif1_regs.row);
+            else if (m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
             {
                 const uint8_t *srcBase = data + pos;
                 uint32_t srcIndex = 0u;
