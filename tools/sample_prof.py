@@ -63,6 +63,26 @@ def module_base(pid):
     return mods[0]
 
 
+def module_ranges(pid):
+    """[(base, end, name)] of every module of the process: samples outside the exe are named by their module."""
+    h = k32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
+    mods = (ctypes.c_void_p * 1024)()
+    needed = wt.DWORD()
+    psapi.EnumProcessModulesEx(h, mods, ctypes.sizeof(mods), ctypes.byref(needed), 3)
+
+    class MODULEINFO(ctypes.Structure):
+        _fields_ = [('base', ctypes.c_void_p), ('size', wt.DWORD), ('entry', ctypes.c_void_p)]
+    out = []
+    for m in mods[:needed.value // ctypes.sizeof(ctypes.c_void_p)]:
+        info = MODULEINFO()
+        name = ctypes.create_unicode_buffer(260)
+        if psapi.GetModuleInformation(h, ctypes.c_void_p(m), ctypes.byref(info), ctypes.sizeof(info)):
+            psapi.GetModuleBaseNameW(h, ctypes.c_void_p(m), name, 260)
+            out.append((info.base, info.base + info.size, name.value))
+    k32.CloseHandle(h)
+    return sorted(out)
+
+
 def load_map(path):
     """(rva list, name list) of every function symbol in the map."""
     pref = 0x140000000
@@ -117,6 +137,8 @@ def main():
     if rest > 0:
         time.sleep(rest)
     base = module_base(pid)
+    modules = module_ranges(pid)
+    mod_bases = [m[0] for m in modules]
     ctx = ctypes.create_string_buffer(CONTEXT_SIZE + 16)
     addr = (ctypes.addressof(ctx) + 15) & ~15
     handles = {}
@@ -141,7 +163,11 @@ def main():
                 rip = ctypes.c_uint64.from_address(addr + RIP_OFFSET).value
                 rva = rip - base
                 i = bisect.bisect_right(rvas, rva) - 1
-                name = names[i] if 0 <= i and 0 <= rva < 0x40000000 else '<outside exe>'
+                if 0 <= i and 0 <= rva < 0x40000000:
+                    name = names[i]
+                else:
+                    j = bisect.bisect_right(mod_bases, rip) - 1
+                    name = f'<{modules[j][2]}>' if 0 <= j and rip < modules[j][1] else '<outside exe>'
                 hist[tid][name] += 1
                 if a.func and a.func in name:
                     hot[rva] += 1
@@ -153,8 +179,8 @@ def main():
         print(f'hottest addresses in *{a.func}* (RVA, preferred base 0x140000000):')
         for rva, v in hot.most_common(a.top):
             print(f'{v:7d}  0x{rva + 0x140000000:x}')
-    for tid, c in sorted(hist.items(), key=lambda kv: -sum(v for k, v in kv[1].items() if k != '<outside exe>')):
-        inside = sum(v for k, v in c.items() if k != '<outside exe>')
+    for tid, c in sorted(hist.items(), key=lambda kv: -sum(v for k, v in kv[1].items() if not k.startswith('<'))):
+        inside = sum(v for k, v in c.items() if not k.startswith('<'))
         if inside < samples * 0.05:
             continue
         print(f'\n== thread {tid}: {sum(c.values())} samples, {inside} in the exe')

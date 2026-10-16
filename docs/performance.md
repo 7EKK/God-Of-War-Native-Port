@@ -294,3 +294,25 @@ Gains per lever above are estimates from the Gemini review (gemini-work/results/
 - Not the cause, tried and dropped: stepping guest time in IOP-batch steps while every EE thread waits (so an EE thread
   waiting for the IOP resumes when the IOP is done instead of at the next pacing point): no change, the 520 ticks were
   executed cycles, not waits.
+
+## Ship deck ATHN01D: VIF1 UNPACK fast path, micro-memory changes (2026-10-16, ext branch agent/vu1perf)
+- Scene: `tools/levels.py --zones ATHN01D` (ship deck in the rain, save altar), 37-41 fps. No thread is saturated:
+  the game kicks one ~3 MB VIF1 chain per frame and waits for it before the next frame's work, so a frame is the worker
+  job plus ~5-6 ms of EE work after it (`PS2X_GS_WORKER_TRACE`, port/vu1perf/gap.py). Job 21.4 ms, gap 6.0 ms.
+- Profile of the VIF1/VU1 worker (tools/sample_prof.py, which now names DLL samples by module): native blocks 33 %,
+  `processVIF1Data` 20 % (the per-vector, per-field UNPACK loop), the native dispatch loop 17 %, commit/reset 6 %,
+  slot setup after micro-memory changes ~3 %. ~2400 VU1 programs and ~480k native blocks (7.7 pairs each) per frame.
+- Changes (results unchanged; VU1 replay of 4000 ATHN01D runs bit-identical, 0 differ):
+  - UNPACK without a write mask and with CL >= WL runs a loop specialised per (VN, VL, STMOD mode)
+    (ps2_vif1_interpreter.cpp `unpackFast`); masked or CL < WL UNPACKs keep the general loop. `processVIF1Data` 20 % -> ~5 %.
+  - An MPG that writes the bytes already in micro memory no longer bumps the code generation.
+  - A real micro-memory change invalidates only the native slots whose extent overlaps a changed pair
+    (docs/vu1-native-flags.md, "Code changes"); the game rewrites part of micro memory ~20 times per frame.
+  - Slot layout: the per-block fields share one cache line, the idle table's length is in the slot.
+- Result: worker job 21.4 -> 16.1 ms. ATHN01D mean fps +2.3 to +4 (A/B alone, two rounds: 40.8 -> 43.1,
+  36.3 -> 38.6; the scene varies run to run). ATHN03A (45-50) and PAND04G (mean 59) unchanged: not job bound.
+  Zones 0-4 60 fps, speed 1.00, savetest ok (port/vu1perf/gate, port/vu1perf/savetest).
+- What is left in the job is VU1 (~10 ms/frame in the replay bench). The dispatch loop costs ~0.7x the block code
+  itself, mostly the unpredictable indirect call per 8-pair block and the slot/hist cache lines; micro-changes to the
+  loop measured no difference. The next lever is generator-side: blocks that chain to their successor (or larger
+  blocks) so fewer pass through the loop. 60 fps here needs the job at ~11 ms.

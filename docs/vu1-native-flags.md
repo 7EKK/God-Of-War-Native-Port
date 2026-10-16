@@ -49,8 +49,16 @@ entry. Every other block uses its idle-pipeline table.
 
 **Exit.** When the exact engine takes over, the readiness arrays get the lanes still in flight (`syncInflight`).
 
-**Dispatch.** Everything the loop touches per block is in one 64-byte `Slot` per pc: function, idle table, memo,
-FDIV/EFU starts.
+**Dispatch.** One 128-byte `Slot` per pc. Its first cache line holds everything the loop touches for every block:
+function, idle table and its length in cycles (`idleEnd`, so a block run with idle timing never reads its table),
+tail descriptor, FDIV/EFU starts. The entry-timing memo, used only by blocks that read entry flags, is in the second
+line.
+
+**Code changes.** Slots are derived from the micro memory. When its generation changes (VIF MPG, EE stores), the
+native state compares the micro memory with its own copy and only slots whose extent overlaps a changed pair (the
+block's pairs plus the pair after it, which ended the extent scan) are set up again; the rest stay valid. The VIF
+does not bump the generation for an MPG that writes the bytes already there. In the ship-deck scene the game rewrites
+part of the micro memory ~20 times per frame.
 
 ## Cost
 Replay benchmark: 4000 recorded VU1 runs at the end of the Olympus zone walk, 5 warm passes.
