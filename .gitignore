@@ -23,3 +23,6 @@ gen.err
 __pycache__/
 port/*.irx
 port/*.dis
+port/switch/nsp/romfs/
+port/switch/nsp/out/
+port/switch/nsp/exefs/

@@ -74,6 +74,26 @@ black. Next step: the user's real Switch; see "Test in Citron".
     sdmc:/switch/gow/log.txt              written by the NRO
 The PAKs are 4 GB each: the SD card must be exFAT (FAT32 has a 4 GB file limit).
 
+## Installable NSP (user 2026-10-16: install with DBI from the PC, game data inside the NSP)
+- Title ID 0100D0D0600A0000, name "God of War", publisher Waffle565. The RomFS holds `disc-usa/` (the extracted
+  disc without memory-card files, ~8.2 GB); `main.cpp` boots `romfs:/disc-usa/SCUS_973.99` when it exists, otherwise
+  the SD path (NRO). The SD folder `sdmc:/switch/gow/` (created at start) keeps log, memory card and env.txt. As an
+  installed application the game gets full application memory (no "hold R over a game").
+- Needs the user's own `prod.keys` (Lockpick_RCM on the console); never commit or share them. Installing a
+  self-built NSP needs Atmosphère's signature patches (as for any homebrew NSP).
+- Packer: hacBrewPack v3.05 built from source in WSL (`/root/nsp-tools/hacBrewPack`; the original The-4n repo is
+  deleted, mirror github.com/rlaphoenix/hacBrewPack; `apt install build-essential` first).
+- Steps: `port/switch/nsp/make_romfs_links.sh` (Git Bash: RomFS tree of NTFS hard links, no 8 GB copy), then in WSL
+  `port/switch/nsp/build_nsp.sh <prod.keys>` (elf2nso → exefs/main, npdmtool gow.json → main.npdm, nacptool +
+  default icon → control, hacbrewpack --nologo) → `port/switch/nsp/out/*.nsp`. The NSP contains the game data: only
+  for the user's own console.
+- `gow.json` (NPDM) is nx-hbloader's `hbl.json` (`hbl.json.ref`) with: program_id fields (newer npdmtool), 39-bit
+  address space (type 3), application_type 1, no map_region and no debug_flags (Citron rejects the load with
+  error 32 otherwise), hbloader's filesystem_access.
+- Testing without keys: `make_exefs.sh` writes `exefs/main` + `main.npdm` next to `romfs/`, which Citron loads as an
+  unpacked title, but it stops at start-up with libnx InitFail_FS (no control data, "Failed to read title for ROM").
+  The real test is the packed NSP in Citron (it uses the same prod.keys) before installing.
+
 ## Test in Citron (ref/citron, citron-cmd.exe <nro>)
 - Citron's SD card is `%APPDATA%\citron\sdmc`. For tests the two PAKs are NTFS hard links to `disc-usa\PART*.PAK`
   (read-only use, no 8 GB copy); the other files are copies. No prod.keys/firmware are needed for the NRO.
