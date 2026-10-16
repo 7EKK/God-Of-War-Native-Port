@@ -181,6 +181,22 @@ adaptation, so a movie can be compared with its source track sample by sample.
   measures offset 0 at correlation 1.0000 over the whole movie (before: 676); P06MP01, SATINTRO, SEMO01-04 ok.
   Gate port/movies6/gate/20261016_102015: zones 0-4 60 fps, speed 1.00-1.01; savetest ok (port/movies6/savetest).
 
+## SEMO08 drift: the picture clock moved later at every GOP (fixed 2026-10-16, agent/semo08)
+- SEMO08 played its pictures at 29.35 per second (210.2 s of pictures, 4.45 s of A/V drift). The stub presents a
+  picture at the VSync its PTS maps to (`presentationTickForFrame`, base = the first picture). The first picture of
+  every GOP (16 pictures) was ready 2-4 VSyncs after its tick, because its data arrives just in time (see Open). The
+  stub then moved the PTS base later by the delay (`ptsPresentationBaseTickQ32 += correction`) and never back:
+  125 GOPs, 283 VSyncs = 4.7 s (`GOW_MPEG_PACE` logs every picture's PTS step, tick and target).
+- The sound unit kept consuming 48 kHz while the movie thread sat in those waits, so the game's 16 KB IOP ring
+  (core input, refilled up to the read position by the movie thread on each pass, 0x188688) played stale laps: the
+  recording held 4.8 s of repeated 4096-sample blocks by the end (`tools/movie_align.py`-style alignment against
+  the track; `GOW_SND_STALE` names each stale 1 KB block).
+- Fix (MPEG.cpp, runtime d6de6e6): a late picture is shown at once and the PTS schedule stays; only a delay of
+  30 VSyncs (0.5 s, a stall) re-bases the clock. The next pictures catch up.
+- Check (port/semo08/final): SEMO08 6330 pictures at 30.00 per second, 210.2 s of pictures, 210.0 s of audio, drift
+  0.21 s (movies.py ok); sound content 0.77 s behind at 201 s (was 4.78 s), the rest is the read latency below. SEMO05
+  0.12 s and SEMO09 0.11 s ok (port/semo08/others).
+
 ## Open
 - **P04MP05 stopped after 180-210 pictures: FIXED (game ring logic), it now plays 720 of 743.**
   - The movie player's video ring (player struct `*0x304F20`: +0xE8 base, +0xEC size 0x40000, +0xF0 write pointer,
@@ -205,9 +221,16 @@ adaptation, so a movie can be compared with its source track sample by sample.
     callback's 8 KB threshold).
   - Next: what the PS2's SMPD stream returns for the short tail read / the read past the end (negative, or a full
     block), compared with our native SMPD service.
-- SEMO08: 4.45 s A/V drift, also alone on an idle machine (2026-10-16, port/movies6/semo08): 214.7 s of audio for
-  210.2 s of pictures (6330 pictures, 29.35 per wall second). The track itself holds 211.5 s of PCM (SEMO08.PSS and
-  .PSW), so more sound is produced than the movie has; not investigated yet.
+- **Movie reads arrive just in time (SEMO08, open).** Each 16 KB block of the player's reader (stream service
+  0x188B80 -> 0x17AFE0, SMPD fn 6 over 989snd) completes 32-34 ms of guest time after it is issued (2 VSyncs, some
+  4), so a high-bitrate movie (SEMO08, 809 KB/s) is read barely as fast as it plays. The game's 100 KB EE audio ring
+  drains from ~50 KB to ~10 KB in the first 30 s and then runs dry now and then. Its 16 KB IOP ring then plays a stale
+  lap (`GOW_SND_STALE`), so the sound slips 85 ms behind the content each time: 0.77 s by the end of SEMO08 (9 laps).
+  The game's 256 KB video ring stays full the whole movie: the port decodes from its own copy of the demuxed data, and
+  the ring only empties through the game's IPU feed calls. A 16 KB read on the PS2 (DVD, SMPD) takes a few ms. Next:
+  where the 2 VSyncs come from (989snd command/status round trip, SMPD read completion).
+- SEMO10 measured 0.37 s A/V drift in one run on a loaded machine with the picture-clock fix (0.22 before, ok);
+  not rechecked yet.
 - In some in-game runs (port/movies4/newgame/20261013_171528) the GS stalled for seconds while A01MP05 waited
   preloaded (host 11 fps): the sound starved (up to 3.8 s) and the backlog was then cut. Not reproduced in a run without
   other runners on the machine (port/movies4/gsstats); the same fight with movies skipped did not stall.
