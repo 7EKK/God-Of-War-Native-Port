@@ -39,9 +39,12 @@ def toc_zones():
     return out
 
 
-def fight_script(total):
+def fight_script(total, idle=False):
     # new game menus (zones.py slot 0), then from gameplay start: move in a square and attack, to the end of the run
+    # (idle: stand still at the warp point, so the camera and the frame's work repeat: performance A/B)
     keys = ['5:start', '14:x', '20:x', '26:x', '32:x']
+    if idle:
+        return ','.join(keys)
     t = 8.0
     sticks = ['lup', 'lright', 'ldown', 'lleft']
     i = 0
@@ -59,7 +62,7 @@ def run_batch(index, batch, args, outdir, exe_dir):
     log_path = os.path.join(outdir, f'batch{index}.log')
     total = 60 + len(batch) * (args.stay + 40)
     env = dict(os.environ, **zones.PLAY_ENV)
-    env.update({'GOW_MC0': args.card_copy, 'GOW_PAD_GUION': fight_script(total), 'GOW_PAD_CAPTURAS': 'g4',
+    env.update({'GOW_MC0': args.card_copy, 'GOW_PAD_GUION': fight_script(total, args.idle), 'GOW_PAD_CAPTURAS': 'g4',
                 'GOW_WARP': ';'.join(batch), 'GOW_WARP_STAY': str(args.stay), 'GOW_GOD_MODE': '1',
                 'GOW_PLAYER_TRACE': '1'})
     env.pop('GOW_ISO', None)
@@ -160,6 +163,7 @@ def main():
     ap.add_argument('--card', default=zones.DEFAULT_CARD)
     ap.add_argument('--min-fps', type=float, default=25)
     ap.add_argument('--silent', action='store_true')
+    ap.add_argument('--idle', action='store_true', help='no movement after the warp (repeatable frames for performance A/B)')
     ap.add_argument('--out', default=os.path.join(ROOT, 'port', 'levels'))
     args = ap.parse_args()
     names = toc_zones() if args.zones == 'all' else [z.strip().upper() for z in args.zones.split(',') if z.strip()]

@@ -316,3 +316,20 @@ Gains per lever above are estimates from the Gemini review (gemini-work/results/
   itself, mostly the unpredictable indirect call per 8-pair block and the slot/hist cache lines; micro-changes to the
   loop measured no difference. The next lever is generator-side: blocks that chain to their successor (or larger
   blocks) so fewer pass through the loop. 60 fps here needs the job at ~11 ms.
+
+## Ship deck ATHN01D: allocations and copies in the job and the EE gap (2026-10-16, ext branch agent/athn01d)
+- Profile with DLL exports named (`tools/sample_prof.py --dll-exports`): part of the worker's "ntdll" time was heap
+  work, not waiting: RtlAllocateHeap 6.8 % + RtlFreeHeap 0.6 % of the thread, plus memcpy. Every XGKICK packet was
+  copied into a new vector by `GifArbiter::submit` before the GS stage copied it again into its own buffer, and the
+  stage queue was a `std::deque` (MSVC allocates one block per 32-byte element).
+- The EE gap after the job (serial in this game: it waits for the chain) held ~1.5 ms inside 0x13F730 building the
+  next chain: `sendDmaChain` gathered ~3 MB into a fresh vector (~20 reallocations, new pages each time) that the
+  worker freed after the job.
+- Changes (output unchanged):
+  - `GifArbiter::submitAndDrain`: with nothing queued the packet goes to the callback in place (XGKICK, PATH2).
+  - GS stage queue and batch are vectors (capacity kept across swaps).
+  - DMA transfer buffers are pooled (ps2_memory.cpp, up to 4): the worker returns each job's buffers.
+- Result, interleaved A/B on an idle machine (port/athn01d/STATE.md): standing still (`levels.py --idle`) job 17.1 ->
+  15.3 ms, gap 2.8 -> 1.6 ms, 51 -> 59.6 fps; moving and fighting job 17-18 -> 12-15 ms, 50-52 -> 59-60 fps (min 54-59).
+- Left: the dispatch loop (~18 % of the worker) and per-program scheduler resets; the GS stage thread is now ~70 % busy
+  (vertexKick) and is the next limit; the EE spins through the whole job (one core, matters on the Switch).

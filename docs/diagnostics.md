@@ -55,6 +55,9 @@ Always-on: `[gow-heapguard] <what> object= at= freed-by=` (runner gow_overrides.
 arrived or timed out, load time, fps and game speed while there, `[guest-branch:missing-target]`,
 `[gow-heapguard]`, the zones.py error patterns, two captures. `--zones all` = the 108 zone WADs of the TOC
 (~1 min each); `--batch N` chains N warps per boot (faster, but see the limits). `--exe-dir` selects the runner.
+`--idle`: no movement after the warp, so the camera and each frame's work repeat (performance A/B, port/athn01d/ab.sh).
+`tools/sample_prof.py --dll-exports`: samples inside a DLL are named by the nearest export, e.g. `<ntdll.dll!ZwWaitForAlertByThreadId>` (waits) against `<ntdll.dll!RtlAllocateHeap>` (heap work); without it every ntdll sample is `<ntdll.dll>`.
+`PS2X_GS_WORKER_TRACE=<s>` also prints `gs-irq <csr bits>` when the GS stage raises FINISH/SIGNAL (stage tail vs EE wake-up after a job).
 
 Always-on logs we added: `[SIF module] load-failed/load-unhandled` (RPC.cpp), `fioOpen failed:`.
 

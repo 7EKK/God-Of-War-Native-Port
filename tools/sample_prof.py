@@ -78,9 +78,36 @@ def module_ranges(pid):
         name = ctypes.create_unicode_buffer(260)
         if psapi.GetModuleInformation(h, ctypes.c_void_p(m), ctypes.byref(info), ctypes.sizeof(info)):
             psapi.GetModuleBaseNameW(h, ctypes.c_void_p(m), name, 260)
-            out.append((info.base, info.base + info.size, name.value))
+            path = ctypes.create_unicode_buffer(1024)
+            psapi.GetModuleFileNameExW(h, ctypes.c_void_p(m), path, 1024)
+            out.append((info.base, info.base + info.size, name.value, path.value))
     k32.CloseHandle(h)
     return sorted(out)
+
+
+_exports = {}
+
+
+def dll_symbol(module, rip):
+    """'<dll!nearest export below rip>' (--dll-exports): tells waits (NtWaitFor..., ZwDelayExecution) from heap work
+    (RtlAllocateHeap, RtlFreeHeap) inside a DLL. Internal functions get the export before them, so read it as a region."""
+    base, _, name, path = module
+    if path not in _exports:
+        table = []
+        try:
+            import pefile
+            pe = pefile.PE(path, fast_load=True)
+            pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY['IMAGE_DIRECTORY_ENTRY_EXPORT']])
+            for e in getattr(pe, 'DIRECTORY_ENTRY_EXPORT', None).symbols if hasattr(pe, 'DIRECTORY_ENTRY_EXPORT') else []:
+                if e.name:
+                    table.append((e.address, e.name.decode(errors='replace')))
+        except Exception:
+            pass
+        table.sort()
+        _exports[path] = ([a for a, _ in table], [n for _, n in table])
+    rvas, names = _exports[path]
+    i = bisect.bisect_right(rvas, rip - base) - 1
+    return f'<{name}!{names[i]}>' if i >= 0 else f'<{name}>'
 
 
 def load_map(path):
@@ -121,6 +148,7 @@ def main():
     ap.add_argument('--secs', type=float, default=20)
     ap.add_argument('--interval', type=float, default=0.001)
     ap.add_argument('--top', type=int, default=40)
+    ap.add_argument('--dll-exports', action='store_true', help='name DLL samples by their nearest export')
     ap.add_argument('--func', help='also print the hottest instruction addresses (RVA) inside functions matching this text')
     a = ap.parse_args()
     mp = a.map or os.path.splitext(a.exe)[0] + '.map'
@@ -167,7 +195,10 @@ def main():
                     name = names[i]
                 else:
                     j = bisect.bisect_right(mod_bases, rip) - 1
-                    name = f'<{modules[j][2]}>' if 0 <= j and rip < modules[j][1] else '<outside exe>'
+                    if 0 <= j and rip < modules[j][1]:
+                        name = dll_symbol(modules[j], rip) if a.dll_exports else f'<{modules[j][2]}>'
+                    else:
+                        name = '<outside exe>'
                 hist[tid][name] += 1
                 if a.func and a.func in name:
                     hot[rva] += 1
