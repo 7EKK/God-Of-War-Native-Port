@@ -23,7 +23,20 @@ mkdir -p "$WORK/exefs" "$WORK/control"
 elf2nso "$ELF" "$WORK/exefs/main"
 npdmtool "$HERE/gow.json" "$WORK/exefs/main.npdm"
 nacptool --create "God of War" "Waffle565" "0.1.0" "$WORK/control/control.nacp"
-cp "$DKP/libnx/default_icon.jpg" "$WORK/control/icon_AmericanEnglish.dat"
+# nacptool fills 12 of the 16 language entries (0x300 bytes each): copy entry 0 into the rest, so the name shows on
+# a console set to Korean, Chinese or Brazilian Portuguese too
+python3 - "$WORK/control/control.nacp" <<'EOF'
+import sys
+path = sys.argv[1]
+data = bytearray(open(path, "rb").read())
+for i in range(1, 16):
+    data[i * 0x300:(i + 1) * 0x300] = data[0:0x300]
+open(path, "wb").write(data)
+EOF
+# icon: the God of War logo as the native port renders it (port/usertest1/logo_native.png), 256x256 JPEG
+for lang in AmericanEnglish BritishEnglish Japanese French German LatinAmericanSpanish Spanish Italian Dutch CanadianFrench Portuguese Russian Korean TraditionalChinese SimplifiedChinese BrazilianPortuguese; do
+    cp "$HERE/icon.jpg" "$WORK/control/icon_$lang.dat"
+done
 
 # RomFS = disc-usa without the memory card (the card lives on the SD card: sdmc:/switch/gow/play.mcd). The tree is
 # made of NTFS hard links (romfs/disc-usa) so the 8 GB of PAKs are not copied.

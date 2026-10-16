@@ -899,3 +899,9 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   failed, no frames). Citron boots the NSP from romfs:/disc-usa, 0 IRX failures, ~11 guest fps (black = Citron).
   Not in the Switch build yet: merged28 PC fixes (menu clock, VU1 -25 %, captain audio). Next: install with DBI on the
   real Switch (needs Atmosphère sigpatches).
+- 10-16 ~15:00: user installed the first NSP: starts, but too slow to start a game. Switch branch now = merged28 +
+  speed work (ext agent/switch 082f2e1): gdb profile on Citron showed the EE spinning ~85 % in vid::WaitForDMAComplete
+  and core 0 oversubscribed (GS frontend + GL backend + presentation); GS frontend moved to the EE core one priority
+  above it, NEON clampv, one-compare RAM check, CPU 1785 MHz, perf lines + bilinear default, log rotation. Citron boot
+  9-11 -> 12-14 guest fps (clock change not visible in Citron). NSP now has name + icon (all languages).
+  tools/switch_pull_log.ps1 pulls the log over DBI's MTP. Next: user's log from the console.

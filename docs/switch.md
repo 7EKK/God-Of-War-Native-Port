@@ -90,6 +90,13 @@ The PAKs are 4 GB each: the SD card must be exFAT (FAT32 has a 4 GB file limit).
 - `gow.json` (NPDM) is nx-hbloader's `hbl.json` (`hbl.json.ref`) with: program_id fields (newer npdmtool), 39-bit
   address space (type 3), application_type 1, no map_region and no debug_flags (Citron rejects the load with
   error 32 otherwise), hbloader's filesystem_access.
+- Home-menu name and icon: `nacptool` writes the name for 12 of the 16 NACP languages, `build_nsp.sh` copies
+  entry 0 into all 16; the icon is `port/switch/nsp/icon.jpg` (256x256, made from the game's own logo as the native
+  port renders it, `port/usertest1/logo_native.png`), copied as `icon_<Language>.dat` for every language.
+- Getting the log off the console: DBI → "Run MTP responder", USB cable, then
+  `powershell -ExecutionPolicy Bypass -File tools\switch_pull_log.ps1` copies `sdmc:/switch/gow/{log,log_prev,env}.txt`
+  into `port/switch/logs/<date>/` (MTP has no drive letter: the script walks the Windows shell namespace). Each
+  launch rotates `log.txt` to `log_prev.txt`.
 - RomFS is case-sensitive (Windows and the SD card's FAT are not), and the game opens e.g. `cdrom0:\IOP_MOD\sio2man.irx`
   while the disc file is `SIO2MAN.IRX`. `PS2Vfs::resolveHostPath` (ext ps2_vfs.cpp) therefore matches `cdrom` paths
   component by component without case when the exact path is missing (ISO9660 semantics); without it the NSP boots
@@ -132,12 +139,30 @@ The PAKs are 4 GB each: the SD card must be exFAT (FAT32 has a 4 GB file limit).
 - `detach` is not supported (Citron exits when gdb goes away). Citron rewrites sdl2-config.ini on exit, resetting
   `use_gdbstub\default`. Breakpoints work (`break std::terminate` found the detach terminate).
 
+## Speed on the Switch
+- First real-console test (user 2026-10-16): the NSP starts but lags too much to start a game.
+- Profile (2026-10-16, `tools/switch_gdbprof.sh` + `tools/switch_gdbprof.py`: gdb on Citron's stub,
+  `thread apply all bt 6` every few seconds, 400 samples over boot and menu; the stub slows everything ~10x, so
+  only proportions count):
+  - EE (`GameThread`, core 1) is "busy" 98 %, but ~85 % of its samples are the spin in vid::WaitForDMAComplete
+    (`sub_0017A2A0`, waiting for the GS FINISH flag 0x29C7D0): game code itself is ~15 %. The EE waits for the
+    VU1 → GS pipeline; it is not the bottleneck.
+  - VIF1/VU1 (`GSWorker`, core 2) ~60 %, a third of it in sse2neon's precise `_mm_max_ps` (compare + select) inside
+    `clampv`, which runs after every FMAC.
+  - Core 0 was oversubscribed: GS frontend (`GSStage`, ~60 %: vertexKick, GIF packets), GL backend (`GSThread`,
+    ~50 %: CPU texture decodes, applyTexa / readColorRun) and the presentation thread (~53 %, much of it the
+    buffer-queue IPC and nouveau). Horizon does not time-slice threads of one priority, so they queued behind
+    each other.
+- Changes from it: `GSStage` moved to core 1 one priority step above the EE (ThreadNaming.h; it preempts the spin
+  whenever it has work); `clampv` uses ARMv8 FMAXNM/FMINNM on ARM (the x86 maxps/minps result for every input
+  arithmetic can produce); `Ps2IsSpecialAddress` answers RAM addresses (< 32 MB) with one compare; the CPU runs at
+  1785 MHz (Nintendo's boost clock; `GOW_CPU_MHZ`, re-applied every 2 s, restored at exit); bilinear presentation
+  and the speed lines (`GOW_PERF_DIAG`, `GOW_DELTA_DIAG`, `GOW_GS_HW_STATS`) are on by default on the Switch.
+
 ## Open issues (priority)
 1. Test on the real Switch: does the picture render (Citron cannot show it), speed, sound.
-2. Speed: under Citron the boot runs at ~10 guest frames/s with the EE ~90 % busy; on hardware (4x A57 ~1 GHz,
-   3 usable cores) the EE thread is the bottleneck: measure, then profile (the PC needs ~25 % of one desktop core
-   per EE frame at 60 fps).
-3. The bicubic presentation shader crashes Citron (fine on PC); check on hardware, keep `GOW_SCALER=bilinear` there.
+2. Speed: re-measure on the console with the changes above (the log carries the speed lines now).
+3. The bicubic presentation shader crashes Citron (fine on PC); the Switch defaults to `GOW_SCALER=bilinear`.
 4. VU1 compiled code builds without SIMD on ARM (`VU1C_SIMD` is x86-only in ps2_vu1_compiled.inl); a NEON path would
    help speed.
 5. Memory: 32 MB guest RAM + function table + GS render targets (1024x1024 targets at 2x); fine in title-takeover
