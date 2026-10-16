@@ -2069,10 +2069,15 @@ namespace
         if (const char *watch = std::getenv("GOW_THREAD_WATCH"))
         {
             const double period = std::max(1.0, std::atof(watch));
-            std::thread([&runtime, period] {
+            // the thread object lives for the whole run: libnx (Switch) has no pthread_detach, so detach() throws there
+            new std::thread([&runtime, period] {
                 for (;;)
                 {
                     std::this_thread::sleep_for(std::chrono::duration<double>(period));
+                    // the running context, sampled live (generated code stores pc as it goes; racy, fine for a hang)
+                    const R5900Context &cpu = runtime.cpu();
+                    std::fprintf(stderr, "[gow-threads] live pc=%08x ra=%08x\n", cpu.pc,
+                                 static_cast<uint32_t>(_mm_cvtsi128_si32(cpu.r[31])));
                     const EeKernelSnapshot snapshot = runtime.eeScheduler().snapshot();
                     std::fprintf(stderr, "[gow-threads] watch running=%d cycle=%llu\n", snapshot.runningThreadId,
                                  static_cast<unsigned long long>(snapshot.eeCycle));
@@ -2094,7 +2099,7 @@ namespace
                         std::fprintf(stderr, "[gow-threads]   movie=%x%s\n", movie, text.c_str());
                     }
                 }
-            }).detach();
+            });
         }
         configureGowCdImage();
         gow_gs_replay::configure(runtime.memory(),runtime.gs());
