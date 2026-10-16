@@ -893,3 +893,9 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   savetest ok (129 pages, root intact). Fixes: Load Game menu clock 1.08 -> 1.02, VIF1/VU1 job -25 % (ATHN01D
   +2 fps, still ~40), captain movie buzz (refused audio packets of the previous movie). Open: SEMO08 A/V drift.
 - 10-16: Switch NSP packaging ready (docs/switch.md "Installable NSP"); waiting for the user's prod.keys.
+- 10-16 ~12:50: NSP BUILT with the user's prod.keys: port/switch/nsp/out/0100d0d0600a0000.nsp (8.17 GB, ext agent/switch
+  + VFS case fix 1f462d8). Two fixes on the way: hacBrewPack rejected the 34-digit
+  kek_source lines of the new Lockpick dump (build_nsp.sh filters the keys), and RomFS is case-sensitive (IRX loads
+  failed, no frames). Citron boots the NSP from romfs:/disc-usa, 0 IRX failures, ~11 guest fps (black = Citron).
+  Not in the Switch build yet: merged28 PC fixes (menu clock, VU1 -25 %, captain audio). Next: install with DBI on the
+  real Switch (needs Atmosphère sigpatches).

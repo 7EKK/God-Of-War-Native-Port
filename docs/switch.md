@@ -90,6 +90,12 @@ The PAKs are 4 GB each: the SD card must be exFAT (FAT32 has a 4 GB file limit).
 - `gow.json` (NPDM) is nx-hbloader's `hbl.json` (`hbl.json.ref`) with: program_id fields (newer npdmtool), 39-bit
   address space (type 3), application_type 1, no map_region and no debug_flags (Citron rejects the load with
   error 32 otherwise), hbloader's filesystem_access.
+- RomFS is case-sensitive (Windows and the SD card's FAT are not), and the game opens e.g. `cdrom0:\IOP_MOD\sio2man.irx`
+  while the disc file is `SIO2MAN.IRX`. `PS2Vfs::resolveHostPath` (ext ps2_vfs.cpp) therefore matches `cdrom` paths
+  component by component without case when the exact path is missing (ISO9660 semantics); without it the NSP boots
+  but the IRX loads fail and the game never flips a frame.
+- Newer Lockpick_RCM dumps have 34-digit `*_kek_source` entries and RSA keypairs, which make hacBrewPack abort
+  ("must be 32 hex digits"); `build_nsp.sh` passes it a filtered copy (only 32/64-digit values) and deletes it after.
 - Testing without keys: `make_exefs.sh` writes `exefs/main` + `main.npdm` next to `romfs/`, which Citron loads as an
   unpacked title, but it stops at start-up with libnx InitFail_FS (no control data, "Failed to read title for ROM").
   The real test is the packed NSP in Citron (it uses the same prod.keys) before installing.

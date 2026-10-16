@@ -30,8 +30,14 @@ cp "$DKP/libnx/default_icon.jpg" "$WORK/control/icon_AmericanEnglish.dat"
 ROMFS="$HERE/romfs"
 [ -d "$ROMFS/disc-usa" ] || { echo "error: run make_romfs_links.sh on Windows first" >&2; exit 1; }
 
+# hacBrewPack aborts on any value that is not 32 or 64 hex digits (newer Lockpick dumps have 34-digit *_kek_source
+# entries and RSA keypairs it does not need): give it a filtered copy, deleted after packing.
+KEYS_OK="$WORK/prod.keys"
+tr -d '\r' < "$KEYS" | awk -F' *= *' 'NF==2 && (length($2)==32 || length($2)==64)' > "$KEYS_OK"
+trap 'rm -f "$KEYS_OK"' EXIT
+
 cd "$WORK"
-"$PACK" -k "$KEYS" --titleid "$TITLE" --titlename "God of War" --titlepublisher "Waffle565" \
+"$PACK" -k "$KEYS_OK" --titleid "$TITLE" --titlename "God of War" --titlepublisher "Waffle565" \
     --exefsdir "$WORK/exefs" --romfsdir "$ROMFS" --controldir "$WORK/control" --nologo \
     --tempdir "$WORK/temp" --ncadir "$WORK/nca" --backupdir "$WORK/backup" --nspdir "$HERE/out"
 ls -la "$HERE/out"
