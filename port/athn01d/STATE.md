@@ -32,7 +32,9 @@ machine and showed no gain: only interleaved runs on an idle machine count. Gap 
 (job-done -> gs-irq) ~0.55 ms, EE wake ~0.3 ms, EE list build ~1.5 ms -> ~0.7 ms less in 0x13F730.
 
 ## Gate
-port/athn01d/gate (zones 0-4, baseline port/merged28/gate), port/athn01d/savetest.
+port/athn01d/gate/20261016_153034 (zones 0-4, baseline port/merged28/gate): all ok, 58.7-60 fps, speed 1.00; slot 1
+capture 5 differs (45 > 40) only because Kratos ran elsewhere (camera position), both render correctly.
+port/athn01d/savetest: ok (129 pages changed, root intact).
 
 ## Left
 - Worker: dispatch loop (runNative ~18 % now) and per-program resetScheduler/commitReadyPipelines; block chaining in
