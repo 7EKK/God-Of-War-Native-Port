@@ -905,3 +905,7 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   above it, NEON clampv, one-compare RAM check, CPU 1785 MHz, perf lines + bilinear default, log rotation. Citron boot
   9-11 -> 12-14 guest fps (clock change not visible in Citron). NSP now has name + icon (all languages).
   tools/switch_pull_log.ps1 pulls the log over DBI's MTP. Next: user's log from the console.
+- 10-16 ~15:40: merged agent/athn01d (ext 615b046: XGKICK packets straight to the GS stage, stage queue keeps its
+  memory, pooled DMA chain buffers) into gow-usa-kl and agent/switch. ATHN01D 50 -> 59-60 fps on PC; gate
+  port/athn01d/gate/20261016_153034 zones 0-4 58.7-60, savetest ok (port/athn01d/STATE.md). Main PC runner not
+  rebuilt yet. Next PC limits: VU1 dispatch loop ~18 %, GS stage ~70 % (vertexKick), EE spin a full core.
