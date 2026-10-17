@@ -278,6 +278,14 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   (switch_throttle 0.15, 3 cores, port/swthr6): 42.6 -> 49.2 guest fps (last night's best -> now). NSP v6
   (`port/switch/nsp/out/0100d0d0600a0000.nsp`, v5 kept as `..._v5.nsp`) in Citron, title/menu: 24.0 -> ~33 guest
   fps, no errors; Citron is still GL-thread bound (gsq_wait ~7.3 s per 5 s).
+- EE wait loops (agent/sw-ee2 d88bf4d + runner gow_overrides.cpp, tracked copy port/overrides-usa): the VBlank
+  wait (0x17A1D0) and vid::WaitForDMAComplete (0x17A2A0) count down `addiu $v0,-1; nop x4; bnez $v0`, one 7-cycle
+  checkpoint per iteration, so the host core spun for as long as the guest waited. Native copies of the two
+  functions (the recompiler's output plus one call per back edge, entry points and every resume PC registered) take
+  the remaining quiet iterations in one step (`EeScheduler::advanceQuietRepeated`: same clock, timer and IOP state
+  as that many single checkpoints); the EE then reaches the pacing or VBlank deadline at once and sleeps there.
+  PC EE time -16 %; Switch-power model EE busy 3419 -> 2518 ms per 5 s (fps there limited by the VU1 worker). On
+  the console the GS frontend shares core 1 with the EE and gets that time. Gate port/swee2/gate/20261017_143505.
 
 ### Console logs (`log switch/`, from the user)
 - NSP v2 (`log switch/log.txt`, 2026-10-17): CPU clock raised to 1785 MHz, nouveau NV120 GL 4.3, threads pinned
