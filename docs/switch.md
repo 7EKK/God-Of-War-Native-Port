@@ -272,9 +272,15 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   `memcmp`: the structs have padding bytes whose values depend on how each copy was made, so equal states could
   compare unequal, which splits GL batches (the gs fork saw 4-6x more batches from a harmless code change) and can
   differ per compiler, the Switch's included.
+- Combined (agent/switch c558c21, gate port/swv6/gate/20261017_130530 zones 0-4 60 fps, speed 1.00, savetest ok):
+  gameplay start GSWorker 48 %, GameThread 30 %, GSThread 31 %, GSStage 23 % of a PC core (morning: 51/38/38/41);
+  the VIF1/VU1 worker is now clearly the limit on PC (its ARM-only gains do not show there). Switch-power model
+  (switch_throttle 0.15, 3 cores, port/swthr6): 42.6 -> 49.2 guest fps (last night's best -> now). NSP v6
+  (`port/switch/nsp/out/0100d0d0600a0000.nsp`, v5 kept as `..._v5.nsp`) in Citron, title/menu: 24.0 -> ~33 guest
+  fps, no errors; Citron is still GL-thread bound (gsq_wait ~7.3 s per 5 s).
 
 ## Open issues (priority)
-1. Test NSP v5 on the real Switch and pull its log (tools/switch_pull_log.ps1): picture, speed lines, sound.
+1. Test NSP v6 on the real Switch and pull its log (tools/switch_pull_log.ps1): picture, speed lines, sound.
 2. Speed: v3 was unplayable on the console. The CPU model (switch_throttle) already gives ~35 fps for v3, so the
    console's limit is probably Switch-only (nouveau GL driver, presentation, RomFS reads); the v5 log decides what
    to work on. On PC the busiest Switch-layout thread is now the VIF1/VU1 worker (~59 % of a PC core at 60 fps).
