@@ -227,6 +227,21 @@ below ~15 % of a PC core at 60 fps on PC.
 - Note: for the gdb stub, `use_gdbstub\default=false` must be set as well as `use_gdbstub=true` (Citron rewrites the
   file on exit and resets the default flag).
 
+### Frame profile after the night fixes (2026-10-17 morning)
+PC build of agent/switch 9b0e8e0, Switch layout, user's save, gameplay (port/swprof1, port/swprof2): GSWorker 51 %,
+GSStage 41 %, GameThread 38 %, GSThread 38 % of a PC core at 60 fps (estimate ~18 fps on the Switch). Share of each
+thread's busy time (tools/sample_prof.py --dll-exports, port/swprof2.samples):
+- GSWorker (VIF1/VU1): native blocks 38 %, `runNative` 15 %, VIF unpack 13 %, `resetScheduler` 4 %,
+  `commitReadyPipelines` 3.6 %, thread wakeups 3 %, `processVIF1Data` 2.6 %, block timing 2.4 %, `fesetround` /
+  `fegetround` 1.9 %: about 30 % is overhead around the blocks.
+- GameThread (EE): generated code 47 %, the out-of-line `PS2Runtime::eeCheckpointDue` call 14.7 %, guest dispatch
+  3.5 %, small helpers the generated code calls out of line (Ps2ExtractEpi64/32, Ps2FastRead32, Ps2SetGprLow64Bits)
+  ~5 %.
+- GSStage (GS frontend): vertexKick 28 %, writeRegisterPacked 18 %, processGIFPacket 18 %, diag/perf checks in the
+  hot path ~3.5 %; on PC the thread also spins in the condition variable while waiting for work.
+- GSThread (GL): NVIDIA present ~22 % (PC only), `viewToOwner` 11.7 %, `submitRun` 10.5 %, `tryShuffle` 4 %.
+Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
+
 ## Open issues (priority)
 1. Test NSP v5 on the real Switch and pull its log (tools/switch_pull_log.ps1): picture, speed lines, sound.
 2. Speed: v3 was unplayable on the console. The CPU model (switch_throttle) already gives ~35 fps for v3, so the
