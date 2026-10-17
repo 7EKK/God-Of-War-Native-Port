@@ -279,6 +279,15 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   (`port/switch/nsp/out/0100d0d0600a0000.nsp`, v5 kept as `..._v5.nsp`) in Citron, title/menu: 24.0 -> ~33 guest
   fps, no errors; Citron is still GL-thread bound (gsq_wait ~7.3 s per 5 s).
 
+### Console logs (`log switch/`, from the user)
+- NSP v2 (`log switch/log.txt`, 2026-10-17): CPU clock raised to 1785 MHz, nouveau NV120 GL 4.3, threads pinned
+  (GSWorker core 2, GSStage core 1 with boost, others core 0). The game advanced one frame every ~5.6 s
+  (`gow-speed` speed 0.012, guest_flip_hz 0.18): the EE thread was busy the whole time (ee_ms ~5470 per 5.6 s
+  window, the vid::WaitForDMAComplete spin), VIF1/VU1 ~40 ms and GS ~8 ms per window, the GS consumers waiting
+  (gsq_wait ~10.9 s = two threads idle), ~13.9k draws in 68 batches per frame. The user saw only one core busy:
+  the spinning EE. A pipeline that idle while the EE spins points at a wait/wake problem on Horizon, not raw CPU
+  speed; the v6 log decides whether it is still there.
+
 ## Open issues (priority)
 1. Test NSP v6 on the real Switch and pull its log (tools/switch_pull_log.ps1): picture, speed lines, sound.
 2. Speed: v3 was unplayable on the console. The CPU model (switch_throttle) already gives ~35 fps for v3, so the
