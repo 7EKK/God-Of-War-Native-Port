@@ -315,9 +315,23 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   (gsq_wait ~10.9 s = two threads idle), ~13.9k draws in 68 batches per frame. The user saw only one core busy:
   the spinning EE. A pipeline that idle while the EE spins points at a wait/wake problem on Horizon, not raw CPU
   speed; the v6 log decides whether it is still there.
+- NSP v8 (same file, 2026-10-17 evening): still ~1 frame per 6 s (user: "10 frames per minute"), but the EE no
+  longer spins: ee_ms ~300-480 and guest_wait_ms ~5000-6700 per 5.7-7.6 s window (asleep), VIF1/VU1 ~30-60 ms, GS
+  frontend ~5 ms, gsq_wait ~11-15 s (both GS producers blocked on the GL thread). Per frame the GL thread had only
+  ~120-300 GL draws, 44-89 barriers, ~5 MB uploads. So the whole pipeline waits on the GL thread (core 0), whose
+  time no counter covered; the v2 spin was a symptom. Citron's numbers say nothing here: its shader recompiler
+  rejects nouveau's shaders, so it never really renders. NSP v9 adds the `[gs-gl]` line (below) and renders at 1x.
+- `[gs-gl]` (GOW_PERF_DIAG=1, every 5 s, gs_threaded_backend.cpp): GL-thread busy time, time waiting for the
+  Switch driver lock, and time/count per queued op kind (`vrun` = triangle runs, `clut` = CLUT loads, which can read
+  back from a render target, `present` = composing the display and its RAM readback, `upload`, `texflush`, ...).
+  On PC (5 s at 60 fps): busy 1.49 s, vrun 1.12 s, clut 0.23 s/18000, present 0.04 s/300, lock wait 0.3 ms.
+- Render scale on the Switch: `PS2X_GS_HW_SCALE=1` by default (ps2_switch_runtime.cpp; env.txt overrides). The
+  console shows 720p; the GS draws at the PS2's 640x448 and the presentation scaler (bilinear) stretches it to
+  the window, a quarter of the 2x fill and readback.
 
 ## Open issues (priority)
-1. Test NSP v8 on the real Switch and pull its log (tools/switch_pull_log.ps1): picture, speed lines, sound.
+1. Test NSP v9 on the real Switch and pull its log (tools/switch_pull_log.ps1): the `[gs-gl]` lines say what the
+   GL thread spends ~6 s per frame on.
 2. Speed: v3 was unplayable on the console. The CPU model (switch_throttle) already gives ~35 fps for v3, so the
    console's limit is probably Switch-only (nouveau GL driver, presentation, RomFS reads); the v5 log decides what
    to work on. On PC the busiest Switch-layout thread is now the VIF1/VU1 worker (~59 % of a PC core at 60 fps).
