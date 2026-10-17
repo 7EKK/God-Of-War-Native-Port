@@ -195,6 +195,13 @@ below ~15 % of a PC core at 60 fps on PC.
   slice end is due; the full checkpoint runs at exactly the same calls as before (timer/IOP cycles are handed over
   there or at any EE timer register access). The per-checkpoint bookkeeping was ~28 % of the EE thread.
   GameThread 66 -> 39 % / 56 -> 30 %. Gate port/swfast/gate/20261017_011443 zones 0-4 60 fps speed 1.00, savetest ok.
+- GS draw-state serial: `GS::m_stateSerial` is bumped by every GS register write except vertex data (RGBAQ, ST, UV,
+  FOG, XYZ*), which is where all draw state comes from; `buildDrawBatch` rebuilds the ~200-byte `GSDrawState` only
+  when it changed, and `GSPrimitiveBatch::stateSerial` lets the GL-thread queue (`GSThreadedBackend::Enqueue`) and
+  `GSHwBackend::submit` skip their whole-state `memcmp` for every triangle of a strip (equal serial = equal state;
+  serial 0 = compare as before). The shuffle path's per-8x8-block `unordered_map` lookup is a 64-entry array.
+  GSStage 54 -> 49 %, GSThread 61 -> 46 % (heavy window; runs vary by a few points). Replay captures made before
+  this change no longer load (the header's batch size differs).
 
 ## Open issues (priority)
 1. Test on the real Switch: does the picture render (Citron cannot show it), speed, sound.
