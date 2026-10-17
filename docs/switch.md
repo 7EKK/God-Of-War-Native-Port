@@ -301,6 +301,11 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   port/swvu2/gate/20261017_152457. Measured: ~8.1 M blocks/s at 9 pairs, the next block's slot load is the hottest
   instruction of `runNative`; successor prefetch gave nothing. Left: block chaining in the generator (needs the
   pregenerated vu1n_generado regenerated), smaller per-block history entries.
+- NSP v7 (agent/switch d88bf4d: v6 + EE wait loops) and NSP v8 (agent/switch 42d1f08: + GL batching + VU1
+  inline retire; `port/switch/nsp/out/0100d0d0600a0000.nsp`, older ones kept as `..._vN.nsp`). Combined PC gate
+  of the EE + GL changes port/swv8/gate/20261017_154816 (zones 0-4 60 fps, speed 1.00, savetest ok); the VU1 change
+  was gated on its own (port/swvu2). v8 in Citron (title/menu): EE busy 2870 -> 1120 ms per 5 s (the wait loops
+  no longer spin on ARM either), ~31 guest fps (Citron stays GL-thread bound, gsq_wait ~7.5 s per 5 s), no errors.
 
 ### Console logs (`log switch/`, from the user)
 - NSP v2 (`log switch/log.txt`, 2026-10-17): CPU clock raised to 1785 MHz, nouveau NV120 GL 4.3, threads pinned
@@ -312,7 +317,7 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   speed; the v6 log decides whether it is still there.
 
 ## Open issues (priority)
-1. Test NSP v6 on the real Switch and pull its log (tools/switch_pull_log.ps1): picture, speed lines, sound.
+1. Test NSP v8 on the real Switch and pull its log (tools/switch_pull_log.ps1): picture, speed lines, sound.
 2. Speed: v3 was unplayable on the console. The CPU model (switch_throttle) already gives ~35 fps for v3, so the
    console's limit is probably Switch-only (nouveau GL driver, presentation, RomFS reads); the v5 log decides what
    to work on. On PC the busiest Switch-layout thread is now the VIF1/VU1 worker (~59 % of a PC core at 60 fps).
