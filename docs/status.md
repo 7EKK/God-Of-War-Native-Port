@@ -924,3 +924,9 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   (ext/PS2Recomp-kl-switch/out/build-pc) + tools/thread_cpu.py: busiest thread 54-66 % of a PC core at 60 fps -> ~15 fps
   on the Switch (docs/switch.md "Per-thread budget"). EE checkpoint fast path committed (agent/switch cba2dfc, EE 66 ->
   39 %, gate ok). Next: GS frontend per-triangle state build/compare (state serial), then VU1 worker, GL thread.
+- 10-17 ~03:45: agent/switch now 09ea6cb = EE checkpoint fast path + GS draw-state serial + GS triangle runs, each
+  gated (port/swfast, port/swser, port/swrun: zones 0-4 60 fps speed 1.00, savetest ok). PC build of the Switch branch
+  in gameplay: GameThread 66 -> 37 %, GSStage 54 -> 45 %, GSThread 54-61 -> 44 %, GSWorker (VIF1/VU1) unchanged ~59 %
+  (now the busiest). switch_throttle (0.15, 3 cores): ~35-37 guest fps before -> ~42 after; but that model already
+  gave ~35 fps for the build the user found unplayable, so the console's limit is likely Switch-only (nouveau GL
+  driver CPU cost, presentation, SD/RomFS reads): the console log decides. Building NSP v4 with these changes.
