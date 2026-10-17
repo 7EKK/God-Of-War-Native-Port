@@ -942,3 +942,12 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   console log (`log switch/log.txt`): one frame per 5.6 s with the EE spinning in vid::WaitForDMAComplete and the
   pipeline idle; the wait loops now skip quiet iterations (EE busy in Citron 2870 -> 1120 ms per 5 s). NSP v8 built;
   next: the v8 console log. Details in docs/switch.md.
+
+- 2026-10-17 evening / 10-18 night: console logs v8 and v9 show the Switch is GPU-bound, not CPU-bound (EE asleep,
+  the GS producers waiting on the GL thread, the GL thread ~5.9 s of 6 s inside GL calls that wait for the GPU; user:
+  GPU 100 %, CPU 1-2 %, ~0.7 frames/s; Citron says nothing about this, it never really renders). Added: render
+  scale 1x on the Switch, [gs-gl] GL-thread time per op, [gs-gpu] GPU time per draw path (TIME_ELAPSED queries),
+  [gpu-bisect] 12 s phases with one GPU feature off. Forks: zero-copy shared-texture presentation on the Switch
+  (no per-frame readback, host paced by sleep) and specialized draw program variants; merged into ext agent/switch,
+  combined gate port/swv12 ok (zones 0-4 60 fps speed 1.00, savetest ok), Citron v12 36 fps, 34 variants clean.
+  NSP v12 in Z:\Games for the user's morning console run (play ~4 min); docs/switch.md has the details.
