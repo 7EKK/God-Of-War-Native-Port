@@ -241,6 +241,13 @@ thread's busy time (tools/sample_prof.py --dll-exports, port/swprof2.samples):
   hot path ~3.5 %; on PC the thread also spins in the condition variable while waiting for work.
 - GSThread (GL): NVIDIA present ~22 % (PC only), `viewToOwner` 11.7 %, `submitRun` 10.5 %, `tryShuffle` 4 %.
 Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
+- EE (agent/sw-ee, merged into agent/switch 7ffd30a): `EeCheckpointClock` (include/runtime/ee_checkpoint_clock.h)
+  holds the guest clock and the quiet-cycle state; `PS2Runtime` owns it and `EeScheduler` drives it by reference, so
+  `PS2Runtime::eeCheckpointDue` is inline in the generated code (the full checkpoint stays out of line, at the same
+  calls). The small helpers the generated code calls are `PS2_FORCEINLINE` (include/runtime/ps2_inline.h);
+  `isSpecialAddress` tests main RAM inline; `dispatchGuestBranch` looks the target up once. GameThread 38 -> 30 %.
+  Gates port/swee/gate/20261017_091109 and 20261017_102731 (zones 0-4 60 fps, speed 1.00), savetest ok. Left: the
+  game's own busy-wait in vid::WaitForDMAComplete (~6 % of EE), per-instruction pc stores in the recompiler output.
 
 ## Open issues (priority)
 1. Test NSP v5 on the real Switch and pull its log (tools/switch_pull_log.ps1): picture, speed lines, sound.
