@@ -211,10 +211,16 @@ below ~15 % of a PC core at 60 fps on PC.
   one `VerticesRun` op; `GSHwBackend::submitRun` sends the first primitive through `submit` (all state decisions)
   and, for triangles, only adds the vertices of the rest. GSStage 49 -> 45 %, GSThread 46 -> 44 % (small: what
   is left in GSStage is the per-vertex GIF register decoding).
-- GL uniform cache: `GSHwBackend` keeps the last value of each uniform of the main draw program (only `draw()` sets
-  them; a program keeps its uniforms across `UseProgram`) and skips the ~40 per-batch `glUniform*` calls that set an
-  unchanged value. Mesa validates each call and re-uploads constants, so this is aimed at the GL thread on the
-  Switch (nouveau) and in Citron, where the GL thread is the limit; on PC (NVIDIA driver) it barely shows.
+- Draw program variants (agent/sw-shader, merged 2026-10-18; `gs_hw_backend.cpp` `useDrawProgram`): the GS draw
+  shader is one source whose branches depend on uniforms (texture path, shader blend, Z alias, destination alpha
+  test, alpha-test pass mode, Tfx/Tcc/Fst/Iip); on the Tegra every path paid for the registers of all the others.
+  `draw()` now records its uniform values (the `locXxx` names are ids), and before each draw call binds the variant
+  for those values: the same source with them `#define`d to constants, with the dual-source second output only
+  when the blend reads source-1 alpha. Variants are built on first use (~30 ms each with Mesa nouveau;
+  `[gs-hw] draw variant #N key=...` with GOW_GS_HW_STATS); each remembers the uniform values it was sent and only
+  gets changes (this replaced the earlier single-program uniform cache: Mesa validates every glUniform call).
+  `GOW_GS_HW_UBER=1` keeps the single uber program, which also stands in for a variant that fails to build. PC gate
+  pixel-identical (`port/swshader/gate/20261018_000242`); Citron's nouveau compiles the 19 early variants cleanly.
 - NSP v4 (ext agent/switch 09ea6cb: EE fast path + state serial + triangle runs, 2026-10-17 04:15,
   `port/switch/nsp/out/0100d0d0600a0000.nsp`; v3 kept as `..._v3.nsp`): Citron title/menu 24.5-25 guest fps
   (v3: 16.3-16.6), no errors; Citron is still GL-thread bound (gsq_wait_ms ~6.3 s per 5 s).
