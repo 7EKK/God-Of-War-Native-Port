@@ -248,6 +248,17 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   `isSpecialAddress` tests main RAM inline; `dispatchGuestBranch` looks the target up once. GameThread 38 -> 30 %.
   Gates port/swee/gate/20261017_091109 and 20261017_102731 (zones 0-4 60 fps, speed 1.00), savetest ok. Left: the
   game's own busy-wait in vid::WaitForDMAComplete (~6 % of EE), per-instruction pc stores in the recompiler output.
+- VIF1/VU1 worker (agent/sw-vu, merged 170f843): VIF unpack builds and stores each vector in one 128-bit op
+  (randomised old-vs-new test: 0 differences; 2.4x faster on the hot formats); MSCAL reset clears only pending queue
+  entries; the VU float mode is set by reading/writing MXCSR/FPCR directly (std::fesetround and sse2neon's
+  _mm_getcsr cost library calls, on ARM fegetround plus FPCR reads); the dispatch loop keeps its per-block counters
+  in registers; XGKICK hands a non-wrapping packet straight from VU memory (one copy less of every PATH1 packet).
+  ARM64 only: MAC flags with one NEON ADDV instead of three sse2neon movemasks, madd overflow with one UMAXV, operand
+  normalisation with two BSL, FTOI as FCVTZS (lane models match the x86 code; compiled with devkitA64, not yet run).
+  Bit-exact: 4000 recorded VU1 runs replay with 0 differences (GIF packets included). Worker busy share 35 -> 32 %
+  of samples (unpack 4.7 -> 2.4 %, reset 1.4 -> 0.4 %, rounding calls gone). Gates port/swvu/gate/* (zones 0-4
+  60 fps, speed 1.00, savetest ok). Left: block dispatch itself (~8 M blocks/s, ~40 cycles each; needs block
+  chaining in vu1n_gen.py), slot re-setup on microprogram swaps (~0.8 %), readiness arrays cleared every MSCAL.
 
 ## Open issues (priority)
 1. Test NSP v5 on the real Switch and pull its log (tools/switch_pull_log.ps1): picture, speed lines, sound.
