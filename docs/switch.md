@@ -344,6 +344,17 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   no-shuffle, no-draw (only clears and present), no-readback (the RAM-frame present skips its glReadPixels). The
   picture is wrong in the "off" phases. Each phase end prints mode, presents per second and GPU ms per second;
   compare an "off" phase with the baseline phases around it. A full cycle is 168 s (play ~4 min).
+- Shared-texture presentation on the Switch (agent/sw-share, merged 66651cb): the GS renderer's EGL context shares
+  objects with raylib/SDL's context (captured on the main thread by `GSSharedPresent::CaptureHostContext`), so
+  Present copies the composed frame into a shared, fenced texture slot (the same slot/fence/Acquire code as WGL on
+  Windows) instead of glReadPixels + UpdateTexture; log lines "shared with the host window" / "host mode: shared
+  texture". RAM frames stay the fallback (sharing failed, or env.txt `PS2X_GS_DIRECT_PRESENT=0`). The host thread
+  then never waits for the GS thread, and Horizon does not time-slice threads of one priority on core 0, so the
+  window has no vsync swap interval (the vsync wait happened inside the first GL call, under the GL driver lock):
+  `renderFrame` paces at 60 Hz with a sleep after the lock is released, and a pass with no newer published frame
+  only polls input and sleeps 2 ms (an unfinished frame is retried every 8 ms). Citron: 36 game fps, GL-thread lock
+  wait 0.5 s per 5 s (RAM frames: 34 fps, 0.96 s). Untested on real nouveau: tearing or a black picture means
+  `PS2X_GS_DIRECT_PRESENT=0`.
 - Render scale on the Switch: `PS2X_GS_HW_SCALE=1` by default (ps2_switch_runtime.cpp; env.txt overrides). The
   console shows 720p; the GS draws at the PS2's 640x448 and the presentation scaler (bilinear) stretches it to
   the window, a quarter of the 2x fill and readback.
