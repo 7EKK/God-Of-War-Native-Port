@@ -930,3 +930,7 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   (now the busiest). switch_throttle (0.15, 3 cores): ~35-37 guest fps before -> ~42 after; but that model already
   gave ~35 fps for the build the user found unplayable, so the console's limit is likely Switch-only (nouveau GL
   driver CPU cost, presentation, SD/RomFS reads): the console log decides. Building NSP v4 with these changes.
+- 10-17 ~05:20: GL uniform cache committed (agent/switch, gate port/swuni ok). NSP v5 built (= v4 + uniform cache;
+  v3/v4 kept as _v3/_v4.nsp). Citron: v3 16.5 -> v4 24.7 -> v5 24.0 guest fps (title/menu). gdb profile of v5 in
+  Citron: VU1 worker saturated, GL thread busy with CPU texture decodes, GS frontend no longer a limit. Loop stopped:
+  next step is the user's v5 console log.

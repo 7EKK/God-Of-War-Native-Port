@@ -218,11 +218,20 @@ below ~15 % of a PC core at 60 fps on PC.
 - NSP v4 (ext agent/switch 09ea6cb: EE fast path + state serial + triangle runs, 2026-10-17 04:15,
   `port/switch/nsp/out/0100d0d0600a0000.nsp`; v3 kept as `..._v3.nsp`): Citron title/menu 24.5-25 guest fps
   (v3: 16.3-16.6), no errors; Citron is still GL-thread bound (gsq_wait_ms ~6.3 s per 5 s).
+- NSP v5 (agent/switch + GL uniform cache, 2026-10-17 04:51, `port/switch/nsp/out/0100d0d0600a0000.nsp`; v4 kept as
+  `..._v4.nsp`): Citron 23.7-24.2 guest fps (same as v4). gdb profile of v5 in Citron (`port/switch/gdbprof_v5.txt`,
+  150 samples, stub on so only proportions count): VIF1/VU1 worker busy 146/150 (40 % of its samples in `clampv`'s
+  FMAXNM, likely Citron's JIT emulating it; one instruction on the A57), EE 149/150 but mostly the checkpoint spin of
+  vid::WaitForDMAComplete, GL thread 106/150 (CPU texture decodes: applyTexa, readColorRun), presentation 52/150
+  (buffer-queue IPC), GS frontend 17/150 (was ~60 % in the 10-16 profile).
+- Note: for the gdb stub, `use_gdbstub\default=false` must be set as well as `use_gdbstub=true` (Citron rewrites the
+  file on exit and resets the default flag).
 
 ## Open issues (priority)
-1. Test on the real Switch: does the picture render (Citron cannot show it), speed, sound.
-2. Speed: unplayable on the console (user 2026-10-16, NSP v3). Profile the throttled PC run (above) to find the
-   threads that limit it, and read the console log (tools/switch_pull_log.ps1) for the real numbers.
+1. Test NSP v5 on the real Switch and pull its log (tools/switch_pull_log.ps1): picture, speed lines, sound.
+2. Speed: v3 was unplayable on the console. The CPU model (switch_throttle) already gives ~35 fps for v3, so the
+   console's limit is probably Switch-only (nouveau GL driver, presentation, RomFS reads); the v5 log decides what
+   to work on. On PC the busiest Switch-layout thread is now the VIF1/VU1 worker (~59 % of a PC core at 60 fps).
 3. The bicubic presentation shader crashes Citron (fine on PC); the Switch defaults to `GOW_SCALER=bilinear`.
 4. VU1 compiled code builds without SIMD on ARM (`VU1C_SIMD` is x86-only in ps2_vu1_compiled.inl); a NEON path would
    help speed.

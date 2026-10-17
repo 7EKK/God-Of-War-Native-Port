@@ -1,0 +1,40 @@
+thread 86: running 150/150  stack: _waitObjectsImpl, _waitLoop, waitObjects, waitSingle
+      149 svcWaitSynchronization
+        1 svcSendSyncRequest
+thread 80: running 150/150  stack: _waitObjectsImpl, _waitLoop, waitObjects, waitSingle
+      150 svcWaitSynchronization
+thread 87: running 149/150  stack: EeScheduler::run, EeScheduler::checkpointDueFast, PS2Runtime::eeCheckpointDue, std::atomic<bool>::load
+       88 std::__atomic_base<bool>::load
+       22 sub_0017A2A0_0x17a2a0
+        3 PS2Runtime::dispatchGuestBranch
+        3 ps2x::iop::detail::SoundEngine::stepVoice
+        3 Ps2IsSpecialAddress
+        2 Ps2FastWrite128
+thread 81: running 146/150  stack: operator(), VU1Interpreter::run, VU1Interpreter::runNative, vu1n::clampv
+       60 vmaxnmq_f32
+       13 vu1n::qnorm
+       13 VU1Interpreter::runNative
+       12 VU1NativeAccess::finishBlockTiming
+        8 vandq_s32
+        5 vminnmq_f32
+thread 82: running 106/150  stack: GSHwBackend::Impl::flushPending, GSHwBackend::Impl::draw, GSHwBackend::Impl::textureFor, GSHwBackend::Impl::decodeDirect
+       15 GSCpuInternal::applyTexa
+       14 GSMem::(anonymous namespace)::readColorRunT<(GSMem::PixelStorageMode)1
+       13 svcWaitSynchronization
+        7 memcpy
+        6 svcSendSyncRequest
+        6 svcSignalProcessWideKey
+thread 77: running 52/150  stack: serviceDispatchImpl, binderTransactParcel, parcelTransact, bqDequeueBuffer
+       26 svcSendSyncRequest
+        8 memset
+        7 memcpy
+        6 nvc0_bufctx_fence
+        2 bo_map_lookup
+        1 armDCacheFlush_L0
+thread 84: running 17/150  stack: (anonymous namespace)::loop, execute_native_thread_routine, std::function<void, __thread_entry
+        6 GS::vertexKick
+        3 memcpy
+        2 GS::processGIFPacket
+        2 svcWaitProcessWideKeyAtomic
+        1 svcSignalProcessWideKey
+        1 std::__atomic_base<unsigned long>::fetch_add
