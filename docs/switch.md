@@ -211,6 +211,13 @@ below ~15 % of a PC core at 60 fps on PC.
   one `VerticesRun` op; `GSHwBackend::submitRun` sends the first primitive through `submit` (all state decisions)
   and, for triangles, only adds the vertices of the rest. GSStage 49 -> 45 %, GSThread 46 -> 44 % (small: what
   is left in GSStage is the per-vertex GIF register decoding).
+- GL uniform cache: `GSHwBackend` keeps the last value of each uniform of the main draw program (only `draw()` sets
+  them; a program keeps its uniforms across `UseProgram`) and skips the ~40 per-batch `glUniform*` calls that set an
+  unchanged value. Mesa validates each call and re-uploads constants, so this is aimed at the GL thread on the
+  Switch (nouveau) and in Citron, where the GL thread is the limit; on PC (NVIDIA driver) it barely shows.
+- NSP v4 (ext agent/switch 09ea6cb: EE fast path + state serial + triangle runs, 2026-10-17 04:15,
+  `port/switch/nsp/out/0100d0d0600a0000.nsp`; v3 kept as `..._v3.nsp`): Citron title/menu 24.5-25 guest fps
+  (v3: 16.3-16.6), no errors; Citron is still GL-thread bound (gsq_wait_ms ~6.3 s per 5 s).
 
 ## Open issues (priority)
 1. Test on the real Switch: does the picture render (Citron cannot show it), speed, sound.
