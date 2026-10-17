@@ -325,13 +325,26 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   Switch driver lock, and time/count per queued op kind (`vrun` = triangle runs, `clut` = CLUT loads, which can read
   back from a render target, `present` = composing the display and its RAM readback, `upload`, `texflush`, ...).
   On PC (5 s at 60 fps): busy 1.49 s, vrun 1.12 s, clut 0.23 s/18000, present 0.04 s/300, lock wait 0.3 ms.
+- NSP v9 (`log switch/log (2).txt`, 2026-10-17 night): scale 1.00, a little faster (guest_flip 0.7-0.8 Hz, was
+  0.15) but still unplayable. `[gs-gl]`: the GL thread is busy ~5.9 s of every 6 s window, lock wait ~10 ms, CLUT
+  loads ~20 ms; the time sits in `vrun` (draws) and `call` (present/latch) in turns, i.e. whichever GL call
+  waits for the GPU. The user saw GPU 100 %, CPU 1-2 %: the console is GPU-bound on ~100 draws per frame at
+  640x448, so some shader path is far too expensive on the Tegra. NSP v10 adds `[gs-gpu]` (below).
+- `[gs-gpu]` (GOW_GS_GPU_TIME=1, on by default on the Switch; gs_hw_backend.cpp): GL_TIME_ELAPSED queries around
+  each draw batch, shuffle flush, CLUT readback, clear and present, read back without waiting, summed per kind
+  every 5 s: `kind=ms/count/Kpx` (Kpx = host pixels of the batches' bounding boxes, an upper bound). Draw kinds
+  carry their shader path: T textured, I indexed (palette lookup in the shader), R render target as texture,
+  X reinterpreted fetch, Z depth source, D destination alpha test, B shader blend (reads the target), A Z in
+  colour memory, V barrier runs (shadow volumes), F extra fail pass, L linear filter. A span includes GPU idle
+  time inside it, so on a CPU-bound PC the sum is close to the window; on the GPU-bound console it is real GPU
+  time. PC at 1x (5 s, 60 fps): draw:TIFL 1.95 s, present 0.99 s, shuffle 0.85 s, draw:TBV 0.54 s.
 - Render scale on the Switch: `PS2X_GS_HW_SCALE=1` by default (ps2_switch_runtime.cpp; env.txt overrides). The
   console shows 720p; the GS draws at the PS2's 640x448 and the presentation scaler (bilinear) stretches it to
   the window, a quarter of the 2x fill and readback.
 
 ## Open issues (priority)
-1. Test NSP v9 on the real Switch and pull its log (tools/switch_pull_log.ps1): the `[gs-gl]` lines say what the
-   GL thread spends ~6 s per frame on.
+1. Test NSP v10 on the real Switch and pull its log (tools/switch_pull_log.ps1): the `[gs-gpu]` lines say which
+   draw path keeps the GPU at 100 %.
 2. Speed: v3 was unplayable on the console. The CPU model (switch_throttle) already gives ~35 fps for v3, so the
    console's limit is probably Switch-only (nouveau GL driver, presentation, RomFS reads); the v5 log decides what
    to work on. On PC the busiest Switch-layout thread is now the VIF1/VU1 worker (~59 % of a PC core at 60 fps).
