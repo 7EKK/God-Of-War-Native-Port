@@ -294,6 +294,13 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   BufferData per batch, ~31k); vertex colour is four bytes (64 -> 52 bytes per vertex). `GOW_GS_HW_STATS` also
   prints glDraws, barriers, uploadKB, orphans. Gate port/swgs2/gate/20261017_150200 (no capture differences).
   Left: ~535 barriers per frame, ~400 MB/s vertex upload (index buffer for strips would cut it ~3x).
+- VU1 dispatch (agent/sw-vu2 9d51673): after a native block reaches `m_nextCommitCycle`,
+  `VU1NativeAccess::commitDue` retires the due FDIV/EFU entries inline (native blocks only queue those) with the
+  same effects and next commit cycle; other queues still go through `commitReadyPipelines`. Worker busy time -5 %
+  (commitReadyPipelines 5.8 % -> 0). 4000 recorded VU1 runs replay with 0 differences; gate
+  port/swvu2/gate/20261017_152457. Measured: ~8.1 M blocks/s at 9 pairs, the next block's slot load is the hottest
+  instruction of `runNative`; successor prefetch gave nothing. Left: block chaining in the generator (needs the
+  pregenerated vu1n_generado regenerated), smaller per-block history entries.
 
 ### Console logs (`log switch/`, from the user)
 - NSP v2 (`log switch/log.txt`, 2026-10-17): CPU clock raised to 1785 MHz, nouveau NV120 GL 4.3, threads pinned
