@@ -202,6 +202,15 @@ below ~15 % of a PC core at 60 fps on PC.
   serial 0 = compare as before). The shuffle path's per-8x8-block `unordered_map` lookup is a 64-entry array.
   GSStage 54 -> 49 %, GSThread 61 -> 46 % (heavy window; runs vary by a few points). Replay captures made before
   this change no longer load (the header's batch size differs).
+- Triangle runs: `GS::vertexKick` collects the primitives drawn with one state (`GSPrimitiveVerts`: vertices + serial;
+  `GSPrimitiveBatch` = that + `GSDrawState`) and hands them over in one `GSRasterBackend::SubmitRun` (default: one
+  `Submit` each). The run is flushed before every register write that can change state (which also precedes
+  LoadClut, BeginTransfer, TEXFLUSH and FINISH), before image data, and when each locked entry point returns
+  (`FlushRunAtExit` in processGIFPacket, processNativePackedGIFPacket, writeRegister), so it is empty whenever
+  m_stateMutex is free and the backend sees the same calls in the same order. The GL-thread queue carries a run as
+  one `VerticesRun` op; `GSHwBackend::submitRun` sends the first primitive through `submit` (all state decisions)
+  and, for triangles, only adds the vertices of the rest. GSStage 49 -> 45 %, GSThread 46 -> 44 % (small: what
+  is left in GSStage is the per-vertex GIF register decoding).
 
 ## Open issues (priority)
 1. Test on the real Switch: does the picture render (Citron cannot show it), speed, sound.
