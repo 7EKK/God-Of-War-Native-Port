@@ -314,6 +314,8 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   no longer spin on ARM either), ~31 guest fps (Citron stays GL-thread bound, gsq_wait ~7.5 s per 5 s), no errors.
 
 ### Console logs (`log switch/`, from the user)
+- `python -I tools/switch_log_summary.py "log switch/<file>"` prints the speed windows, the GL-thread time per op,
+  the GPU time per draw path and the bisect phases against their baselines.
 - NSP v2 (`log switch/log.txt`, 2026-10-17): CPU clock raised to 1785 MHz, nouveau NV120 GL 4.3, threads pinned
   (GSWorker core 2, GSStage core 1 with boost, others core 0). The game advanced one frame every ~5.6 s
   (`gow-speed` speed 0.012, guest_flip_hz 0.18): the EE thread was busy the whole time (ee_ms ~5470 per 5.6 s
