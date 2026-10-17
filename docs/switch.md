@@ -259,6 +259,19 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   of samples (unpack 4.7 -> 2.4 %, reset 1.4 -> 0.4 %, rounding calls gone). Gates port/swvu/gate/* (zones 0-4
   60 fps, speed 1.00, savetest ok). Left: block dispatch itself (~8 M blocks/s, ~40 cycles each; needs block
   chaining in vu1n_gen.py), slot re-setup on microprogram swaps (~0.8 %), readiness arrays cleared every MSCAL.
+- GS frontend + GL thread (agent/sw-gs, merged into agent/switch): the VIF1/VU1 worker woke the GS stage for almost
+  every GIF packet (~12k thread switches/s, 14 % of a core in kernel time); a sleeping stage is now woken once 64 KB
+  are queued, at the end of each worker job (`ps2_gs_stage::publish`) or by `waitIdle`, and the GS-interrupt check
+  runs after every packet so the EE is woken as before. `tryShuffle` keeps its 8x8 mapping (`viewToOwner`, ~12 % of
+  the GL thread) per input; `decodeDirect` skips `applyTexa` for CT32 and decodes CT24 in a plain loop; PACKED
+  registers run in one tight loop; `glGetError` once per Present (per batch only with `GOW_GS_HW_STATS`); index and
+  depth textures get their final filter in one step; runs are aligned in the GL queue (`Pad` op) and read in place;
+  the stage thread reads MXCSR once (on ARM `_mm_getcsr` is fegetround plus FPCR reads). GSStage 44-48 -> 26 %,
+  GSThread ~47 -> 35 %. Gates port/swgs/gate/20261017_085136 and 20261017_120300, savetest ok.
+- Draw-state equality is member-wise (`operator== = default` on GSDrawState and its register structs) instead of
+  `memcmp`: the structs have padding bytes whose values depend on how each copy was made, so equal states could
+  compare unequal, which splits GL batches (the gs fork saw 4-6x more batches from a harmless code change) and can
+  differ per compiler, the Switch's included.
 
 ## Open issues (priority)
 1. Test NSP v5 on the real Switch and pull its log (tools/switch_pull_log.ps1): picture, speed lines, sound.
