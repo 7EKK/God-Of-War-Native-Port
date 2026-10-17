@@ -338,12 +338,18 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   colour memory, V barrier runs (shadow volumes), F extra fail pass, L linear filter. A span includes GPU idle
   time inside it, so on a CPU-bound PC the sum is close to the window; on the GPU-bound console it is real GPU
   time. PC at 1x (5 s, 60 fps): draw:TIFL 1.95 s, present 0.99 s, shuffle 0.85 s, draw:TBV 0.54 s.
+- `[gpu-bisect]` (GOW_GPU_BISECT=1, on by default on the Switch while the GPU limit is hunted; env.txt
+  `GOW_GPU_BISECT=0` turns it off; gs_hw_backend.cpp `updateBisect`): from 30 s after start the renderer runs 12 s
+  phases, the baseline and one GPU feature off in turns: no-fail-pass, no-shader-blend, no-texture, point-filter,
+  no-shuffle, no-draw (only clears and present), no-readback (the RAM-frame present skips its glReadPixels). The
+  picture is wrong in the "off" phases. Each phase end prints mode, presents per second and GPU ms per second;
+  compare an "off" phase with the baseline phases around it. A full cycle is 168 s (play ~4 min).
 - Render scale on the Switch: `PS2X_GS_HW_SCALE=1` by default (ps2_switch_runtime.cpp; env.txt overrides). The
   console shows 720p; the GS draws at the PS2's 640x448 and the presentation scaler (bilinear) stretches it to
   the window, a quarter of the 2x fill and readback.
 
 ## Open issues (priority)
-1. Test NSP v10 on the real Switch and pull its log (tools/switch_pull_log.ps1): the `[gs-gpu]` lines say which
+1. Test NSP v11 on the real Switch (play ~4 min, the `[gpu-bisect]` cycle) and pull its log: `[gs-gpu]` and `[gpu-bisect]` say which
    draw path keeps the GPU at 100 %.
 2. Speed: v3 was unplayable on the console. The CPU model (switch_throttle) already gives ~35 fps for v3, so the
    console's limit is probably Switch-only (nouveau GL driver, presentation, RomFS reads); the v5 log decides what
