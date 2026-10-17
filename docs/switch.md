@@ -286,6 +286,14 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   as that many single checkpoints); the EE then reaches the pacing or VBlank deadline at once and sleeps there.
   PC EE time -16 %; Switch-power model EE busy 3419 -> 2518 ms per 5 s (fps there limited by the VU1 worker). On
   the console the GS frontend shares core 1 with the EE and gets that time. Gate port/swee2/gate/20261017_143505.
+- GL backend for a slow driver (agent/sw-gs2 059db5b): gameplay has ~104 batches per frame, but the shadow-volume
+  path issued ~825 GL draws and ~720 texture barriers per frame (one triangle per draw, a barrier between each).
+  A triangle whose bounding box touches none drawn since the last barrier cannot share a pixel with them, so such
+  runs are one draw and a barrier comes only before an overlapping triangle (draws 247k -> 192k, barriers 216k ->
+  161k per 5 s). Vertices stream into one 8 MB buffer (re-allocated when full, ~257 per 5 s instead of one
+  BufferData per batch, ~31k); vertex colour is four bytes (64 -> 52 bytes per vertex). `GOW_GS_HW_STATS` also
+  prints glDraws, barriers, uploadKB, orphans. Gate port/swgs2/gate/20261017_150200 (no capture differences).
+  Left: ~535 barriers per frame, ~400 MB/s vertex upload (index buffer for strips would cut it ~3x).
 
 ### Console logs (`log switch/`, from the user)
 - NSP v2 (`log switch/log.txt`, 2026-10-17): CPU clock raised to 1785 MHz, nouveau NV120 GL 4.3, threads pinned
