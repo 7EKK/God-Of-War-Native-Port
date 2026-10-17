@@ -934,3 +934,11 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   v3/v4 kept as _v3/_v4.nsp). Citron: v3 16.5 -> v4 24.7 -> v5 24.0 guest fps (title/menu). gdb profile of v5 in
   Citron: VU1 worker saturated, GL thread busy with CPU texture decodes, GS frontend no longer a limit. Loop stopped:
   next step is the user's v5 console log.
+
+- 2026-10-17 day (/loop until 17:00, "what takes the frames, overhead"): per-thread profile of the Switch layout on
+  PC, then two rounds of three forks (EE, VIF1/VU1, GS/GL), all gated and merged into ext agent/switch 42d1f08.
+  Gameplay % of a PC core: GSWorker 51 -> 48, GSStage 41 -> 23, GameThread 38 -> 30 (less after the wait-loop fix),
+  GSThread 38 -> 31. Switch-power model 42.6 -> 50 guest fps; Citron title/menu 24 -> 31-33 fps. The user's NSP v2
+  console log (`log switch/log.txt`): one frame per 5.6 s with the EE spinning in vid::WaitForDMAComplete and the
+  pipeline idle; the wait loops now skip quiet iterations (EE busy in Citron 2870 -> 1120 ms per 5 s). NSP v8 built;
+  next: the v8 console log. Details in docs/switch.md.
