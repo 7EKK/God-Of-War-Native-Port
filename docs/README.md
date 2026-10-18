@@ -20,7 +20,7 @@ The user wants the game **totally playable**; work continues until then. Game da
 | File | Contents |
 |---|---|
 | [status.md](status.md) | Where the port stands right now, the active task, the ordered next steps. **Read first.** |
-| [build-and-run.md](build-and-run.md) | Toolchain, recompile pipeline, build configurations and their cost, how to run, tools. |
+| [build-and-run.md](build-and-run.md) | Toolchain, recompile pipeline, build configurations and their cost, how to run, PC release folder, tools. |
 | [diagnostics.md](diagnostics.md) | Debug env vars, trace tools and the debugging methods that worked. |
 | [disc.md](disc.md) | Disc layout, extraction, `.disc_layout`/`.disc_meta`, `DiscSource`. |
 | [elf-and-recompilation.md](elf-and-recompilation.md) | ELF facts, function discovery, analyzer pitfalls (the removed NOP patches). |

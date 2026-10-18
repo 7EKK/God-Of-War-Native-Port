@@ -48,6 +48,19 @@
   arrows/WASD = d-pad, X/Space = ✕, C/Esc = ○, Z = □, V = △, Q/E = L1/R1, LShift/RShift = L2/R2,
   Enter = Start, Tab = Select; gamepad 0 if present.
 
+## PC release folder
+- `powershell -ExecutionPolicy Bypass -File tools\pc_release\make_pc_folder.ps1 [-Dest <folder>]` (default
+  `dist\God of War (PC)` in the repo, gitignored; user 2026-10-18: builds stay here, not on Z:) makes a folder
+  that starts by double-click, without the rest of the repo:
+  - `God of War.exe`: tools/pc_release/launcher.cpp, icon from port/switch/nsp/icon.jpg;
+  - `game\`: the Release `ps2EntryRunner.exe` + DLLs, no pdb/lib/test output;
+  - `disc\`: disc-usa without the test cards (Mcd001.ps2, mc0/, mc1/), hard-linked on the same volume (no second
+    8 GB; the game never writes disc files), plus `play.mcd` as a real copy.
+- The launcher sets the same variables as play.cmd (GS worker, async FINISH, default audio device, GOW_MC0 =
+  `disc\play.mcd`) and runs the game with `game\` as working directory.
+- Re-running replaces the program and relinks only changed disc files; an existing `disc\play.mcd` (the saves) is
+  never overwritten. Tested 2026-10-18: the title menu shows at 1920x1080.
+
 ## Project tools (`tools/`)
 | Tool | Purpose |
 |---|---|
