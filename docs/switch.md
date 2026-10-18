@@ -390,6 +390,14 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   sampler wraps: REPEAT / CLAMP_TO_EDGE from CLAMP, set per draw already) and looks up 4 palette entries; the point
   path is one nearest `texture()` + one palette fetch. Plain T/TBV spans (~12 ms with tiny areas) and present
   (~6.5 ms) look like spans that contain a flush and the GPU idle until the next submission, not real cost.
+- NSP v13 (`log switch/log (4).txt`, 2026-10-18): the game runs at ~19 guest fps (v12: 0.7); draw:TIFL 0.27 ms per
+  batch (was ~20). Still magenta: the probe failed (as in Citron), but `renderFrame`'s shared early return kept
+  waiting for a shared frame because none had been published yet (host_hz 0); fixed (ext, update v14), Citron
+  then shows "host mode: RAM frames", host_hz 37-58. Now the GPU time is in present (17 ms per present, the RAM
+  readback; bisect no-readback x1.83, no-draw x2.72). v14 shipped as an ExeFS update (`make_update.sh`) over the
+  installed v13 NSP. A real update NSP (patch title 0100D0D0600A0800) is not made: hacPack can write a patch
+  cnmt, but the patch program NCA must carry the RomFS as a BKTR delta of the base, which no tool here builds; an
+  ExeFS-only patch would leave the game without its RomFS.
 - Render scale on the Switch: `PS2X_GS_HW_SCALE=1` by default (ps2_switch_runtime.cpp; env.txt overrides). The
   console shows 720p; the GS draws at the PS2's 640x448 and the presentation scaler (bilinear) stretches it to
   the window, a quarter of the 2x fill and readback.
