@@ -931,8 +931,8 @@ namespace ps2_stubs
                 state.formatted = true;
             }
         }
-        ensureMcRootExists(0);
-        ensureMcRootExists(1);
+        // GOW-Port: no eager mc0/mc1 folders here: the calls that touch a card create its root when they need it, and
+        // God of War's cards are image files on the IOP side (GOW_MC0), so these folders only littered the game folder.
         setReturnS32(ctx, 0);
     }
 

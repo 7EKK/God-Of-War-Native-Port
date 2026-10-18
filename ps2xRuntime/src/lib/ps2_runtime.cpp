@@ -843,6 +843,7 @@ bool PS2Runtime::initialize(const char *title)
             InitWindow(width, height, title);
             if (IsWindowReady())
             {
+                SetExitKey(KEY_NULL); // GOW-Port: Esc is the pad's circle (ps2_pad.cpp), not raylib's quit key
                 const int monitor = GetCurrentMonitor();
                 const int maxWidth = GetMonitorWidth(monitor), maxHeight = GetMonitorHeight(monitor);
                 if (maxWidth > 0 && maxHeight > 0 && (width > maxWidth || height > maxHeight))
@@ -851,6 +852,11 @@ bool PS2Runtime::initialize(const char *title)
                     SetWindowSize(static_cast<int>(width * scale), static_cast<int>(height * scale));
                     SetWindowPosition(0, 0);
                 }
+                // GOW-Port: GOW_FULLSCREEN=1 (the launcher's setting) starts in exclusive fullscreen at the window size
+                // above, i.e. the chosen resolution; F11 switches at run time.
+                const char *fullscreen = std::getenv("GOW_FULLSCREEN");
+                if (fullscreen != nullptr && std::strcmp(fullscreen, "1") == 0)
+                    ToggleFullscreen();
             }
         }
 #endif
@@ -2704,6 +2710,10 @@ void PS2Runtime::run()
         });
         if (ps2_perf::countFrames()) ps2_perf::hostFrames.fetch_add(1, std::memory_order_relaxed);
         ps2_perf::report();
+#if !defined(PLATFORM_VITA)
+        if (IsKeyPressed(KEY_F11))
+            ToggleFullscreen(); // GOW-Port: windowed <-> fullscreen, like a PC game
+#endif
 
         if (WindowShouldClose())
         {

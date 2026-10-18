@@ -234,6 +234,7 @@ static const std::unordered_map<std::string, std::string> gameDatabase =
     { "SLES-52117", "Go Go Copter - Remote Control Helicopter (Europe)" },
     { "SLES-51055", "Go Go Golf (Europe)" },
     { "SCED-54680", "God of War II (Europe) (Demo)" },
+    { "SCUS-97399", "God of War" },
     { "SLES-50433", "Godai - Elemental Force (Europe)" },
     { "SLUS-20288", "Godai - Elemental Force (USA)" },
     { "SLPM-60107", "Golf Paradise (Japan) (Demo)" },

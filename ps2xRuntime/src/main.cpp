@@ -189,7 +189,8 @@ int main(int argc, char *argv[])
 #if !defined(PLATFORM_VITA)
         if (gameName)
         {
-            windowTitle += std::string(gameName) + " | " + elfName;
+            // GOW-Port: a known game's window carries only its name, like a native PC release
+            windowTitle = gameName;
         }
         else
 #endif

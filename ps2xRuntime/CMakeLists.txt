@@ -535,6 +535,28 @@ if(MSVC)
     target_compile_options(ps2EntryRunner PRIVATE /FS)
 endif()
 
+# GOW-Port: Windows resources of the runner, so the shipped game shows as "God of War" (Task Manager, file
+# properties) and its window/taskbar carry the game icon: GLFW (raylib) loads a resource named GLFW_ICON when it
+# registers the window class. The icon belongs to the port repo (tools/pc_release/icon.ico), hence the path option.
+set(PS2X_RUNNER_ICON "" CACHE FILEPATH "Windows .ico for the runner window and exe (GLFW_ICON); empty: no icon")
+if(WIN32)
+    set(PS2X_RUNNER_RC "${CMAKE_CURRENT_BINARY_DIR}/ps2EntryRunner.rc")
+    set(PS2X_RUNNER_RC_TEXT "#include <winres.h>\n")
+    if(PS2X_RUNNER_ICON)
+        file(TO_CMAKE_PATH "${PS2X_RUNNER_ICON}" PS2X_RUNNER_ICON_PATH)
+        string(APPEND PS2X_RUNNER_RC_TEXT "GLFW_ICON ICON \"${PS2X_RUNNER_ICON_PATH}\"\n")
+    endif()
+    string(APPEND PS2X_RUNNER_RC_TEXT
+        "VS_VERSION_INFO VERSIONINFO\nFILEVERSION 1,0,0,0\nPRODUCTVERSION 1,0,0,0\nFILEOS VOS_NT_WINDOWS32\n"
+        "FILETYPE VFT_APP\nBEGIN\n BLOCK \"StringFileInfo\"\n BEGIN\n  BLOCK \"040904B0\"\n  BEGIN\n"
+        "   VALUE \"FileDescription\", \"God of War\"\n   VALUE \"ProductName\", \"God of War\"\n"
+        "   VALUE \"FileVersion\", \"1.0.0.0\"\n   VALUE \"ProductVersion\", \"1.0.0.0\"\n"
+        "   VALUE \"OriginalFilename\", \"ps2EntryRunner.exe\"\n  END\n END\n"
+        " BLOCK \"VarFileInfo\"\n BEGIN\n  VALUE \"Translation\", 0x409, 1200\n END\nEND\n")
+    file(GENERATE OUTPUT "${PS2X_RUNNER_RC}" CONTENT "${PS2X_RUNNER_RC_TEXT}")
+    target_sources(ps2EntryRunner PRIVATE "${PS2X_RUNNER_RC}")
+endif()
+
 target_include_directories(ps2_runtime PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel
