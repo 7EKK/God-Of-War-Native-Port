@@ -347,11 +347,12 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   time inside it, so on a CPU-bound PC the sum is close to the window; on the GPU-bound console it is real GPU
   time. PC at 1x (5 s, 60 fps): draw:TIFL 1.95 s, present 0.99 s, shuffle 0.85 s, draw:TBV 0.54 s.
 - `[gpu-bisect]` (GOW_GPU_BISECT=1, on by default on the Switch while the GPU limit is hunted; env.txt
-  `GOW_GPU_BISECT=0` turns it off; gs_hw_backend.cpp `updateBisect`): from 30 s after start the renderer runs 12 s
+  `GOW_GPU_BISECT=0` turns it off; gs_hw_backend.cpp `updateBisect`): from 20 s after start the renderer runs 8 s
   phases, the baseline and one GPU feature off in turns: no-fail-pass, no-shader-blend, no-texture, point-filter,
   no-shuffle, no-draw (only clears and present), no-readback (the RAM-frame present skips its glReadPixels). The
   picture is wrong in the "off" phases. Each phase end prints mode, presents per second and GPU ms per second;
-  compare an "off" phase with the baseline phases around it. A full cycle is 168 s (play ~4 min).
+  compare an "off" phase with the baseline phases around it. A full cycle is 112 s (play ~2.5 min; with 12 s
+  phases from 30 s the v12 run ended before point-filter).
 - Shared-texture presentation on the Switch (agent/sw-share, merged 66651cb): the GS renderer's EGL context shares
   objects with raylib/SDL's context (captured on the main thread by `GSSharedPresent::CaptureHostContext`), so
   Present copies the composed frame into a shared, fenced texture slot (the same slot/fence/Acquire code as WGL on
@@ -361,15 +362,28 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   window has no vsync swap interval (the vsync wait happened inside the first GL call, under the GL driver lock):
   `renderFrame` paces at 60 Hz with a sleep after the lock is released, and a pass with no newer published frame
   only polls input and sleeps 2 ms (an unfinished frame is retried every 8 ms). Citron: 36 game fps, GL-thread lock
-  wait 0.5 s per 5 s (RAM frames: 34 fps, 0.96 s). Untested on real nouveau: tearing or a black picture means
-  `PS2X_GS_DIRECT_PRESENT=0`.
+  wait 0.5 s per 5 s (RAM frames: 34 fps, 0.96 s). On the console (v12) the window showed only the magenta
+  placeholder for the whole run: the host never got a frame it could show, though EGL sharing was created. So the
+  sharing now checks itself (gs_gl.cpp `createProbe` / `checkProbe`): the GS context makes a 1x1 texture by the same
+  GPU copy the frames use, the host context reads it back once before trusting any slot ("[gs-present] shared probe
+  ok / FAILED"); a wrong value, or no slot completing for the host within 3 s of the first publish, prints
+  "shared textures do not work here" and both sides go back to RAM frames (`GSThreadedBackend::UsesSharedPresentation`
+  follows `GSSharedPresent::Active()` live).
+- NSP v12 (`log switch/log (3).txt`, 2026-10-18): magenta screen (above), ~2.6 presents/s, GPU-bound as before.
+  `[gpu-bisect]`: no-fail-pass x1.48, no-shader-blend x1.08, **no-texture x18** (46.9 presents/s). `[gs-gpu]`:
+  draw:TIFL (indexed, linear, fail pass) 62 % of the GPU time, ~20 ms per batch in the baseline phases and ~0.5 ms
+  with texturing off. That path read each of the 4 bilinear texels with signed integer modulo for the wrap and a
+  dependent index -> palette fetch chain (8 fetches); it now fetches the 2x2 indices with one `textureGather` (the
+  sampler wraps: REPEAT / CLAMP_TO_EDGE from CLAMP, set per draw already) and looks up 4 palette entries; the point
+  path is one nearest `texture()` + one palette fetch. Plain T/TBV spans (~12 ms with tiny areas) and present
+  (~6.5 ms) look like spans that contain a flush and the GPU idle until the next submission, not real cost.
 - Render scale on the Switch: `PS2X_GS_HW_SCALE=1` by default (ps2_switch_runtime.cpp; env.txt overrides). The
   console shows 720p; the GS draws at the PS2's 640x448 and the presentation scaler (bilinear) stretches it to
   the window, a quarter of the 2x fill and readback.
 
 ## Open issues (priority)
-1. Test NSP v11 on the real Switch (play ~4 min, the `[gpu-bisect]` cycle) and pull its log: `[gs-gpu]` and `[gpu-bisect]` say which
-   draw path keeps the GPU at 100 %.
+1. Test NSP v13 on the real Switch (play ~2.5 min, the `[gpu-bisect]` cycle): does the picture show (the shared
+   probe line), and how much did the gathered indexed path give (`[gs-gpu]` draw:TIFL ms per batch, presents/s).
 2. Speed: v3 was unplayable on the console. The CPU model (switch_throttle) already gives ~35 fps for v3, so the
    console's limit is probably Switch-only (nouveau GL driver, presentation, RomFS reads); the v5 log decides what
    to work on. On PC the busiest Switch-layout thread is now the VIF1/VU1 worker (~59 % of a PC core at 60 fps).

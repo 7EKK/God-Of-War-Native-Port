@@ -951,3 +951,4 @@ Run: `python -I tools/zones.py --slots 1,2,3,4` (scale: `PS2X_GS_HW_SCALE`); sav
   (no per-frame readback, host paced by sleep) and specialized draw program variants; merged into ext agent/switch,
   combined gate port/swv12 ok (zones 0-4 60 fps speed 1.00, savetest ok), Citron v12 36 fps, 34 variants clean.
   NSP v12 in Z:\Games for the user's morning console run (play ~4 min); docs/switch.md has the details.
+- 2026-10-18 morning: v12 console log (`log switch/log (3).txt`): magenta screen (shared presentation never gave the host a frame) and still GPU-bound; [gpu-bisect] no-texture x18, [gs-gpu] draw:TIFL (indexed + linear) 62 % of GPU time. ext a429a1c: sharing self-check (probe texture, RAM frames when it fails); 51f77e9: indexed path with one textureGather + hardware wrap instead of 8 dependent fetches with integer modulo, bisect 8 s phases from 20 s. Gate port/swv13 ok (zones 0-4 60 fps, captures unchanged), savetest as v12. NSP v13 in Z:\Games.
