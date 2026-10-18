@@ -64,8 +64,9 @@ player gets, laid out like a shipped PC game:
   is saved in `settings.ini` (`[Video] Width, Height, Fullscreen`). `God of War.exe --play` skips the window. It sets
   play.cmd's variables (GS worker, async FINISH, default audio device unless GOW_AUDIO is set) plus
   `GOW_WINDOW=<w>x<h>`, `GOW_FULLSCREEN=0|1` and `GOW_MC0=saves\GodOfWar.sav`, and runs the game with `bin\` as working
-  directory. Other settings (language, ...) go into the same `settings.ini` as their own sections and into the same
-  window.
+  directory. Languages: `[Game] Text, Voice` (en fr de it es) in the same window and file; the launcher sets
+  `PS2X_DISC_OVERLAY=lang\<text>_<voice>.layout`, made by the script with tools/lang_pack.py in `data\lang\`
+  (always: the save wording; with the European disc extracted in `disc\`: the other languages). docs/settings.md.
 - Runner (ext ps2_runtime.cpp): `GOW_FULLSCREEN=1` starts in exclusive fullscreen at the `GOW_WINDOW` size; F11
   switches window/fullscreen at run time; Esc no longer quits (raylib's default exit key; Esc is the pad's circle).
   The window title is the game's name from games_database.cpp ("God of War" for SCUS-97399).

@@ -1,8 +1,15 @@
 GOD OF WAR - PC
 ===============
 
-Start "God of War.exe". The first window sets the resolution and fullscreen; press Play.
+Start "God of War.exe". The first window sets the resolution, fullscreen and the languages; press Play.
 "God of War.exe --play" starts directly with the last settings.
+
+Languages
+---------
+Text and voices can be English, French, German, Italian or Spanish (from the European
+release of the game, when it was available while this folder was made; otherwise English
+only). Text covers the in-game texts (hints, items, books, treasures); menus and the
+intro movie stay English. The game has no subtitles for spoken lines.
 
 In game
 -------

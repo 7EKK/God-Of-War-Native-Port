@@ -2,6 +2,7 @@
 #   <Dest>\God of War.exe   launcher (launcher.cpp/.rc: settings window, icon, version info)
 #   <Dest>\bin\             GodOfWar.exe (the Release ps2EntryRunner, with its own icon/version info) + DLLs
 #   <Dest>\data\            the extracted USA disc from disc-usa\ (hard links on the same volume)
+#   <Dest>\data\lang\       language overlays (tools/lang_pack.py) when the European disc is extracted in disc\
 #   <Dest>\saves\           GodOfWar.sav (the player's saves; first pack: a copy of disc-usa\play.mcd)
 #   <Dest>\README.txt       controls, saves, folders
 # Usage: powershell -ExecutionPolicy Bypass -File tools\pc_release\make_pc_folder.ps1 [-Dest <folder>]
@@ -48,7 +49,7 @@ Copy-Item -Force "$release\ps2EntryRunner.exe" "$Dest\bin\GodOfWar.exe"
 # volume (no second 8 GB copy; the game never writes disc files), copies elsewhere.
 $sameVolume = [IO.Path]::GetPathRoot($Dest) -eq [IO.Path]::GetPathRoot($disc)
 Get-ChildItem -Recurse -File -Force $disc | Where-Object {
-    $_.Name -notin @('Mcd001.ps2', 'play.mcd') -and $_.FullName -notmatch '[\\/](mc0|mc1)[\\/]'
+    $_.Name -notin @('Mcd001.ps2', 'play.mcd') -and $_.FullName -notmatch '[\\/](mc0|mc1|lang)[\\/]'
 } | ForEach-Object {
     $target = Join-Path "$Dest\data" $_.FullName.Substring($disc.Length + 1)
     New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
@@ -57,6 +58,16 @@ Get-ChildItem -Recurse -File -Force $disc | Where-Object {
     if ($old) { Remove-Item -Force -LiteralPath $target }
     if ($sameVolume) { New-Item -ItemType HardLink -Path $target -Target $_.FullName | Out-Null }
     else { Copy-Item -LiteralPath $_.FullName $target }
+}
+
+# languages: French, German, Italian and Spanish text and voices from the European disc (docs/settings.md); without
+# it the launcher offers English only
+$eu = Join-Path $root 'disc'
+if (Test-Path "$eu\SCES_531.33") {
+    python -I (Join-Path $root 'tools\lang_pack.py') "$Dest\data" $eu
+    if ($LASTEXITCODE -ne 0) { throw 'lang_pack.py failed' }
+} else {
+    Write-Host "no European disc in ${eu}: English only"
 }
 
 # saves: the player's file is never replaced; a new folder starts from the repo's card (formatted, with the saves)

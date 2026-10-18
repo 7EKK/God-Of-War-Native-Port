@@ -66,6 +66,7 @@ def main():
     ap.add_argument('--secs', type=float, default=150)
     ap.add_argument('--keys', default='g4:r2,g7:x,g9:x,g11:arriba,g12.5:x,g20:x,g22:x')
     ap.add_argument('--exe')
+    ap.add_argument('--elf', default=zones.ELF, help='boot ELF; its folder is the disc (e.g. a language disc)')
     ap.add_argument('--silent', action='store_true', help='mute the run (GOW_AUDIO=0); sound is on by default')
     ap.add_argument('--audio', action='store_true', help=argparse.SUPPRESS)  # old flag, sound is the default now
     ap.add_argument('--iso', action='store_true', help='read the original ISO (default: the extracted files in disc-usa/)')
@@ -90,7 +91,7 @@ def main():
         if f.startswith('gow_pad_test_') and f.endswith('.ppm'):
             os.remove(os.path.join(exe_dir, f))
     with open(os.path.join(args.out, 'log.txt'), 'wb') as log:
-        proc = subprocess.Popen([exe, zones.ELF], cwd=exe_dir, env=env, stdout=log, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen([exe, os.path.abspath(args.elf)], cwd=exe_dir, env=env, stdout=log, stderr=subprocess.STDOUT)
         start = time.time()
         while time.time() - start < args.secs and proc.poll() is None:
             time.sleep(1)
