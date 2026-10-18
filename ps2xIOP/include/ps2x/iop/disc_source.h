@@ -38,6 +38,11 @@ namespace ps2x::iop
         // Files extracted from a disc by tools/iso_extract.py --layout: <root>/.disc_layout lists each file's
         // original LSN and <root>/.disc_meta holds the non-file sectors (volume descriptors, UDF, directories),
         // so the extracted tree reproduces the original disc sector for sector.
+        // GOW-Port: an overlay layout (environment PS2X_DISC_OVERLAY = a layout file, absolute or relative to
+        // <root>) is read after it, in the same format: its "file" entries replace the entry at the same LSN or add
+        // new ones (e.g. past the end of the disc), its "sectors" line sets the disc size; paths are relative to the
+        // overlay file's folder. Used for language packs (docs/settings.md): a patched table of contents plus the
+        // localized files, without touching the extracted disc.
         [[nodiscard]] static std::unique_ptr<DiscSource> openExtracted(const std::filesystem::path &root);
     };
 }

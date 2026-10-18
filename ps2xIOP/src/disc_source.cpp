@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -178,25 +180,15 @@ namespace ps2x::iop
             explicit ExtractedDisc(const std::filesystem::path &root)
                 : m_root(root)
             {
-                std::ifstream layout(root / ".disc_layout");
-                std::string line;
-                while (std::getline(layout, line))
+                readLayout(root / ".disc_layout", {});
+                if (const char *overlay = std::getenv("PS2X_DISC_OVERLAY"); overlay != nullptr && overlay[0] != '\0')
                 {
-                    std::istringstream fields(line);
-                    std::string kind;
-                    fields >> kind;
-                    if (kind == "sectors")
-                        fields >> m_sectors;
-                    else if (kind == "layer1")
-                        fields >> m_layer1Start;
-                    else if (kind == "file")
-                    {
-                        Entry entry;
-                        fields >> entry.lsn >> entry.size;
-                        std::getline(fields >> std::ws, entry.path);
-                        if (!entry.path.empty())
-                            m_files.push_back(std::move(entry));
-                    }
+                    const std::filesystem::path file = root / std::filesystem::u8path(overlay);
+                    if (readLayout(file, file.parent_path()))
+                        std::fprintf(stderr, "[disc] overlay %s\n", reinterpret_cast<const char *>(file.u8string().c_str()));
+                    else
+                        std::fprintf(stderr, "[disc] overlay %s not found; plain disc\n",
+                                     reinterpret_cast<const char *>(file.u8string().c_str()));
                 }
                 std::sort(m_files.begin(), m_files.end(), [](const Entry &a, const Entry &b)
                           { return a.lsn < b.lsn; });
@@ -239,6 +231,11 @@ namespace ps2x::iop
                         ++i;
                         continue;
                     }
+                    if (file->overlay && !file->reported)
+                    {
+                        file->reported = true;
+                        std::fprintf(stderr, "[disc] overlay read: %s\n", file->path.c_str());
+                    }
                     // Read the run of sectors that lies inside this file in one go.
                     const uint32_t fileSectors = (file->size + kSector - 1u) / kSector;
                     const uint32_t run = std::min(count - i, file->lsn + fileSectors - sector);
@@ -276,7 +273,50 @@ namespace ps2x::iop
                 uint32_t lsn = 0;
                 uint32_t size = 0;
                 std::string path;
+                bool overlay = false;           // from PS2X_DISC_OVERLAY
+                mutable bool reported = false;  // its first read is logged (shows the overlay is in use)
             };
+
+            // Adds a layout's entries; with a base folder (overlay) its paths are made absolute and an entry at an
+            // LSN already listed replaces that entry.
+            bool readLayout(const std::filesystem::path &file, const std::filesystem::path &base)
+            {
+                std::ifstream layout(file);
+                if (!layout)
+                    return false;
+                std::string line;
+                while (std::getline(layout, line))
+                {
+                    std::istringstream fields(line);
+                    std::string kind;
+                    fields >> kind;
+                    if (kind == "sectors")
+                        fields >> m_sectors;
+                    else if (kind == "layer1")
+                        fields >> m_layer1Start;
+                    else if (kind == "file")
+                    {
+                        Entry entry;
+                        fields >> entry.lsn >> entry.size;
+                        std::getline(fields >> std::ws, entry.path);
+                        if (entry.path.empty())
+                            continue;
+                        if (!base.empty())
+                        {
+                            const auto absolute = (base / std::filesystem::u8path(entry.path)).u8string();
+                            entry.path.assign(absolute.begin(), absolute.end());
+                            entry.overlay = true;
+                        }
+                        auto same = std::find_if(m_files.begin(), m_files.end(), [&](const Entry &e)
+                                                 { return e.lsn == entry.lsn; });
+                        if (same != m_files.end())
+                            *same = std::move(entry);
+                        else
+                            m_files.push_back(std::move(entry));
+                    }
+                }
+                return true;
+            }
 
             const Entry *fileAt(uint32_t sector) const
             {
@@ -293,7 +333,7 @@ namespace ps2x::iop
             {
                 auto it = m_handles.find(entry.lsn);
                 if (it == m_handles.end())
-                    it = m_handles.emplace(entry.lsn, std::ifstream(m_root / std::filesystem::path(entry.path), std::ios::binary)).first;
+                    it = m_handles.emplace(entry.lsn, std::ifstream(m_root / std::filesystem::u8path(entry.path), std::ios::binary)).first;
                 return it->second;
             }
 
