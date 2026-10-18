@@ -60,6 +60,40 @@ jobs:
         with:
           arch: ${{ matrix.arch }}
 
+      - name: Checkout game launcher sources
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          path: port-main
+          sparse-checkout: tools/pc_release
+
+      - name: Compile native Windows launcher
+        shell: cmd
+        run: |
+          if not exist compiled mkdir compiled
+          pushd port-main\tools\pc_release
+          rc /nologo /fo "%GITHUB_WORKSPACE%\compiled\launcher.res" launcher.rc
+          if errorlevel 1 exit /b 1
+          popd
+          cl /nologo /std:c++17 /O2 /EHsc /DUNICODE /D_UNICODE port-main\tools\pc_release\launcher.cpp compiled\launcher.res /Fe:"%GITHUB_WORKSPACE%\compiled\God of War.exe" /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib
+          if errorlevel 1 exit /b 1
+
+      - name: Describe development build
+        shell: pwsh
+        run: |
+          @'
+          This is a Windows x64 DEVELOPMENT build of God of War Native Port's
+          launcher and PS2Recomp toolchain/runtime, not a ready-to-play game.
+
+          This public source tree does not contain Sony game content or the
+          game-specific C++ generated from SCUS_973.99.
+          The launcher needs bin/GodOfWar.exe and data/SCUS_973.99
+          plus the other extracted disc files before it can play.
+
+          For a playable local build using your own PS2 disc, follow
+          docs/build-and-run.md in the main branch.
+          '@ | Set-Content -Encoding UTF8 compiled/README-DEVELOPMENT.txt
+
       - name: Build
         shell: cmd
         run: |
@@ -70,11 +104,16 @@ jobs:
         shell: cmd
         run: |
           .\build\ps2xTest\Release\ps2x_tests.exe
-      - name: Upload artifact
+      - name: Upload Windows x64 development binaries
+        if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: PS2Recomp - Windows
+          name: God-Of-War-Native-Port-Windows-x64-Development
+          if-no-files-found: warn
           path: |
+            compiled/God of War.exe
+            compiled/README-DEVELOPMENT.txt
             build/ps2xAnalyzer/Release/*.exe
             build/ps2xRecomp/Release/*.exe
+            build/ps2xRuntime/Release/ps2EntryRunner.exe
             build/ps2xTest/Release/*.exe
