@@ -49,17 +49,38 @@
   Enter = Start, Tab = Select; gamepad 0 if present.
 
 ## PC release folder
-- `powershell -ExecutionPolicy Bypass -File tools\pc_release\make_pc_folder.ps1 [-Dest <folder>]` (default
-  `dist\God of War (PC)` in the repo, gitignored; user 2026-10-18: builds stay here, not on Z:) makes a folder
-  that starts by double-click, without the rest of the repo:
-  - `God of War.exe`: tools/pc_release/launcher.cpp, icon from port/switch/nsp/icon.jpg;
-  - `game\`: the Release `ps2EntryRunner.exe` + DLLs, no pdb/lib/test output;
-  - `disc\`: disc-usa without the test cards (Mcd001.ps2, mc0/, mc1/), hard-linked on the same volume (no second
-    8 GB; the game never writes disc files), plus `play.mcd` as a real copy.
-- The launcher sets the same variables as play.cmd (GS worker, async FINISH, default audio device, GOW_MC0 =
-  `disc\play.mcd`) and runs the game with `game\` as working directory.
-- Re-running replaces the program and relinks only changed disc files; an existing `disc\play.mcd` (the saves) is
-  never overwritten. Tested 2026-10-18: the title menu shows at 1920x1080.
+`powershell -ExecutionPolicy Bypass -File tools\pc_release\make_pc_folder.ps1 [-Dest <folder>]` (default
+`dist\God of War (PC)` in the repo, gitignored; user 2026-10-18: builds stay here, never on Z:) makes the folder a
+player gets, laid out like a shipped PC game:
+
+    God of War.exe   launcher (tools/pc_release/launcher.cpp + launcher.rc: icon, version info)
+    bin\             GodOfWar.exe (the Release ps2EntryRunner) + its DLLs
+    data\            disc-usa without the test cards (Mcd001.ps2, play.mcd, mc0/, mc1/), hard links on the same volume
+    saves\           GodOfWar.sav (+ GodOfWar.sav.bak)
+    settings.ini     written by the launcher
+    README.txt       tools/pc_release/README.txt: controls, saves, folders
+
+- Launcher: a small window (resolution from the primary monitor's modes, Fullscreen checkbox, Play/Quit); the choice
+  is saved in `settings.ini` (`[Video] Width, Height, Fullscreen`). `God of War.exe --play` skips the window. It sets
+  play.cmd's variables (GS worker, async FINISH, default audio device unless GOW_AUDIO is set) plus
+  `GOW_WINDOW=<w>x<h>`, `GOW_FULLSCREEN=0|1` and `GOW_MC0=saves\GodOfWar.sav`, and runs the game with `bin\` as working
+  directory. Other settings (language, ...) go into the same `settings.ini` as their own sections and into the same
+  window.
+- Runner (ext ps2_runtime.cpp): `GOW_FULLSCREEN=1` starts in exclusive fullscreen at the `GOW_WINDOW` size; F11
+  switches window/fullscreen at run time; Esc no longer quits (raylib's default exit key; Esc is the pad's circle).
+  The window title is the game's name from games_database.cpp ("God of War" for SCUS-97399).
+- Icon and version info of the runner: ext CMake option `PS2X_RUNNER_ICON` (set in out/build-kl to
+  `tools/pc_release/icon.ico`, made from port/switch/nsp/icon.jpg) generates a resource script with `GLFW_ICON` (GLFW
+  takes it for the window class: window + taskbar) and a VERSIONINFO ("God of War", shown by Task Manager).
+- Saves: the game keeps its PS2 save format, one card image (`saves\GodOfWar.sav`, PCSX2 .ps2 layout,
+  docs/memory-card.md); per-save files would need a folder-backed card (PCSX2's FolderMemoryCard synthesises the
+  FAT on the fly), which the native card layer does not have. The launcher copies the file to `.bak` before every
+  start. Nothing is written outside the game folder (the LOCALAPPDATA audio_device.txt is only read when
+  GOW_AUDIO_DEVICE is unset, which the launcher always sets).
+- Re-running the script replaces the program and relinks changed data files; `saves\` and `settings.ini` are never
+  overwritten (the first layout's `disc\play.mcd` is moved to `saves\GodOfWar.sav` once).
+- Tested 2026-10-18: title "God of War", icon, F11 both ways, fullscreen start, Esc keeps running, savetest
+  (`--exe dist/.../bin/GodOfWar.exe --elf dist/.../data/SCUS_973.99 --silent`) writes 129 pages, card directory intact.
 
 ## Project tools (`tools/`)
 | Tool | Purpose |

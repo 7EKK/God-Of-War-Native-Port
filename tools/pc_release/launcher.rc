@@ -1,0 +1,27 @@
+// Resources of "God of War.exe" (launcher.cpp): icon (also the settings window's) and version info.
+#include <winres.h>
+
+1 ICON "icon.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "God of War"
+            VALUE "ProductName", "God of War"
+            VALUE "FileVersion", "1.0.0.0"
+            VALUE "ProductVersion", "1.0.0.0"
+            VALUE "OriginalFilename", "God of War.exe"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
