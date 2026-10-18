@@ -368,7 +368,10 @@ Each area went to one fork (agent/sw-vu, agent/sw-ee, agent/sw-gs).
   GPU copy the frames use, the host context reads it back once before trusting any slot ("[gs-present] shared probe
   ok / FAILED"); a wrong value, or no slot completing for the host within 3 s of the first publish, prints
   "shared textures do not work here" and both sides go back to RAM frames (`GSThreadedBackend::UsesSharedPresentation`
-  follows `GSSharedPresent::Active()` live).
+  follows `GSSharedPresent::Active()` live). Citron with NSP v13 reproduces it: "shared probe FAILED (read
+  ff0000ff)", then RAM frames; so on switch-mesa the shared context does not see the GS context's textures (a
+  texture name of the other namespace, e.g. raylib's own, gets drawn: hence the magenta). The Switch therefore
+  presents through RAM frames until that is solved; PC: "shared probe ok".
 - NSP v12 (`log switch/log (3).txt`, 2026-10-18): magenta screen (above), ~2.6 presents/s, GPU-bound as before.
   `[gpu-bisect]`: no-fail-pass x1.48, no-shader-blend x1.08, **no-texture x18** (46.9 presents/s). `[gs-gpu]`:
   draw:TIFL (indexed, linear, fail pass) 62 % of the GPU time, ~20 ms per batch in the baseline phases and ~0.5 ms
