@@ -111,6 +111,43 @@ The PAKs are 4 GB each: the SD card must be exFAT (FAT32 has a 4 GB file limit).
   in Citron, then RAM frames). Menu: guest ~17 fps, window 21-26 Hz; GPU present 4.2 ms/span (was 17 in v13's
   bisect estimate); GPU busy only ~31 % (bisect `gpu` ~310 ms/s) while the GS GL thread is busy ~77 % of the time
   (`call` 43 s + `vrun` 38 s of 96 s busy in 125 s): the menu is now bound by that thread's CPU work, not by the GPU.
+- v15 (ext agent/switch 4137512, ccb8845, bbf2b4b; measured on the console through the remote loop, logs
+  `port/switch/logs/20261018_v15*`): title menu guest **17 -> 25-26 fps**, GS GL thread busy 4.3 -> 2.0 s per 5 s;
+  gameplay (ship, fighting) 9-12 fps. What each step found and changed, in order:
+  - `call` was the RAM-frame present: per vsync latch the frontend ran Flush + Sync + Present as blocking round trips
+    and the HW backend read the frame with a synchronous glReadPixels, so the guest waited for the GL queue and the
+    GPU, and CPU submission and GPU work never overlapped. Now the threaded backend queues the present and returns
+    the newest finished frame (`QueuesPresentation`, `GOW_GS_ASYNC_READBACK=0` restores the old path); the frame is
+    packed into a client-storage buffer behind a fence and collected by a later present.
+  - glReadPixels into a pixel pack buffer is still CPU work on switch-mesa: ~16 ms per 640x448 frame
+    (`[gs-hw-present] readpixels_ms`). A compute shader (`packProgram`, same bytes and row order) does the copy on
+    the GPU: 1.2 s -> 4 ms per 5 s. Map + copy of a finished buffer: ~1.7 ms per frame.
+  - A present whose display registers and displayed targets' `RenderTarget::version` (draws, shuffles, clears) did
+    not change only collects: the host latches at every vsync, the menu flips every 2-3.
+  - Texture decodes: the game uploads its textures into GS memory again every frame, each upload invalidated the
+    decoded textures there, and every decode (CPU deswizzle + glTexImage2D) cost ~3.5 ms (~100 per second in the
+    menu, `[gs-hw-cpu] tex_ms` 2.3 s per 5 s). An invalidated texture whose memory still hashes to what it was
+    decoded from (or to one of its three earlier contents, kept as GL textures: animated textures alternate) is valid
+    again: 0 decodes in the menu, 21 -> 25 fps.
+  - Host (Switch, RAM frames): the GL driver lock is only taken for GL work; a latched frame equal to the one shown,
+    or a pass without a new vsync, is neither uploaded nor redrawn. Redrawing held the lock ~7 ms per pass ~45 times
+    a second; in gameplay the GL thread waited 1.8 s of 5 s for it, now ~0.6 s.
+  - GPU diagnostics (`GOW_GS_HW_STATS`, `GOW_GS_GPU_TIME`, `GOW_GPU_BISECT`) are opt-in again (env.txt `=1`): the
+    bisect phases draw wrong pictures on purpose. `GOW_GS_HW_STATS=0` now really turns the stats off.
+  - Diagnostic lines (GOW_PERF_DIAG, on by default on the Switch): `[gs-hw-cpu]` (draw() parts: pre/state/tex/post,
+    vertex upload, decodes and re-validations), `[gs-hw-present]` (full vs collect-only presents, pending draws
+    flushed, pack time), `[gs-host]` (host passes, unchanged frames, latch/copy/lock-wait/upload/draw+swap time).
+  - Left: in the menu the GL thread is no longer the limit (VU1 `vu_ms` ~4.0 s and EE ~2.0 s per 5 s are). In
+    gameplay nearly every present is a full one (~50 per second for ~10 guest frames): the game changes DISPFB1
+    every field between frame buffers 0x68 and 0xd0 (with a line offset) and blends read circuits 1 and 2 at 50 %
+    (PMODE 0x8026; `GOW_GS_HW_DISPLOG=1`, `port/switch/logs/20261018_v15disp`), so each vsync composes a different
+    picture; and the GL thread is busy ~3.4 s per 5 s (present ~1.1 s, clut ~0.8 s, vrun ~0.9 s, texflush
+    ~0.45 s). Sharing the GS texture with the host (probe FAILED on switch-mesa) would remove the per-field
+    readback, the copies and the host upload altogether; short of that, the CLUT loads (~150 us each) and the
+    present composition are the GL thread's next costs.
+  - Remote loop notes: pad mapping on the console is Nintendo positions (B = Cross, A = Circle, Y = Square,
+    X = Triangle, PLUS = Start); botbase clicks of 50 ms can be missed at 25 fps, `cmd configure
+    buttonClickSleepTime 120` makes them reliable. New Game: B, B (Hero), PLUS skips the intro movie.
 - Remote testing (2026-10-18), USB cable + home Wi-Fi:
   - Files: `python -I tools/switch_mtp.py ls|get|put|rm <SD path>` while DBI's MTP responder runs. It uses the
     Windows Portable Devices API (`pip install comtypes`): the shell's CopyHere (switch_pull_log.ps1) can add files but
