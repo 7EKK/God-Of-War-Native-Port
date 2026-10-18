@@ -30,3 +30,6 @@ bruh keys/
 *.keys
 tools/switch_throttle/*.exe
 dist/
+
+# disassembly of the disc modules (game code): local only
+gemini-work/requests/dis/
