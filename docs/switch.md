@@ -107,6 +107,10 @@ The PAKs are 4 GB each: the SD card must be exFAT (FAT32 has a 4 GB file limit).
   `powershell -ExecutionPolicy Bypass -File tools\switch_pull_log.ps1` copies `sdmc:/switch/gow/{log,log_prev,env}.txt`
   into `port/switch/logs/<date>/` (MTP has no drive letter: the script walks the Windows shell namespace). Each
   launch rotates `log.txt` to `log_prev.txt`.
+- v14 on the console (2026-10-18, first remote run): the purple screen is gone, the title menu shows (probe FAILED as
+  in Citron, then RAM frames). Menu: guest ~17 fps, window 21-26 Hz; GPU present 4.2 ms/span (was 17 in v13's
+  bisect estimate); GPU busy only ~31 % (bisect `gpu` ~310 ms/s) while the GS GL thread is busy ~77 % of the time
+  (`call` 43 s + `vrun` 38 s of 96 s busy in 125 s): the menu is now bound by that thread's CPU work, not by the GPU.
 - Remote testing (2026-10-18), USB cable + home Wi-Fi:
   - Files: `python -I tools/switch_mtp.py ls|get|put|rm <SD path>` while DBI's MTP responder runs. It uses the
     Windows Portable Devices API (`pip install comtypes`): the shell's CopyHere (switch_pull_log.ps1) can add files but
