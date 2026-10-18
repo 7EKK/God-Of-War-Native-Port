@@ -93,6 +93,16 @@ The PAKs are 4 GB each: the SD card must be exFAT (FAT32 has a 4 GB file limit).
 - Home-menu name and icon: `nacptool` writes the name for 12 of the 16 NACP languages, `build_nsp.sh` copies
   entry 0 into all 16; the icon is `port/switch/nsp/icon.jpg` (256x256, made from the game's own logo as the native
   port renders it, `port/usertest1/logo_native.png`), copied as `icon_<Language>.dat` for every language.
+  The pack log confirms the icons go into the control NCA. When the home menu still shows no icon (user
+  2026-10-18), it is the console's icon cache from an earlier install of the same title: delete the software
+  (System Settings > Data Management) and install again (game saves are on the SD card, `play.mcd`, and stay).
+- Output name: `out/God of War.nsp` (user 2026-10-18); older builds are named by title id.
+- Code-only update without reinstalling (`port/switch/nsp/make_update.sh`, WSL, after switch/build.sh): Atmosphère's
+  loader takes a title's ExeFS from `sdmc:/atmosphere/contents/0100D0D0600A0000/exefs/` (`main` + `main.npdm`)
+  when that folder exists, so a new build is ~35 MB instead of the 8.5 GB NSP; the game data stays in the
+  installed NSP's RomFS. Output `out/update/atmosphere/...` (`DEST=<dir>` also copies it there); the user copies
+  the `atmosphere` folder to the SD root. A full NSP is only needed when the RomFS, the title metadata or the icon
+  changes; after installing a newer full NSP, delete that exefs folder or the older program keeps overriding it.
 - Getting the log off the console: DBI → "Run MTP responder", USB cable, then
   `powershell -ExecutionPolicy Bypass -File tools\switch_pull_log.ps1` copies `sdmc:/switch/gow/{log,log_prev,env}.txt`
   into `port/switch/logs/<date>/` (MTP has no drive letter: the script walks the Windows shell namespace). Each

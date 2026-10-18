@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Packs the Switch build into an installable NSP (title 0100D0D0600A0000) with the extracted disc in its RomFS.
 # Run in WSL as root after switch/build.sh. Needs the user's own prod.keys (Lockpick_RCM); never commit or share them.
-# Usage: build_nsp.sh <prod.keys>     Output: /mnt/c/.../port/switch/nsp/out/*.nsp (~8.3 GB, contains game data:
+# Usage: build_nsp.sh <prod.keys>     Output: /mnt/c/.../port/switch/nsp/out/God of War.nsp (~8.3 GB, contains game data:
 # for the user's own console only).
 set -euo pipefail
 KEYS="${1:?usage: build_nsp.sh <path to prod.keys>}"
@@ -53,4 +53,6 @@ cd "$WORK"
 "$PACK" -k "$KEYS_OK" --titleid "$TITLE" --titlename "God of War" --titlepublisher "Waffle565" \
     --exefsdir "$WORK/exefs" --romfsdir "$ROMFS" --controldir "$WORK/control" --nologo \
     --tempdir "$WORK/temp" --ncadir "$WORK/nca" --backupdir "$WORK/backup" --nspdir "$HERE/out"
+# hacBrewPack names the file by title id; the user downloads it by name (user 2026-10-18: "name the nsp god of war")
+mv -f "$HERE/out/$(echo "$TITLE" | tr 'A-F' 'a-f').nsp" "$HERE/out/God of War.nsp"
 ls -la "$HERE/out"
