@@ -107,11 +107,17 @@ The PAKs are 4 GB each: the SD card must be exFAT (FAT32 has a 4 GB file limit).
   `powershell -ExecutionPolicy Bypass -File tools\switch_pull_log.ps1` copies `sdmc:/switch/gow/{log,log_prev,env}.txt`
   into `port/switch/logs/<date>/` (MTP has no drive letter: the script walks the Windows shell namespace). Each
   launch rotates `log.txt` to `log_prev.txt`.
-- Putting an update on the console the same way: with DBI's MTP screen open,
-  `powershell -ExecutionPolicy Bypass -File tools\switch_push_update.ps1 [<exefs folder>]` copies `main` + `main.npdm`
-  (default `port/switch/nsp/out/update/...`) into `sdmc:/atmosphere/contents/0100D0D0600A0000/exefs/`, creating the
-  folders. Starting the game and seeing the screen from the PC would need usb-botbase (a sysmodule taking button
-  presses and returning screenshots over USB); not installed as of 2026-10-18.
+- Remote testing (2026-10-18), USB cable + home Wi-Fi:
+  - Files: `python -I tools/switch_mtp.py ls|get|put|rm <SD path>` while DBI's MTP responder runs. It uses the
+    Windows Portable Devices API (`pip install comtypes`): the shell's CopyHere (switch_pull_log.ps1) can add files but
+    silently keeps an existing file instead of replacing it, and a rename through it hangs. An update:
+    `put .../exefs/main atmosphere/contents/0100D0D0600A0000/exefs` (and main.npdm); `put` replaces and checks the size.
+  - Buttons and screenshots: usb-botbase v2.5 (github.com/Koi-3088/usb-botbase) in
+    `sdmc:/atmosphere/contents/430000000000000B/` with `config.cfg` = `wifi`, so it listens on TCP 6000 and the USB port
+    stays free for DBI (USB mode would need a WinUSB driver on the PC). `python -I tools/switch_bot.py find` scans the
+    PC's /24 and stores the address in port/switch/bot_ip.txt; `shot <jpg>` (pixelPeek), `click HOME A ...`, `title`.
+  - DBI and the game cannot run together: copy files, close DBI, start the game (HOME, A on its tile), screenshot,
+    then back to DBI for the log.
 - RomFS is case-sensitive (Windows and the SD card's FAT are not), and the game opens e.g. `cdrom0:\IOP_MOD\sio2man.irx`
   while the disc file is `SIO2MAN.IRX`. `PS2Vfs::resolveHostPath` (ext ps2_vfs.cpp) therefore matches `cdrom` paths
   component by component without case when the exact path is missing (ISO9660 semantics); without it the NSP boots
