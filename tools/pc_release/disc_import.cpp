@@ -290,7 +290,7 @@ bool validData(const fs::path &dir)
 void importFolder(const fs::path &source, const fs::path &destination, const Progress &progress)
 {
     Table t = readLayout(source); // Validate fully BEFORE writing.
-    if (fs::equivalent(source, destination)) return;
+    if (fs::exists(destination) && fs::equivalent(source, destination)) return;
     Stage stage(destination);
     std::uint64_t total = fs::file_size(source / ".disc_layout") + fs::file_size(source / ".disc_meta");
     for (const auto &e : t.files) total += e.size;
