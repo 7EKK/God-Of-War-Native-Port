@@ -1,0 +1,49 @@
+name: Windows launcher and disc-import tests
+on:
+  push:
+    branches: [feature/first-run-import, main]
+    paths:
+      - 'tools/pc_release/**'
+      - '.github/workflows/launcher-import.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/pc_release/**'
+      - '.github/workflows/launcher-import.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Build ISO-import tests
+        shell: cmd
+        run: |
+          cd tools\pc_release
+          cl /nologo /std:c++17 /EHsc /W4 /O2 /MT test_import.cpp disc_import.cpp /Fe:import-test.exe
+          if errorlevel 1 exit /b 1
+          import-test.exe
+          if errorlevel 1 exit /b 1
+      - name: Compile native Windows launcher and importer
+        shell: cmd
+        run: |
+          cd tools\pc_release
+          rc /nologo /fo launcher.res launcher.rc
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc /W4 /O2 /MT /DUNICODE /D_UNICODE launcher.cpp import_ui.cpp disc_import.cpp launcher.res /Fe:"God of War.exe" /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib comdlg32.lib shell32.lib ole32.lib comctl32.lib
+          if errorlevel 1 exit /b 1
+      - name: Upload first-run importer preview
+        uses: actions/upload-artifact@v6
+        with:
+          name: God-of-War-ISO-importer-preview-NOT-PLAYABLE
+          path: |
+            tools/pc_release/God of War.exe
+            tools/pc_release/README.txt
+          if-no-files-found: error

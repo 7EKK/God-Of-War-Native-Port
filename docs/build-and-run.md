@@ -48,6 +48,34 @@
   arrows/WASD = d-pad, X/Space = ✕, C/Esc = ○, Z = □, V = △, Q/E = L1/R1, LShift/RShift = L2/R2,
   Enter = Start, Tab = Select; gamepad 0 if present.
 
+## Player-facing import (Windows)
+
+The launcher sources under `tools/pc_release/` now include a standalone ISO/folder importer
+(`disc_import.cpp` + `import_ui.cpp`). When `data/` is missing, it prompts for the
+user's own **USA SCUS-97399** dual-layer PS2 ISO or a previously extracted folder that
+already includes both `.disc_layout` and `.disc_meta`. The ISO path is preferred:
+the C++ extractor reproduces the LSN manifest and non-file metadata used by DiscSource
+without Python, third-party tools or internet access.
+
+An ISO located beside `God of War.exe` is detected automatically; otherwise the player
+chooses an ISO or extracted folder. Import uses a staging directory and verifies the
+required files before committing. Existing saves/settings are unaffected.
+A **game-specific precompiled `bin/GodOfWar.exe` remains mandatory**: the importer
+does not translate the EE game executable into Windows code at first run.
+The public CI development-tools artifact is not a playable release.
+
+To assemble a redistributable **game-data-free** portable folder **after locally
+building the native runner**, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\pc_release\make_pc_folder.ps1 -NoData
+```
+
+The default (without `-NoData`) continues to package the local extracted disc.
+`-NoData` does not delete an existing `data/` folder or saved games. Use a
+fresh destination to produce a clean redistributable folder. Import tests use
+a tiny synthetic two-layer ISO that contains no copyrighted game content.
+
 ## PC release folder
 `powershell -ExecutionPolicy Bypass -File tools\pc_release\make_pc_folder.ps1 [-Dest <folder>]` (default
 `dist\God of War (PC)` in the repo, gitignored; user 2026-10-18: builds stay here, never on Z:) makes the folder a

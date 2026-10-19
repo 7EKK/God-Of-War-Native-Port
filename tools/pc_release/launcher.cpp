@@ -10,6 +10,7 @@
 // It sets what play.cmd sets (release settings, no diagnostics) plus the video settings and runs the game with bin\ as
 // working directory. "God of War.exe --play" skips the window and starts with the saved settings.
 #include <windows.h>
+#include "import_ui.h"
 
 #include <algorithm>
 #include <functional>
@@ -234,10 +235,32 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
     const std::wstring bin = g_root + L"\\bin";
     const std::wstring runner = bin + L"\\GodOfWar.exe";
     const std::wstring elf = g_root + L"\\data\\SCUS_973.99";
-    if (!exists(runner) || !exists(elf))
+    // The development-tools artifact contains this launcher but NOT a game runner.
+    // Warn before users spend disk space extracting their own multi-gigabyte disc.
+    if (!exists(runner))
     {
-        MessageBoxW(nullptr, (L"Missing game files next to the launcher:\n" + runner + L"\n" + elf).c_str(), L"God of War",
-                    MB_ICONERROR);
+        const int response = MessageBoxW(nullptr,
+            L"This package does not contain the playable native game executable "
+            L"(bin\\GodOfWar.exe).\n\n"
+            L"Importing your ISO will prepare its assets, but it will NOT compile or run the game.\n\n"
+            L"Do you still want to import the game data?",
+            L"God of War - Runner missing", MB_YESNO | MB_ICONWARNING);
+        if (response != IDYES) return 1;
+    }
+
+    if (!ensureGameData(g_root)) return 1;
+    if (!exists(elf))
+    {
+        MessageBoxW(nullptr, L"Could not find SCUS_973.99 after import.", L"God of War", MB_ICONERROR);
+        return 1;
+    }
+    if (!exists(runner))
+    {
+        MessageBoxW(nullptr,
+            L"Your game data are ready in the data folder.\n\n"
+            L"The playable runner bin\\GodOfWar.exe is still missing. "
+            L"A completed game-specific native build is required; the development-tools artifact cannot play.",
+            L"God of War - Runner missing", MB_ICONWARNING);
         return 1;
     }
 

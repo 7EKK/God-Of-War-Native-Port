@@ -1,7 +1,31 @@
 GOD OF WAR - PC
 ===============
 
-Start "God of War.exe". The first window sets the resolution, fullscreen and the languages; press Play.
+FIRST RUN / IMPORT YOUR OWN GAME
+--------------------------------
+This release requires a compiled native game runner in bin\GodOfWar.exe.
+A development-tools-only artifact is NOT a playable game release.
+
+1. Place your own God of War (USA, SCUS-97399) ISO beside "God of War.exe",
+   or keep it elsewhere and select it with the file picker.
+2. Start "God of War.exe". It will offer the adjacent ISO or ask whether you
+   want to select an ISO or a previously extracted disc folder.
+3. ISO imports unpack the dual-layer disc to data\ and create .disc_layout
+   and .disc_meta, with the correct original sector numbers. No internet,
+   Python, Visual Studio, or separate extraction tool is required.
+4. For already-extracted files, select the folder containing SCUS_973.99,
+   PART1.PAK, PART2.PAK, GODOFWAR.TOC, .disc_layout, and .disc_meta.
+   A folder of plain extracted files without both hidden dot files is not
+   sufficient for this game's sector-based reads: choose an ISO instead.
+5. After first import, start "God of War.exe" normally. The original ISO
+   is not read during gameplay; you can archive it after verifying setup.
+
+On Windows, .disc_layout and .disc_meta may not be visible with default
+Explorer settings. Import checks source files before changing data\, and
+does not modify saves or settings. If data\ is incomplete, move it out of
+the way before trying again. Failed imports clean up their staging files.
+
+Start "God of War.exe". The settings window sets the resolution, fullscreen and languages; press Play.
 "God of War.exe --play" starts directly with the last settings.
 
 Languages
