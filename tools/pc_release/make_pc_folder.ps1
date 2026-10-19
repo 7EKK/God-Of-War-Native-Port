@@ -24,7 +24,7 @@ if (-not $NoData -and -not (Test-Path "$disc\SCUS_973.99")) { throw "No extracte
 $work = Join-Path $env:TEMP 'gow_launcher_build'
 New-Item -ItemType Directory -Force $work | Out-Null
 $vcvars = 'C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat'
-cmd /c "`"$vcvars`" >nul && cd /d `"$PSScriptRoot`" && rc /nologo /fo `"$work\launcher.res`" launcher.rc && cd /d `"$work`" && cl /nologo /std:c++17 /O2 /EHsc /DUNICODE /D_UNICODE `"$PSScriptRoot\launcher.cpp`" `"$PSScriptRoot\import_ui.cpp`" `"$PSScriptRoot\disc_import.cpp`" launcher.res /Fe:launcher.exe /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib comdlg32.lib shell32.lib ole32.lib comctl32.lib"
+cmd /c "`"$vcvars`" >nul && cd /d `"$PSScriptRoot`" && rc /nologo /fo `"$work\launcher.res`" launcher.rc && cd /d `"$work`" && cl /nologo /std:c++17 /O2 /MT /EHsc /DUNICODE /D_UNICODE `"$PSScriptRoot\launcher.cpp`" `"$PSScriptRoot\import_ui.cpp`" `"$PSScriptRoot\disc_import.cpp`" launcher.res /Fe:launcher.exe /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib comdlg32.lib shell32.lib ole32.lib comctl32.lib"
 if ($LASTEXITCODE -ne 0) { throw 'launcher build failed' }
 
 New-Item -ItemType Directory -Force $Dest, "$Dest\bin", "$Dest\data", "$Dest\saves" | Out-Null
