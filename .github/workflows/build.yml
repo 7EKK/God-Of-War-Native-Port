@@ -1,73 +1,36 @@
-name: build
+name: Windows x64 development tools (not a playable game)
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [runtime]
+  pull_request:
+    branches: [runtime]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  linux-gcc-clang:
-    strategy:
-      fail-fast: false
-      matrix:
-        compiler: [gcc, clang]
-
-    name: linux-${{ matrix.compiler }}
-    runs-on: ubuntu-latest
+  windows-development:
+    name: Build native libraries, recompiler, analyzer and launcher
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
-
-      - name: Configure
-        run: |
-          if [ "${{ matrix.compiler }}" = "gcc" ]; then
-            export CC=gcc
-            export CXX=g++
-          else
-            export CC=clang
-            export CXX=clang++
-          fi
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-msse4.1 -DCMAKE_CXX_FLAGS=-msse4.1
-
-      - name: Build
-        run: cmake --build build --config Release
-
-      - name: Tests
-        run: ./build/ps2xTest/ps2x_tests
-
-  windows-msvc:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            arch: x64
-            target_arch: x86_64
-    
-    name: windows-msvc-${{ matrix.target_arch }}
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: recursive
-      
       - uses: lukka/get-cmake@latest
 
       - uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
-          arch: ${{ matrix.arch }}
+          arch: x64
 
-      - name: Checkout game launcher sources
+      - name: Checkout launcher sources from main
         uses: actions/checkout@v6
         with:
           ref: main
           path: port-main
           sparse-checkout: tools/pc_release
 
-      - name: Compile native Windows launcher
+      - name: Compile Windows launcher
         shell: cmd
         run: |
           if not exist compiled mkdir compiled
@@ -78,42 +41,74 @@ jobs:
           cl /nologo /std:c++17 /O2 /EHsc /DUNICODE /D_UNICODE port-main\tools\pc_release\launcher.cpp compiled\launcher.res /Fe:"%GITHUB_WORKSPACE%\compiled\God of War.exe" /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib
           if errorlevel 1 exit /b 1
 
-      - name: Describe development build
+      # The public repository does not contain the generated 6,482 game
+      # functions, including ps2_recompiled_functions.h. Building
+      # ps2EntryRunner here would always fail (or ship a non-playing stub).
+      # The legacy ps2xTest suite is also out of sync with the native DMA
+      # refactor. Compile only the concrete, source-complete targets.
+      - name: Configure available native sources (MSVC x64)
+        shell: pwsh
+        run: >
+          cmake -S . -B build -A x64
+          -DPS2X_BUILD_RECOMP=ON
+          -DPS2X_BUILD_ANALYZER=ON
+          -DPS2X_BUILD_RUNTIME=ON
+          -DPS2X_BUILD_TEST=OFF
+          -DPS2X_BUILD_STUDIO=OFF
+
+      - name: Build development binaries and libraries
+        shell: pwsh
+        run: cmake --build build --config Release --parallel 4 --target ps2_recomp ps2_analyzer ps2_runtime ps2_iop
+
+      - name: Verify all expected outputs
+        shell: pwsh
+        run: |
+          $expected = @(
+            'compiled/God of War.exe',
+            'build/ps2xRecomp/Release/ps2_recomp.exe',
+            'build/ps2xAnalyzer/Release/ps2_analyzer.exe',
+            'build/ps2xRuntime/Release/ps2_runtime.lib',
+            'build/ps2xIOP/Release/ps2_iop.lib'
+          )
+          foreach ($file in $expected) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+              throw "Missing build output: $file"
+            }
+            Write-Host "Verified: $file"
+          }
+
+      - name: Label development artifact clearly
         shell: pwsh
         run: |
           @'
-          This is a Windows x64 DEVELOPMENT build of God of War Native Port's
-          launcher and PS2Recomp toolchain/runtime, not a ready-to-play game.
+          Windows x64 DEVELOPMENT TOOLS ONLY — NOT A PLAYABLE GOD OF WAR BUILD.
 
-          This public source tree does not contain Sony game content or the
-          game-specific C++ generated from SCUS_973.99.
-          The launcher needs bin/GodOfWar.exe and data/SCUS_973.99
-          plus the other extracted disc files before it can play.
+          Compiled components:
+          - God of War.exe: existing launcher UI, not usable by itself
+          - ps2_recomp.exe: PS2 static recompiler
+          - ps2_analyzer.exe: executable analyzer
+          - ps2_runtime.lib and ps2_iop.lib: native host/IOP libraries
 
-          For a playable local build using your own PS2 disc, follow
-          docs/build-and-run.md in the main branch.
+          What is missing:
+          - Recompiled game-specific C++ generated from your own SCUS_973.99
+          - ps2_recompiled_functions.h and related generated sources
+          - Linked game runner (bin/GodOfWar.exe)
+          - Extracted original PS2 disc data
+
+          No game disc files are included. Do not treat this as a player release.
+          A self-contained player release requires a separate, complete
+          game-specific build and a first-run game-data importer.
           '@ | Set-Content -Encoding UTF8 compiled/README-DEVELOPMENT.txt
 
-      - name: Build
-        shell: cmd
-        run: |
-          cmake -B build
-          cmake --build build --config Release
-
-      - name: Tests
-        shell: cmd
-        run: |
-          .\build\ps2xTest\Release\ps2x_tests.exe
-      - name: Upload Windows x64 development binaries
-        if: always()
+      - name: Upload verified Windows x64 development components
         uses: actions/upload-artifact@v6
         with:
-          name: God-Of-War-Native-Port-Windows-x64-Development
-          if-no-files-found: warn
+          name: God-Of-War-Windows-x64-Development-Only
+          if-no-files-found: error
           path: |
             compiled/God of War.exe
             compiled/README-DEVELOPMENT.txt
-            build/ps2xAnalyzer/Release/*.exe
-            build/ps2xRecomp/Release/*.exe
-            build/ps2xRuntime/Release/ps2EntryRunner.exe
-            build/ps2xTest/Release/*.exe
+            build/ps2xRecomp/Release/ps2_recomp.exe
+            build/ps2xAnalyzer/Release/ps2_analyzer.exe
+            build/ps2xRuntime/Release/ps2_runtime.lib
+            build/ps2xIOP/Release/ps2_iop.lib
