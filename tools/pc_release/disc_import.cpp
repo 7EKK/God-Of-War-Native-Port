@@ -231,7 +231,7 @@ void copyBytes(std::ifstream &in, std::ofstream &out, std::uint64_t size,
                const Progress &progress, const std::wstring &label,
                std::uint64_t &done, std::uint64_t total)
 {
-    std::array<char, 1024 * 1024> buffer{};
+    std::vector<char> buffer(1024 * 1024);
     while (size)
     {
         const std::size_t n = static_cast<std::size_t>(std::min<std::uint64_t>(buffer.size(), size));
@@ -340,7 +340,7 @@ void importIso(const fs::path &iso, const fs::path &destination, const Progress 
     // Raw CDVD reads need metadata for all non-file sectors, not merely the loose game files.
     std::ofstream meta(stage.tmp / ".disc_meta", std::ios::binary);
     if (!meta) fail("Cannot create .disc_meta.");
-    std::array<char, sector * 256> buf{};
+    std::vector<char> buf(sector * 256);
     std::uint64_t cursor = 0;
     for (std::size_t i = 0; i <= t.files.size(); ++i)
     {
