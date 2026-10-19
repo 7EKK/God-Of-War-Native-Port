@@ -38,14 +38,21 @@ bool chooseIso(const std::wstring &root, fs::path &result)
 
 bool chooseFolder(fs::path &result)
 {
+    // BIF_NEWDIALOGSTYLE requires a single-threaded COM apartment.
+    const HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (FAILED(initialized)) return false;
     BROWSEINFOW browse{};
     browse.lpszTitle = L"Choose extracted God of War (USA) folder (.disc_layout and .disc_meta required)";
     browse.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
     PIDLIST_ABSOLUTE id = SHBrowseForFolderW(&browse);
-    if (!id) return false;
     wchar_t path[MAX_PATH] = {};
-    const bool ok = SHGetPathFromIDListW(id, path) != FALSE;
-    CoTaskMemFree(id);
+    bool ok = false;
+    if (id)
+    {
+        ok = SHGetPathFromIDListW(id, path) != FALSE;
+        CoTaskMemFree(id);
+    }
+    CoUninitialize();
     if (ok) result = path;
     return ok;
 }
